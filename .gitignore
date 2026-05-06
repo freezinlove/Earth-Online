@@ -1,0 +1,11 @@
+node_modules
+dist
+output
+test-results
+external/cobe
+.env
+.env.*
+!.env.example
+.env.local
+*.tsbuildinfo
+DESIGN_SPECS

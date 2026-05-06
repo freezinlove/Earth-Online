@@ -1,0 +1,205 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+  background: #faf9f5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 44%, rgba(255, 219, 206, 0.24), transparent 34%),
+    radial-gradient(circle at 74% 22%, rgba(217, 234, 163, 0.16), transparent 24%),
+    #faf9f5;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.paper-grain {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  opacity: 0.55;
+  background-image:
+    linear-gradient(rgba(136, 114, 107, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(136, 114, 107, 0.025) 1px, transparent 1px);
+  background-size: 34px 34px, 29px 29px;
+  mask-image: radial-gradient(circle at center, black 0%, transparent 76%);
+}
+
+.earth-canvas {
+  opacity: 0.72;
+  filter: sepia(0.16) saturate(0.82) brightness(1.24);
+}
+
+.cobe-stage {
+  opacity: 0.92;
+  filter: sepia(0.08) saturate(0.9) brightness(1.08);
+}
+
+.cobe-globe-shell {
+  isolation: isolate;
+}
+
+.cobe-globe-shell::before {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 8%;
+  z-index: -1;
+  border-radius: 9999px;
+  background:
+    radial-gradient(circle at 48% 42%, rgba(255, 219, 206, 0.2), transparent 52%),
+    radial-gradient(circle at center, rgba(151, 71, 35, 0.1), transparent 68%);
+  filter: blur(32px);
+}
+
+.cobe-photo-hit {
+  position: absolute;
+  position-anchor: inherit;
+  left: anchor(center);
+  top: anchor(center);
+  z-index: 2;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0;
+  transform: translate(-50%, -50%);
+}
+
+.cobe-photo-hit:hover {
+  background: rgba(151, 71, 35, 0.16);
+  opacity: 1;
+}
+
+.cobe-place-label {
+  position: absolute;
+  position-anchor: inherit;
+  left: anchor(center);
+  bottom: anchor(top);
+  z-index: 3;
+  display: flex;
+  max-width: 150px;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: 0 10px 24px rgba(90, 54, 39, 0.08);
+  color: #79300e;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  opacity: 0.82;
+  transform: translate(-50%, -8px);
+  backdrop-filter: blur(14px);
+}
+
+.cobe-place-label:hover {
+  background: rgba(255, 250, 246, 0.94);
+  opacity: 1;
+}
+
+.cobe-place-label span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cobe-place-label strong {
+  display: grid;
+  min-width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 9999px;
+  background: rgba(255, 219, 206, 0.78);
+  color: #944521;
+  font-size: 10px;
+}
+
+.safe-panel {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(250, 249, 245, 0.72)),
+    rgba(250, 249, 245, 0.72);
+  border-block: 1px solid rgba(151, 71, 35, 0.12);
+  box-shadow: 0 12px 28px rgba(45, 35, 28, 0.045);
+  backdrop-filter: blur(24px);
+}
+
+.ai-narrative-block {
+  background:
+    radial-gradient(circle at 18% 12%, rgba(255, 222, 174, 0.42), transparent 34%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.7), rgba(250, 249, 245, 0.58));
+  border-block: 1px solid rgba(151, 71, 35, 0.1);
+  box-shadow:
+    0 12px 32px rgba(96, 65, 0, 0.05),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78);
+}
+
+.soft-input {
+  border: 0;
+  border-bottom: 1px solid rgba(151, 71, 35, 0.24);
+  background: transparent;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.soft-input:focus {
+  border-bottom-color: rgba(242, 190, 107, 0.95);
+  box-shadow: 0 10px 24px rgba(242, 190, 107, 0.08);
+}
+
+.timeline-paper-dock {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(250, 249, 245, 0.76)),
+    radial-gradient(circle at 18% 0%, rgba(255, 219, 206, 0.38), transparent 42%),
+    rgba(255, 255, 255, 0.78);
+  box-shadow:
+    0 22px 54px rgba(90, 54, 39, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82);
+}
+
+.rounded-\[20px\],
+.rounded-\[22px\],
+.rounded-\[24px\],
+.rounded-\[28px\] {
+  border-radius: 8px !important;
+}
+
+.shadow-soft,
+.shadow-float,
+.shadow-ambient {
+  box-shadow: 0 10px 26px rgba(45, 35, 28, 0.055) !important;
+}
+
+.timeline-scrollbar-none {
+  scrollbar-width: none;
+}
+
+.timeline-scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
