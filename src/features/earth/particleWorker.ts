@@ -1,4 +1,4 @@
-import { buildCoastParticles, buildLandParticles } from "@/features/earth/worldData";
+import { buildCoastParticles, buildCountryBoundaryParticles, buildLandParticles, buildMediumLandParticles } from "@/features/earth/worldData";
 import type { GeoPoint } from "@/domain/models";
 
 const workerScope = self as unknown as {
@@ -6,7 +6,7 @@ const workerScope = self as unknown as {
   postMessage: (message: unknown, transfer: Transferable[]) => void;
 };
 
-type ParticleLayerKind = "land" | "coast";
+type ParticleLayerKind = "land" | "mediumLand" | "coast" | "countryBoundary";
 
 type ParticleRequest = {
   kind: ParticleLayerKind;
@@ -27,11 +27,25 @@ function vectorFromGeoPoint(point: GeoPoint, radius: number, altitude = 0) {
 
 workerScope.addEventListener("message", (event: MessageEvent<ParticleRequest>) => {
   const { kind, radius } = event.data;
-  const particles = kind === "land" ? buildLandParticles() : buildCoastParticles();
+  const particles =
+    kind === "land"
+      ? buildLandParticles()
+      : kind === "mediumLand"
+        ? buildMediumLandParticles()
+        : kind === "countryBoundary"
+          ? buildCountryBoundaryParticles()
+          : buildCoastParticles();
   const positions = new Float32Array(particles.length * 3);
 
   particles.forEach((particle, index) => {
-    const altitude = kind === "land" ? 0.01 + particle.revealAt * 0.006 : 0.018;
+    const altitude =
+      kind === "land"
+        ? 0.01 + particle.revealAt * 0.006
+        : kind === "mediumLand"
+          ? 0.014 + particle.revealAt * 0.006
+          : kind === "countryBoundary"
+            ? 0.026
+            : 0.018;
     positions.set(vectorFromGeoPoint(particle, radius, altitude), index * 3);
   });
 
