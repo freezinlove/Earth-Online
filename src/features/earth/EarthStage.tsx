@@ -30,6 +30,9 @@ const MEMORY_CORAL = "#ff6b7a";
 const MEMORY_BLUE = "#3ddcff";
 const MEMORY_GOLD = "#ffd166";
 const ROUTE_VIOLET = "#9b7cff";
+const LAND_PARTICLE = "#5fa6b7";
+const BOUNDARY_LINE = "#9c806c";
+const GLOBE_SHELL = "#efe1cf";
 
 function createPointTexture() {
   const canvas = document.createElement("canvas");
@@ -103,11 +106,12 @@ function LandParticleLayer() {
     const particles = buildLandParticles();
     const positions = new Float32Array(particles.length * 3);
     const colors = new Float32Array(particles.length * 3);
-    const dimColor = new THREE.Color("#17233d");
+    const landColor = new THREE.Color(LAND_PARTICLE);
+    const farColor = new THREE.Color("#cad7cd");
 
     particles.forEach((particle, index) => {
       const position = threeGlobeVector(particle, GLOBE_RADIUS, 0.010 + particle.revealAt * 0.006);
-      const color = new THREE.Color(particle.color).lerp(dimColor, 0.34 + particle.revealAt * 0.22);
+      const color = landColor.clone().lerp(farColor, particle.revealAt * 0.22);
       positions.set(position.toArray(), index * 3);
       colors.set(color.toArray(), index * 3);
     });
@@ -132,11 +136,11 @@ function LandParticleLayer() {
         ref={materialRef}
         map={pointTexture}
         alphaTest={0.08}
-        size={0.075}
-        sizeAttenuation
+        size={2.15}
+        sizeAttenuation={false}
         vertexColors
         transparent
-        opacity={0.78}
+        opacity={0.7}
         depthWrite={false}
         blending={THREE.NormalBlending}
       />
@@ -163,7 +167,7 @@ function CountryBoundaryLayer() {
 
   return (
     <lineSegments geometry={geometry}>
-      <lineBasicMaterial color="#65d6ff" transparent opacity={0.34} depthWrite={false} blending={THREE.AdditiveBlending} />
+      <lineBasicMaterial color={BOUNDARY_LINE} transparent opacity={0.34} depthWrite={false} blending={THREE.NormalBlending} />
     </lineSegments>
   );
 }
@@ -204,18 +208,21 @@ function ThreeGlobeLayer({ paths }: { paths: GlobePath[] }) {
 
   useEffect(() => {
     const material = new THREE.MeshStandardMaterial({
-      color: "#070b16",
-      roughness: 0.64,
+      color: GLOBE_SHELL,
+      roughness: 0.76,
       metalness: 0.03,
-      emissive: "#0d1830",
-      emissiveIntensity: 0.42,
+      emissive: "#e3d2bc",
+      emissiveIntensity: 0.24,
+      transparent: true,
+      opacity: 0.7,
+      depthWrite: true,
     });
 
     globe
       .globeMaterial(material)
       .showAtmosphere(true)
-      .atmosphereColor("#4cc9ff")
-      .atmosphereAltitude(0.14);
+      .atmosphereColor("#f7dcc0")
+      .atmosphereAltitude(0.1);
   }, [globe]);
 
   useEffect(() => {

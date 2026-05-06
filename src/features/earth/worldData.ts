@@ -19,7 +19,6 @@ type MultiLineStringGeometry = {
 };
 
 export type LandParticle = GeoPoint & {
-  color: string;
   revealAt: number;
 };
 
@@ -27,8 +26,6 @@ export type BoundarySegment = {
   start: GeoPoint;
   end: GeoPoint;
 };
-
-const LAND_COLORS = ["#78f4ff", "#8b8cf6", "#a7f3d0", "#f0abfc", "#fbbf24", "#fb7185"];
 
 function hash(seed: number) {
   return Math.abs(Math.sin(seed * 12.9898) * 43758.5453) % 1;
@@ -57,11 +54,9 @@ export function buildLandParticles() {
 
       if (!geoContains(land, point)) continue;
 
-      const paletteIndex = Math.floor(hash(seed + 42.1) * LAND_COLORS.length) % LAND_COLORS.length;
       particles.push({
         lat: point[1],
         lng: point[0],
-        color: LAND_COLORS[paletteIndex],
         revealAt: 0.08 + hash(seed + 5.9) * 0.52,
       });
     }
