@@ -1,10 +1,11 @@
-import { Html, OrbitControls } from "@react-three/drei";
+import { Html, Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { Suspense, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import ThreeGlobe from "three-globe";
 import type { GeoPoint, Photo, PlaceNode, Route } from "@/domain/models";
 import { useAppStore } from "@/store/appStore";
+import { buildCountryBoundarySegments, buildLandParticles } from "@/features/earth/worldData";
 
 type GlobePoint = {
   id: string;
@@ -25,10 +26,29 @@ type GlobePath = {
 const GLOBE_RADIUS = 100;
 const GLOBE_SCALE = 0.0185;
 const MARKER_ALTITUDE = 1.9;
-const TERRACOTTA = "#a4471f";
-const TERRACOTTA_DARK = "#7d2f0f";
-const GOLD = "#f0b34d";
-const SAGE = "#5c692c";
+const MEMORY_CORAL = "#ff6b7a";
+const MEMORY_BLUE = "#3ddcff";
+const MEMORY_GOLD = "#ffd166";
+const ROUTE_VIOLET = "#9b7cff";
+
+function createPointTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 64;
+  canvas.height = 64;
+  const context = canvas.getContext("2d");
+  if (!context) return undefined;
+
+  const gradient = context.createRadialGradient(32, 32, 0, 32, 32, 30);
+  gradient.addColorStop(0, "rgba(255,255,255,1)");
+  gradient.addColorStop(0.42, "rgba(255,255,255,0.86)");
+  gradient.addColorStop(1, "rgba(255,255,255,0)");
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, 64, 64);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
 
 function routeDistance(start: GeoPoint, end: GeoPoint) {
   const lat1 = (start.lat * Math.PI) / 180;
@@ -49,8 +69,8 @@ function routePaths(route?: Route): GlobePath[] {
     const midAlt = shortHop ? 0.002 : Math.min(0.16, 0.025 + distance * 0.09);
     return {
       id: `${route.id}-${index}`,
-      color: shortHop ? TERRACOTTA_DARK : SAGE,
-      stroke: shortHop ? 1.1 : 1.45,
+      color: shortHop ? MEMORY_BLUE : ROUTE_VIOLET,
+      stroke: shortHop ? 1.25 : 1.65,
       points: [
         { ...point, alt: 0.006 },
         { lat: (point.lat + next.lat) / 2, lng: (point.lng + next.lng) / 2, alt: midAlt },
@@ -78,6 +98,100 @@ function focusQuaternion(point?: GeoPoint) {
   return target.setFromUnitVectors(position.normalize(), new THREE.Vector3(0, 0, 1));
 }
 
+function LandParticleLayer() {
+  const geometry = useMemo(() => {
+    const particles = buildLandParticles();
+    const positions = new Float32Array(particles.length * 3);
+    const colors = new Float32Array(particles.length * 3);
+    const dimColor = new THREE.Color("#17233d");
+
+    particles.forEach((particle, index) => {
+      const position = threeGlobeVector(particle, GLOBE_RADIUS, 0.010 + particle.revealAt * 0.006);
+      const color = new THREE.Color(particle.color).lerp(dimColor, 0.34 + particle.revealAt * 0.22);
+      positions.set(position.toArray(), index * 3);
+      colors.set(color.toArray(), index * 3);
+    });
+
+    const nextGeometry = new THREE.BufferGeometry();
+    nextGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    nextGeometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    return nextGeometry;
+  }, []);
+
+  const materialRef = useRef<THREE.PointsMaterial>(null);
+  const pointTexture = useMemo(() => createPointTexture(), []);
+
+  useFrame(({ clock }) => {
+    if (!materialRef.current) return;
+    materialRef.current.opacity = 0.78 + Math.sin(clock.elapsedTime * 0.7) * 0.05;
+  });
+
+  return (
+    <points geometry={geometry}>
+      <pointsMaterial
+        ref={materialRef}
+        map={pointTexture}
+        alphaTest={0.08}
+        size={0.075}
+        sizeAttenuation
+        vertexColors
+        transparent
+        opacity={0.78}
+        depthWrite={false}
+        blending={THREE.NormalBlending}
+      />
+    </points>
+  );
+}
+
+function CountryBoundaryLayer() {
+  const geometry = useMemo(() => {
+    const segments = buildCountryBoundarySegments();
+    const positions = new Float32Array(segments.length * 2 * 3);
+
+    segments.forEach((segment, index) => {
+      const start = threeGlobeVector(segment.start, GLOBE_RADIUS, 0.015);
+      const end = threeGlobeVector(segment.end, GLOBE_RADIUS, 0.015);
+      positions.set(start.toArray(), index * 6);
+      positions.set(end.toArray(), index * 6 + 3);
+    });
+
+    const nextGeometry = new THREE.BufferGeometry();
+    nextGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    return nextGeometry;
+  }, []);
+
+  return (
+    <lineSegments geometry={geometry}>
+      <lineBasicMaterial color="#65d6ff" transparent opacity={0.34} depthWrite={false} blending={THREE.AdditiveBlending} />
+    </lineSegments>
+  );
+}
+
+function TravelRouteLayer({ paths }: { paths: GlobePath[] }) {
+  const lines = useMemo(
+    () =>
+      paths.map((path) => {
+        const controlPoints = path.points.map((point) => threeGlobeVector(point, GLOBE_RADIUS, point.alt ?? 0.006));
+        const curve = new THREE.CatmullRomCurve3(controlPoints);
+        return {
+          id: path.id,
+          color: path.color,
+          points: curve.getPoints(32).map((point) => point.toArray() as [number, number, number]),
+        };
+      }),
+    [paths],
+  );
+
+  return (
+    <>
+      {lines.map((line) => (
+        <Line key={line.id} points={line.points} color={line.color} lineWidth={2.2} transparent opacity={0.94} depthWrite={false} />
+      ))}
+    </>
+  );
+}
+
 function ThreeGlobeLayer({ paths }: { paths: GlobePath[] }) {
   const globe = useMemo(
     () =>
@@ -90,20 +204,18 @@ function ThreeGlobeLayer({ paths }: { paths: GlobePath[] }) {
 
   useEffect(() => {
     const material = new THREE.MeshStandardMaterial({
-      color: "#f6e6cf",
-      roughness: 0.74,
+      color: "#070b16",
+      roughness: 0.64,
       metalness: 0.03,
-      emissive: "#3a1d0d",
-      emissiveIntensity: 0.045,
+      emissive: "#0d1830",
+      emissiveIntensity: 0.42,
     });
 
     globe
-      .globeImageUrl("/assets/earth_bmng_topography_5400.jpg")
-      .bumpImageUrl("/assets/earth_bmng_topography_5400.jpg")
       .globeMaterial(material)
       .showAtmosphere(true)
-      .atmosphereColor("#ffd79d")
-      .atmosphereAltitude(0.11);
+      .atmosphereColor("#4cc9ff")
+      .atmosphereAltitude(0.14);
   }, [globe]);
 
   useEffect(() => {
@@ -131,8 +243,8 @@ function GlobeMarker({
 }) {
   const markerRef = useRef<THREE.Mesh>(null);
   const position = useMemo(() => threeGlobeVector(point.center, GLOBE_RADIUS, MARKER_ALTITUDE / GLOBE_RADIUS).toArray(), [point.center]);
-  const markerRadius = point.kind === "place" ? (point.active ? 1.15 : 0.92) : point.active ? 0.72 : 0.56;
-  const color = point.active ? GOLD : point.kind === "place" ? TERRACOTTA : "#f7cf8c";
+  const markerRadius = point.kind === "place" ? (point.active ? 1.2 : 0.88) : point.active ? 0.72 : 0.5;
+  const color = point.active ? MEMORY_GOLD : point.kind === "place" ? MEMORY_CORAL : MEMORY_BLUE;
 
   useFrame(({ clock }) => {
     if (!markerRef.current || !point.active) return;
@@ -142,6 +254,10 @@ function GlobeMarker({
 
   return (
     <group position={position}>
+      <mesh scale={point.active ? 2.8 : 2.05}>
+        <sphereGeometry args={[markerRadius, 24, 24]} />
+        <meshBasicMaterial color={color} transparent opacity={point.active ? 0.16 : 0.1} depthWrite={false} blending={THREE.AdditiveBlending} />
+      </mesh>
       <mesh
         ref={markerRef}
         onClick={(event) => {
@@ -150,10 +266,10 @@ function GlobeMarker({
         }}
       >
         <sphereGeometry args={[markerRadius, 20, 20]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.18} roughness={0.42} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.82} roughness={0.36} />
       </mesh>
       {point.active ? (
-        <Html center distanceFactor={9.5} position={[0, markerRadius + 3.2, 0]} zIndexRange={[30, 10]}>
+        <Html center distanceFactor={5.6} position={[0, markerRadius + 3.2, 0]} zIndexRange={[30, 10]}>
           <button
             className="three-globe-label"
             type="button"
@@ -198,10 +314,13 @@ function GlobeScene({
   return (
     <>
       <ambientLight intensity={1.95} />
-      <directionalLight position={[3, 4, 5]} intensity={1.8} />
-      <pointLight position={[-4, -2, 3]} color="#ffd9a8" intensity={1.4} />
+      <directionalLight position={[3, 4, 5]} intensity={1.35} color="#d9f6ff" />
+      <pointLight position={[-4, -2, 3]} color="#ff7aa8" intensity={1.55} />
       <group ref={groupRef} scale={GLOBE_SCALE}>
         <ThreeGlobeLayer paths={paths} />
+        <LandParticleLayer />
+        <CountryBoundaryLayer />
+        <TravelRouteLayer paths={paths} />
         {points.map((point) => (
           <GlobeMarker key={point.id} point={point} onSelect={onSelect} />
         ))}
