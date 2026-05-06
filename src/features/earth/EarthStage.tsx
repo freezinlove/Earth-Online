@@ -1,11 +1,10 @@
 import { Html, Line, OrbitControls } from "@react-three/drei";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Suspense, useEffect, useMemo, useRef } from "react";
+import { Canvas, useFrame } from "@react-three/fiber";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import ThreeGlobe from "three-globe";
 import type { GeoPoint, Photo, PlaceNode, Route } from "@/domain/models";
 import { useAppStore } from "@/store/appStore";
-import { buildCoastParticles, buildLandParticles } from "@/features/earth/worldData";
 
 type GlobePoint = {
   id: string;
@@ -23,6 +22,8 @@ type GlobePath = {
   stroke: number;
 };
 
+type ParticleLayerKind = "land" | "coast";
+
 const GLOBE_RADIUS = 100;
 const GLOBE_SCALE = 0.0185;
 const MARKER_ALTITUDE = 1.9;
@@ -33,6 +34,8 @@ const ROUTE_VIOLET = "#9b7cff";
 const LAND_PARTICLE = "#3f9fb3";
 const COAST_PARTICLE = "#207f94";
 const GLOBE_SHELL = "#efe1cf";
+const LAND_PARTICLE_SIZE = 3.3;
+const COAST_PARTICLE_SIZE = 3.75;
 
 function createPointTexture() {
   const canvas = document.createElement("canvas");
@@ -51,6 +54,59 @@ function createPointTexture() {
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
+}
+
+function hideBackHemisphere(material: THREE.PointsMaterial) {
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nvarying float vGlobeFacing;")
+      .replace(
+        "#include <begin_vertex>",
+        `#include <begin_vertex>
+vec3 globeCenter = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+vec3 globeWorldPosition = (modelMatrix * vec4(transformed, 1.0)).xyz;
+vec3 globeNormal = normalize(globeWorldPosition - globeCenter);
+vec3 globeView = normalize(cameraPosition - globeCenter);
+vGlobeFacing = dot(globeNormal, globeView);`,
+      );
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <common>", "#include <common>\nvarying float vGlobeFacing;")
+      .replace(
+        "#include <clipping_planes_fragment>",
+        `#include <clipping_planes_fragment>
+if (vGlobeFacing < 0.035) discard;`,
+      );
+  };
+}
+
+function createParticleGeometry(positions?: Float32Array) {
+  const geometry = new THREE.BufferGeometry();
+  if (positions) {
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geometry.computeBoundingSphere();
+  }
+  return geometry;
+}
+
+function useParticleGeometry(kind: ParticleLayerKind) {
+  const [positions, setPositions] = useState<Float32Array>();
+
+  useEffect(() => {
+    const worker = new Worker(new URL("./particleWorker.ts", import.meta.url), { type: "module" });
+
+    worker.onmessage = (event: MessageEvent<{ kind: ParticleLayerKind; positions: Float32Array }>) => {
+      if (event.data.kind !== kind) return;
+      setPositions(event.data.positions);
+      worker.terminate();
+    };
+
+    worker.postMessage({ kind, radius: GLOBE_RADIUS });
+
+    return () => worker.terminate();
+  }, [kind]);
+
+  return useMemo(() => createParticleGeometry(positions), [positions]);
 }
 
 function routeDistance(start: GeoPoint, end: GeoPoint) {
@@ -97,34 +153,35 @@ function threeGlobeVector(point: GeoPoint, radius = GLOBE_RADIUS, altitude = 0) 
 function focusQuaternion(point?: GeoPoint) {
   const target = new THREE.Quaternion();
   if (!point) return target.setFromEuler(new THREE.Euler(0.08, -0.58, 0));
-  const position = threeGlobeVector(point);
-  return target.setFromUnitVectors(position.normalize(), new THREE.Vector3(0, 0, 1));
+
+  const normal = threeGlobeVector(point).normalize();
+  const northPole = new THREE.Vector3(0, 1, 0);
+  const northTangent = northPole.clone().sub(normal.clone().multiplyScalar(northPole.dot(normal)));
+
+  if (northTangent.lengthSq() < 0.0001) {
+    northTangent.set(0, 0, point.lat > 0 ? -1 : 1);
+  } else {
+    northTangent.normalize();
+  }
+
+  const eastTangent = northTangent.clone().cross(normal).normalize();
+  const localBasis = new THREE.Matrix4().makeBasis(eastTangent, northTangent, normal);
+  return target.setFromRotationMatrix(localBasis).invert();
 }
 
 function LandParticleLayer() {
-  const geometry = useMemo(() => {
-    const particles = buildLandParticles();
-    const positions = new Float32Array(particles.length * 3);
-
-    particles.forEach((particle, index) => {
-      const position = threeGlobeVector(particle, GLOBE_RADIUS, 0.010 + particle.revealAt * 0.006);
-      positions.set(position.toArray(), index * 3);
-    });
-
-    const nextGeometry = new THREE.BufferGeometry();
-    nextGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    return nextGeometry;
-  }, []);
-
+  const geometry = useParticleGeometry("land");
   const materialRef = useRef<THREE.PointsMaterial>(null);
   const pointTexture = useMemo(() => createPointTexture(), []);
-  const camera = useThree((state) => state.camera);
+
+  useEffect(() => {
+    if (!materialRef.current) return;
+    hideBackHemisphere(materialRef.current);
+    materialRef.current.needsUpdate = true;
+  }, []);
 
   useFrame(({ clock }) => {
     if (!materialRef.current) return;
-    const distance = camera.position.length();
-    const zoomProgress = THREE.MathUtils.clamp((6.8 - distance) / (6.8 - 2.05), 0, 1);
-    materialRef.current.size = THREE.MathUtils.lerp(3.3, 1.15, zoomProgress);
     materialRef.current.opacity = 0.86 + Math.sin(clock.elapsedTime * 0.7) * 0.04;
   });
 
@@ -134,7 +191,7 @@ function LandParticleLayer() {
         ref={materialRef}
         map={pointTexture}
         alphaTest={0.08}
-        size={3.3}
+        size={LAND_PARTICLE_SIZE}
         sizeAttenuation={false}
         color={LAND_PARTICLE}
         transparent
@@ -147,30 +204,15 @@ function LandParticleLayer() {
 }
 
 function CoastParticleLayer() {
-  const geometry = useMemo(() => {
-    const particles = buildCoastParticles();
-    const positions = new Float32Array(particles.length * 3);
-
-    particles.forEach((particle, index) => {
-      const position = threeGlobeVector(particle, GLOBE_RADIUS, 0.018);
-      positions.set(position.toArray(), index * 3);
-    });
-
-    const nextGeometry = new THREE.BufferGeometry();
-    nextGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    return nextGeometry;
-  }, []);
-
+  const geometry = useParticleGeometry("coast");
   const materialRef = useRef<THREE.PointsMaterial>(null);
   const pointTexture = useMemo(() => createPointTexture(), []);
-  const camera = useThree((state) => state.camera);
 
-  useFrame(() => {
+  useEffect(() => {
     if (!materialRef.current) return;
-    const distance = camera.position.length();
-    const zoomProgress = THREE.MathUtils.clamp((6.8 - distance) / (6.8 - 2.05), 0, 1);
-    materialRef.current.size = THREE.MathUtils.lerp(3.75, 1.25, zoomProgress);
-  });
+    hideBackHemisphere(materialRef.current);
+    materialRef.current.needsUpdate = true;
+  }, []);
 
   return (
     <points geometry={geometry}>
@@ -178,7 +220,7 @@ function CoastParticleLayer() {
         ref={materialRef}
         map={pointTexture}
         alphaTest={0.08}
-        size={3.75}
+        size={COAST_PARTICLE_SIZE}
         sizeAttenuation={false}
         color={COAST_PARTICLE}
         transparent
