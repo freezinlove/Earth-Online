@@ -1,11 +1,11 @@
 import { Html, Line, OrbitControls } from "@react-three/drei";
-import { Canvas, useFrame } from "@react-three/fiber";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Suspense, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import ThreeGlobe from "three-globe";
 import type { GeoPoint, Photo, PlaceNode, Route } from "@/domain/models";
 import { useAppStore } from "@/store/appStore";
-import { buildCountryBoundarySegments, buildLandParticles } from "@/features/earth/worldData";
+import { buildCoastParticles, buildLandParticles } from "@/features/earth/worldData";
 
 type GlobePoint = {
   id: string;
@@ -30,8 +30,8 @@ const MEMORY_CORAL = "#ff6b7a";
 const MEMORY_BLUE = "#3ddcff";
 const MEMORY_GOLD = "#ffd166";
 const ROUTE_VIOLET = "#9b7cff";
-const LAND_PARTICLE = "#5fa6b7";
-const BOUNDARY_LINE = "#9c806c";
+const LAND_PARTICLE = "#3f9fb3";
+const COAST_PARTICLE = "#207f94";
 const GLOBE_SHELL = "#efe1cf";
 
 function createPointTexture() {
@@ -105,29 +105,27 @@ function LandParticleLayer() {
   const geometry = useMemo(() => {
     const particles = buildLandParticles();
     const positions = new Float32Array(particles.length * 3);
-    const colors = new Float32Array(particles.length * 3);
-    const landColor = new THREE.Color(LAND_PARTICLE);
-    const farColor = new THREE.Color("#cad7cd");
 
     particles.forEach((particle, index) => {
       const position = threeGlobeVector(particle, GLOBE_RADIUS, 0.010 + particle.revealAt * 0.006);
-      const color = landColor.clone().lerp(farColor, particle.revealAt * 0.22);
       positions.set(position.toArray(), index * 3);
-      colors.set(color.toArray(), index * 3);
     });
 
     const nextGeometry = new THREE.BufferGeometry();
     nextGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    nextGeometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     return nextGeometry;
   }, []);
 
   const materialRef = useRef<THREE.PointsMaterial>(null);
   const pointTexture = useMemo(() => createPointTexture(), []);
+  const camera = useThree((state) => state.camera);
 
   useFrame(({ clock }) => {
     if (!materialRef.current) return;
-    materialRef.current.opacity = 0.78 + Math.sin(clock.elapsedTime * 0.7) * 0.05;
+    const distance = camera.position.length();
+    const zoomProgress = THREE.MathUtils.clamp((6.8 - distance) / (6.8 - 2.05), 0, 1);
+    materialRef.current.size = THREE.MathUtils.lerp(3.3, 1.15, zoomProgress);
+    materialRef.current.opacity = 0.86 + Math.sin(clock.elapsedTime * 0.7) * 0.04;
   });
 
   return (
@@ -136,11 +134,11 @@ function LandParticleLayer() {
         ref={materialRef}
         map={pointTexture}
         alphaTest={0.08}
-        size={2.15}
+        size={3.3}
         sizeAttenuation={false}
-        vertexColors
+        color={LAND_PARTICLE}
         transparent
-        opacity={0.7}
+        opacity={0.86}
         depthWrite={false}
         blending={THREE.NormalBlending}
       />
@@ -148,16 +146,14 @@ function LandParticleLayer() {
   );
 }
 
-function CountryBoundaryLayer() {
+function CoastParticleLayer() {
   const geometry = useMemo(() => {
-    const segments = buildCountryBoundarySegments();
-    const positions = new Float32Array(segments.length * 2 * 3);
+    const particles = buildCoastParticles();
+    const positions = new Float32Array(particles.length * 3);
 
-    segments.forEach((segment, index) => {
-      const start = threeGlobeVector(segment.start, GLOBE_RADIUS, 0.015);
-      const end = threeGlobeVector(segment.end, GLOBE_RADIUS, 0.015);
-      positions.set(start.toArray(), index * 6);
-      positions.set(end.toArray(), index * 6 + 3);
+    particles.forEach((particle, index) => {
+      const position = threeGlobeVector(particle, GLOBE_RADIUS, 0.018);
+      positions.set(position.toArray(), index * 3);
     });
 
     const nextGeometry = new THREE.BufferGeometry();
@@ -165,10 +161,32 @@ function CountryBoundaryLayer() {
     return nextGeometry;
   }, []);
 
+  const materialRef = useRef<THREE.PointsMaterial>(null);
+  const pointTexture = useMemo(() => createPointTexture(), []);
+  const camera = useThree((state) => state.camera);
+
+  useFrame(() => {
+    if (!materialRef.current) return;
+    const distance = camera.position.length();
+    const zoomProgress = THREE.MathUtils.clamp((6.8 - distance) / (6.8 - 2.05), 0, 1);
+    materialRef.current.size = THREE.MathUtils.lerp(3.75, 1.25, zoomProgress);
+  });
+
   return (
-    <lineSegments geometry={geometry}>
-      <lineBasicMaterial color={BOUNDARY_LINE} transparent opacity={0.34} depthWrite={false} blending={THREE.NormalBlending} />
-    </lineSegments>
+    <points geometry={geometry}>
+      <pointsMaterial
+        ref={materialRef}
+        map={pointTexture}
+        alphaTest={0.08}
+        size={3.75}
+        sizeAttenuation={false}
+        color={COAST_PARTICLE}
+        transparent
+        opacity={0.88}
+        depthWrite={false}
+        blending={THREE.NormalBlending}
+      />
+    </points>
   );
 }
 
@@ -326,7 +344,7 @@ function GlobeScene({
       <group ref={groupRef} scale={GLOBE_SCALE}>
         <ThreeGlobeLayer paths={paths} />
         <LandParticleLayer />
-        <CountryBoundaryLayer />
+        <CoastParticleLayer />
         <TravelRouteLayer paths={paths} />
         {points.map((point) => (
           <GlobeMarker key={point.id} point={point} onSelect={onSelect} />
