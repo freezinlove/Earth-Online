@@ -16,11 +16,11 @@
     "@react-three/drei": "^9.122.0",
     "@react-three/fiber": "^8.17.10",
     "clsx": "^2.1.1",
-    "cobe": "^2.0.1",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "three": "^0.172.0",
+    "three-globe": "^2.45.2",
     "zustand": "^5.0.2"
   },
   "devDependencies": {

@@ -9,3 +9,4 @@ external/cobe
 .env.local
 *.tsbuildinfo
 DESIGN_SPECS
+external/three-globe
