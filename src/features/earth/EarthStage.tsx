@@ -22,7 +22,7 @@ type GlobePath = {
   stroke: number;
 };
 
-type ParticleLayerKind = "land" | "mediumLand" | "coast" | "countryBoundary";
+type ParticleLayerKind = "land" | "mediumLand" | "coastLine" | "countryBoundaryLine";
 
 const GLOBE_RADIUS = 100;
 const GLOBE_SCALE = 0.0185;
@@ -33,13 +33,11 @@ const MEMORY_GOLD = "#ffd166";
 const ROUTE_VIOLET = "#9b7cff";
 const LAND_PARTICLE = "#3f9fb3";
 const MEDIUM_LAND_PARTICLE = "#49bfd1";
-const COAST_PARTICLE = "#207f94";
-const COUNTRY_BOUNDARY_PARTICLE = "#13758a";
+const COAST_LINE = "#18899d";
+const COUNTRY_BOUNDARY_LINE = "#0f788d";
 const GLOBE_SHELL = "#efe1cf";
 const LAND_PARTICLE_SIZE = 3.3;
 const MEDIUM_LAND_PARTICLE_SIZE = 2.85;
-const COAST_PARTICLE_SIZE = 3.75;
-const COUNTRY_BOUNDARY_PARTICLE_SIZE = 4.15;
 
 function createPointTexture() {
   const canvas = document.createElement("canvas");
@@ -69,7 +67,7 @@ function zoomProgress(camera: THREE.Camera) {
   return THREE.MathUtils.clamp((6.8 - camera.position.length()) / (6.8 - 2.05), 0, 1);
 }
 
-function hideBackHemisphere(material: THREE.PointsMaterial) {
+function hideBackHemisphere(material: THREE.Material) {
   material.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader
       .replace("#include <common>", "#include <common>\nvarying float vGlobeFacing;")
@@ -183,8 +181,9 @@ function LandParticleLayer() {
 
   useFrame(({ clock }) => {
     if (!materialRef.current) return;
-    const midFade = smoothstep(0.42, 0.78, zoomProgress(camera));
-    materialRef.current.opacity = (0.86 + Math.sin(clock.elapsedTime * 0.7) * 0.04) * THREE.MathUtils.lerp(1, 0.64, midFade);
+    const zoom = zoomProgress(camera);
+    const midFade = smoothstep(0.28, 0.56, zoom);
+    materialRef.current.opacity = (0.86 + Math.sin(clock.elapsedTime * 0.7) * 0.04) * THREE.MathUtils.lerp(1, 0.08, midFade);
   });
 
   return (
@@ -220,8 +219,9 @@ function MediumLandParticleLayer() {
 
   useFrame(({ clock }) => {
     if (!materialRef.current) return;
-    const opacity = smoothstep(0.24, 0.62, zoomProgress(camera));
-    materialRef.current.opacity = opacity * (0.72 + Math.sin(clock.elapsedTime * 0.62) * 0.025);
+    const zoom = zoomProgress(camera);
+    const opacity = smoothstep(0.24, 0.48, zoom);
+    materialRef.current.opacity = opacity * (0.94 + Math.sin(clock.elapsedTime * 0.62) * 0.018);
   });
 
   return (
@@ -243,10 +243,9 @@ function MediumLandParticleLayer() {
   );
 }
 
-function CoastParticleLayer() {
-  const geometry = useParticleGeometry("coast");
-  const materialRef = useRef<THREE.PointsMaterial>(null);
-  const pointTexture = useMemo(() => createPointTexture(), []);
+function CoastLineLayer() {
+  const geometry = useParticleGeometry("coastLine");
+  const materialRef = useRef<THREE.LineBasicMaterial>(null);
 
   useEffect(() => {
     if (!materialRef.current) return;
@@ -255,28 +254,23 @@ function CoastParticleLayer() {
   }, []);
 
   return (
-    <points geometry={geometry} renderOrder={4}>
-      <pointsMaterial
+    <lineSegments geometry={geometry} renderOrder={4}>
+      <lineBasicMaterial
         ref={materialRef}
-        map={pointTexture}
-        alphaTest={0.08}
-        size={COAST_PARTICLE_SIZE}
-        sizeAttenuation={false}
-        color={COAST_PARTICLE}
+        color={COAST_LINE}
         transparent
-        opacity={0.88}
+        opacity={0.66}
         depthTest={false}
         depthWrite={false}
         blending={THREE.NormalBlending}
       />
-    </points>
+    </lineSegments>
   );
 }
 
-function CountryBoundaryLayer() {
-  const geometry = useParticleGeometry("countryBoundary");
-  const materialRef = useRef<THREE.PointsMaterial>(null);
-  const pointTexture = useMemo(() => createPointTexture(), []);
+function CountryBoundaryLineLayer() {
+  const geometry = useParticleGeometry("countryBoundaryLine");
+  const materialRef = useRef<THREE.LineBasicMaterial>(null);
   const camera = useThree((state) => state.camera);
 
   useEffect(() => {
@@ -287,25 +281,21 @@ function CountryBoundaryLayer() {
 
   useFrame(() => {
     if (!materialRef.current) return;
-    materialRef.current.opacity = smoothstep(0.32, 0.68, zoomProgress(camera)) * 0.94;
+    materialRef.current.opacity = smoothstep(0.32, 0.68, zoomProgress(camera)) * 0.64;
   });
 
   return (
-    <points geometry={geometry} renderOrder={5}>
-      <pointsMaterial
+    <lineSegments geometry={geometry} renderOrder={5}>
+      <lineBasicMaterial
         ref={materialRef}
-        map={pointTexture}
-        alphaTest={0.08}
-        size={COUNTRY_BOUNDARY_PARTICLE_SIZE}
-        sizeAttenuation={false}
-        color={COUNTRY_BOUNDARY_PARTICLE}
+        color={COUNTRY_BOUNDARY_LINE}
         transparent
         opacity={0}
         depthTest={false}
         depthWrite={false}
         blending={THREE.NormalBlending}
       />
-    </points>
+    </lineSegments>
   );
 }
 
@@ -466,8 +456,8 @@ function GlobeScene({
         <ThreeGlobeLayer paths={paths} />
         <LandParticleLayer />
         <MediumLandParticleLayer />
-        <CoastParticleLayer />
-        <CountryBoundaryLayer />
+        <CoastLineLayer />
+        <CountryBoundaryLineLayer />
         <TravelRouteLayer paths={paths} />
         {points.map((point) => (
           <GlobeMarker key={point.id} point={point} onSelect={onSelect} />

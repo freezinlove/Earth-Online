@@ -22,10 +22,14 @@ export type LandParticle = GeoPoint & {
   revealAt: number;
 };
 
+export type GeoLine = GeoPoint[];
+
 let landParticleCache: LandParticle[] | undefined;
 let mediumLandParticleCache: LandParticle[] | undefined;
 let coastParticleCache: LandParticle[] | undefined;
 let countryBoundaryParticleCache: LandParticle[] | undefined;
+let coastLineCache: GeoLine[] | undefined;
+let countryBoundaryLineCache: GeoLine[] | undefined;
 
 function hash(seed: number) {
   return Math.abs(Math.sin(seed * 12.9898) * 43758.5453) % 1;
@@ -82,27 +86,19 @@ export function buildMediumLandParticles() {
 export function buildCountryBoundaryParticles() {
   if (countryBoundaryParticleCache) return countryBoundaryParticleCache;
 
-  const topology = countriesTopology as TopologyObject;
-  const countryMesh = mesh(
-    topology as never,
-    topoObject(topology, "countries") as never,
-    (left, right) => left !== right,
-  ) as LineStringGeometry | MultiLineStringGeometry;
-  const lines = countryMesh.type === "LineString" ? [countryMesh.coordinates] : countryMesh.coordinates;
+  const lines = buildCountryBoundaryLines();
   const particles: LandParticle[] = [];
 
   for (const line of lines) {
     for (let index = 0; index < line.length - 1; index += 1) {
-      const [startLng, startLat] = line[index];
-      const [endLng, endLat] = line[index + 1];
-      if (Math.abs(endLng - startLng) > 180) continue;
-
-      const steps = Math.max(1, Math.ceil(Math.max(Math.abs(endLng - startLng), Math.abs(endLat - startLat)) / 0.42));
+      const start = line[index];
+      const end = line[index + 1];
+      const steps = Math.max(1, Math.ceil(Math.max(Math.abs(end.lng - start.lng), Math.abs(end.lat - start.lat)) / 0.42));
       for (let step = 0; step <= steps; step += 1) {
         const progress = step / steps;
         particles.push({
-          lat: startLat + (endLat - startLat) * progress,
-          lng: startLng + (endLng - startLng) * progress,
+          lat: start.lat + (end.lat - start.lat) * progress,
+          lng: start.lng + (end.lng - start.lng) * progress,
           revealAt: 0,
         });
       }
@@ -113,26 +109,37 @@ export function buildCountryBoundaryParticles() {
   return particles;
 }
 
+export function buildCountryBoundaryLines() {
+  if (countryBoundaryLineCache) return countryBoundaryLineCache;
+
+  const topology = countriesTopology as TopologyObject;
+  const countryMesh = mesh(
+    topology as never,
+    topoObject(topology, "countries") as never,
+    (left, right) => left !== right,
+  ) as LineStringGeometry | MultiLineStringGeometry;
+  const lines = countryMesh.type === "LineString" ? [countryMesh.coordinates] : countryMesh.coordinates;
+
+  countryBoundaryLineCache = lines.map((line) => line.map(([lng, lat]) => ({ lat, lng })));
+  return countryBoundaryLineCache;
+}
+
 export function buildCoastParticles() {
   if (coastParticleCache) return coastParticleCache;
 
-  const topology = landTopology as TopologyObject;
-  const coastMesh = mesh(topology as never, topoObject(topology, "land") as never) as LineStringGeometry | MultiLineStringGeometry;
-  const lines = coastMesh.type === "LineString" ? [coastMesh.coordinates] : coastMesh.coordinates;
+  const lines = buildCoastLines();
   const particles: LandParticle[] = [];
 
   for (const line of lines) {
     for (let index = 0; index < line.length - 1; index += 1) {
-      const [startLng, startLat] = line[index];
-      const [endLng, endLat] = line[index + 1];
-      if (Math.abs(endLng - startLng) > 180) continue;
-
-      const steps = Math.max(1, Math.ceil(Math.max(Math.abs(endLng - startLng), Math.abs(endLat - startLat)) / 0.95));
+      const start = line[index];
+      const end = line[index + 1];
+      const steps = Math.max(1, Math.ceil(Math.max(Math.abs(end.lng - start.lng), Math.abs(end.lat - start.lat)) / 0.95));
       for (let step = 0; step <= steps; step += 1) {
         const progress = step / steps;
         particles.push({
-          lat: startLat + (endLat - startLat) * progress,
-          lng: startLng + (endLng - startLng) * progress,
+          lat: start.lat + (end.lat - start.lat) * progress,
+          lng: start.lng + (end.lng - start.lng) * progress,
           revealAt: 0,
         });
       }
@@ -141,4 +148,14 @@ export function buildCoastParticles() {
 
   coastParticleCache = particles;
   return particles;
+}
+
+export function buildCoastLines() {
+  if (coastLineCache) return coastLineCache;
+
+  const topology = landTopology as TopologyObject;
+  const coastMesh = mesh(topology as never, topoObject(topology, "land") as never) as LineStringGeometry | MultiLineStringGeometry;
+  const lines = coastMesh.type === "LineString" ? [coastMesh.coordinates] : coastMesh.coordinates;
+  coastLineCache = lines.map((line) => line.map(([lng, lat]) => ({ lat, lng })));
+  return coastLineCache;
 }
