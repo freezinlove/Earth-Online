@@ -32,22 +32,22 @@ export function MainLayout({ children }: { children: ReactNode }) {
           </button>
           <div className="pointer-events-auto flex items-center gap-3">
             <button
-              className="hidden h-11 w-11 place-items-center text-on-surface-variant transition hover:text-primary md:grid"
+              className="group hidden h-11 w-11 place-items-center text-on-surface-variant transition hover:text-primary md:grid"
               aria-label="记忆搜索"
               title="记忆搜索"
               onClick={() => togglePanel("search")}
               type="button"
             >
-              <Search size={20} strokeWidth={2.15} />
+              <Search className="transition-transform group-hover:scale-110" size={20} strokeWidth={2.15} />
             </button>
             <button
-              className="relative grid h-11 w-11 place-items-center text-on-surface-variant transition hover:text-primary"
+              className="group relative grid h-11 w-11 place-items-center text-on-surface-variant transition hover:text-primary"
               aria-label="导入确认"
               title="导入确认"
               onClick={() => togglePanel("import")}
               type="button"
             >
-              <Bell size={20} strokeWidth={2.15} />
+              <Bell className="transition-transform group-hover:scale-110" size={20} strokeWidth={2.15} />
               {openPendingCount > 0 ? (
                 <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-primary ring-2 ring-background" />
               ) : null}
