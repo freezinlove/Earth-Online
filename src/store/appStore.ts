@@ -4,6 +4,11 @@ import { apiClient, type AppSnapshot } from "@/services/apiClient";
 
 export type AppPanel = "globe" | "archive" | "tripDetail" | "search" | "import" | "settings" | "upload" | "manual";
 export type TimelineZoom = "global" | "trip" | "day";
+export type GlobeViewIntent =
+  | { source: "timeline-trip"; point: { lat: number; lng: number }; distance: "far" }
+  | { source: "timeline-place"; point: { lat: number; lng: number }; distance: "near" }
+  | { source: "timeline-global" }
+  | { source: "manual" };
 
 function toDateInput(date?: string) {
   return date ? date.slice(0, 10) : new Date().toISOString().slice(0, 10);
@@ -28,6 +33,7 @@ interface AppState {
   selectedPhotoId?: ID;
   cursorDate: string;
   timelineZoom: TimelineZoom;
+  globeViewIntent: GlobeViewIntent;
   searchQuery: string;
   searchFilters: { tripId?: string; placeId?: string; date?: string; tag?: string; fileName?: string };
   searchResults: SearchResult[];
@@ -49,8 +55,10 @@ interface AppState {
   selectTrip: (tripId: ID, panel?: AppPanel) => void;
   selectPlace: (placeId: ID) => void;
   selectPhoto: (photoId: ID) => void;
+  clearPlaceSelection: () => void;
   setCursorDate: (date: string) => void;
   setTimelineZoom: (zoom: TimelineZoom) => void;
+  setGlobeViewIntent: (intent: GlobeViewIntent) => void;
   setSearchQuery: (query: string) => void;
   setSearchFilters: (filters: AppState["searchFilters"]) => void;
   runSearch: (query?: string) => Promise<void>;
@@ -77,6 +85,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectedTripId: "trip-kansai-2025",
   cursorDate: "2025-10-04",
   timelineZoom: "global",
+  globeViewIntent: { source: "manual" },
   searchQuery: "",
   searchFilters: {},
   searchResults: [],
@@ -136,8 +145,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       activePanel: "globe",
     });
   },
+  clearPlaceSelection: () => set({ selectedPlaceId: undefined, selectedPhotoId: undefined }),
   setCursorDate: (date) => set({ cursorDate: date }),
   setTimelineZoom: (zoom) => set({ timelineZoom: zoom }),
+  setGlobeViewIntent: (intent) => set({ globeViewIntent: intent }),
   setSearchQuery: (query) => {
     set({ searchQuery: query });
     void get().runSearch(query);

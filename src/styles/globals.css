@@ -551,6 +551,101 @@ input {
     inset 0 1px 0 rgba(255, 255, 255, 0.82);
 }
 
+.time-incision-shell {
+  position: fixed;
+  left: 50%;
+  bottom: 6.2rem;
+  z-index: 40;
+  width: min(920px, calc(100vw - 112px));
+  height: 46px;
+  transform: translateX(-50%);
+}
+
+.time-incision-rail {
+  position: absolute;
+  left: 0;
+  right: 34px;
+  top: 22px;
+  height: 1px;
+  background: rgba(128, 98, 82, 0.26);
+}
+
+.time-incision-track {
+  position: absolute;
+  left: 0;
+  right: 34px;
+  top: 0;
+  height: 100%;
+}
+
+.time-incision-segment {
+  position: absolute;
+  top: 18px;
+  height: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 1px;
+  background: rgba(151, 71, 35, 0.28);
+  cursor: pointer;
+  opacity: 0.82;
+  transition:
+    background-color 160ms ease,
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.time-incision-segment[data-kind="place"] {
+  height: 7px;
+  background: rgba(15, 111, 120, 0.26);
+}
+
+.time-incision-segment[data-active] {
+  background: rgba(151, 71, 35, 0.66);
+  opacity: 0.96;
+}
+
+.time-incision-segment[data-kind="place"][data-active] {
+  background: rgba(15, 111, 120, 0.58);
+}
+
+.time-incision-segment:hover {
+  opacity: 1;
+  transform: translateY(-1px);
+}
+
+.time-incision-back {
+  position: absolute;
+  right: 0;
+  top: 12px;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(79, 49, 35, 0.46);
+  cursor: pointer;
+  opacity: 0.72;
+  transition:
+    color 160ms ease,
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.time-incision-back:hover {
+  color: rgba(79, 49, 35, 0.82);
+  opacity: 1;
+  transform: translateX(-1px);
+}
+
+@media (max-width: 767px) {
+  .time-incision-shell {
+    bottom: 5.8rem;
+    width: min(100vw - 72px, 680px);
+  }
+}
+
 .rounded-\[20px\],
 .rounded-\[22px\],
 .rounded-\[24px\],

@@ -4,8 +4,9 @@ import { Archive, X } from "lucide-react";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import ThreeGlobe from "three-globe";
+import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import type { GeoPoint, Photo, PlaceNode, Trip } from "@/domain/models";
-import { useAppStore } from "@/store/appStore";
+import { useAppStore, type GlobeViewIntent } from "@/store/appStore";
 
 type TravelMarker = {
   id: string;
@@ -337,6 +338,16 @@ function threeGlobeVector(point: GeoPoint, radius = GLOBE_RADIUS, altitude = 0) 
 function focusQuaternion(point?: GeoPoint) {
   const longitude = point?.lng ?? 33.2;
   return new THREE.Quaternion().setFromEuler(new THREE.Euler(0, THREE.MathUtils.degToRad(-longitude), 0));
+}
+
+function cameraTargetForIntent(intent: GlobeViewIntent, fallbackPoint?: GeoPoint) {
+  const point = "point" in intent ? intent.point : fallbackPoint;
+  const distance = intent.source === "timeline-place" ? 3.85 : intent.source === "timeline-trip" ? 5.85 : 5.25;
+  const latitude = point?.lat ?? 18;
+  const latitudeStrength = intent.source === "timeline-place" ? 1 : 0.58;
+  const y = THREE.MathUtils.clamp(Math.sin(THREE.MathUtils.degToRad(latitude)) * distance * latitudeStrength, -distance * 0.78, distance * 0.78);
+  const z = Math.sqrt(Math.max(distance * distance - y * y, 0.4));
+  return new THREE.Vector3(0, y, z);
 }
 
 function getCountryForPoint(point: GeoPoint, trip: Trip) {
@@ -819,25 +830,54 @@ function GlobeScene({
   markers,
   paths,
   focusPoint,
+  viewIntent,
+  onManualView,
   onSelect,
 }: {
   markers: TravelMarker[];
   paths: GlobePath[];
   focusPoint?: GeoPoint;
+  viewIntent: GlobeViewIntent;
+  onManualView: () => void;
   onSelect: (marker: TravelMarker) => void;
 }) {
   const groupRef = useRef<THREE.Group>(null);
+  const controlsRef = useRef<OrbitControlsImpl>(null);
+  const camera = useThree((state) => state.camera);
   const targetQuaternion = useRef(focusQuaternion(focusPoint));
+  const targetCameraPosition = useRef(camera.position.clone());
+  const globeCenter = useMemo(() => new THREE.Vector3(0, 0, 0), []);
 
   useEffect(() => {
     targetQuaternion.current = focusQuaternion(focusPoint);
-    groupRef.current?.quaternion.copy(targetQuaternion.current);
   }, [focusPoint]);
 
+  useEffect(() => {
+    if ("clearViewOffset" in camera) {
+      camera.clearViewOffset();
+      camera.updateProjectionMatrix();
+    }
+  }, [camera]);
+
+  useEffect(() => {
+    if (viewIntent.source === "manual") return;
+    targetCameraPosition.current = cameraTargetForIntent(viewIntent, focusPoint);
+  }, [camera, focusPoint, viewIntent]);
+
   useFrame(() => {
-    if (!groupRef.current) return;
-    groupRef.current.quaternion.slerp(targetQuaternion.current, 0.045);
+    if (viewIntent.source !== "manual") {
+      if (groupRef.current) groupRef.current.quaternion.slerp(targetQuaternion.current, 0.045);
+      camera.position.lerp(targetCameraPosition.current, 0.055);
+      camera.up.set(0, 1, 0);
+      controlsRef.current?.target.lerp(globeCenter, 0.16);
+      camera.lookAt(globeCenter);
+      controlsRef.current?.update();
+    }
   });
+
+  const handleManualStart = () => {
+    onManualView();
+  };
 
   return (
     <>
@@ -858,6 +898,7 @@ function GlobeScene({
         ))}
       </group>
       <OrbitControls
+        ref={controlsRef}
         enableDamping
         dampingFactor={0.08}
         enablePan={false}
@@ -866,6 +907,7 @@ function GlobeScene({
         minDistance={2.05}
         maxDistance={6.8}
         target={[0, 0, 0]}
+        onStart={handleManualStart}
       />
     </>
   );
@@ -943,6 +985,8 @@ export function EarthStage() {
   const photos = useAppStore((state) => state.photos);
   const selectPlace = useAppStore((state) => state.selectPlace);
   const setActivePanel = useAppStore((state) => state.setActivePanel);
+  const globeViewIntent = useAppStore((state) => state.globeViewIntent);
+  const setGlobeViewIntent = useAppStore((state) => state.setGlobeViewIntent);
   const [selectedMapItem, setSelectedMapItem] = useState<SelectedMapItem>();
   const [previewPhoto, setPreviewPhoto] = useState<Photo>();
 
@@ -957,7 +1001,8 @@ export function EarthStage() {
     [countryMarkers, placeMarkers, selectedMapItem?.id],
   );
   const activeMarker = markers.find((marker) => marker.id === selectedMapItem?.id) ?? markers.find((marker) => marker.active);
-  const focusPoint = activeMarker?.center ?? placeMarkers[0]?.center;
+  const tripFocusPoint = useMemo(() => (placeMarkers.length ? centerOf(placeMarkers.map((place) => place.center)) : undefined), [placeMarkers]);
+  const focusPoint = "point" in globeViewIntent ? globeViewIntent.point : activeMarker?.center ?? tripFocusPoint ?? placeMarkers[0]?.center;
   const paths = useMemo(() => routePaths(placeMarkers, activeMarker), [activeMarker, placeMarkers]);
   const previewPlace = previewPhoto?.placeNodeId ? places.find((place) => place.id === previewPhoto.placeNodeId) : undefined;
 
@@ -966,6 +1011,10 @@ export function EarthStage() {
     const marker = placeMarkers.find((item) => item.placeIds?.includes(selectedPlaceId));
     if (marker) setSelectedMapItem({ kind: "place", id: marker.id });
   }, [placeMarkers, selectedPlaceId]);
+
+  useEffect(() => {
+    if (!selectedPlaceId && selectedMapItem?.kind === "place") setSelectedMapItem(undefined);
+  }, [selectedMapItem?.kind, selectedPlaceId]);
 
   const handleSelect = (marker: TravelMarker) => {
     if (selectedMapItem?.id === marker.id) {
@@ -982,7 +1031,14 @@ export function EarthStage() {
       <div className="three-globe-stage fixed inset-0 z-10 h-screen w-screen">
         <Canvas camera={{ position: [0, 0, 5.25], fov: 42, near: 0.1, far: 1000 }} dpr={[1, 2]} gl={{ antialias: true, alpha: true }}>
           <Suspense fallback={null}>
-            <GlobeScene markers={markers} paths={paths} focusPoint={focusPoint} onSelect={handleSelect} />
+            <GlobeScene
+              markers={markers}
+              paths={paths}
+              focusPoint={focusPoint}
+              viewIntent={globeViewIntent}
+              onManualView={() => setGlobeViewIntent({ source: "manual" })}
+              onSelect={handleSelect}
+            />
           </Suspense>
         </Canvas>
       </div>
