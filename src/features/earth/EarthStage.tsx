@@ -149,7 +149,7 @@ function zoomProgress(camera: THREE.Camera) {
 
 function orbitRotateSpeed(camera: THREE.Camera) {
   const zoom = smoothstep(0.08, 0.92, zoomProgress(camera));
-  return THREE.MathUtils.lerp(0.58, 0.075, zoom);
+  return THREE.MathUtils.lerp(0.58, 0.026, zoom);
 }
 
 function formatDate(date?: string) {
@@ -871,7 +871,9 @@ function GlobeScene({
 
   useFrame(() => {
     if (controlsRef.current) {
-      controlsRef.current.rotateSpeed = THREE.MathUtils.lerp(controlsRef.current.rotateSpeed, orbitRotateSpeed(camera), 0.12);
+      const targetRotateSpeed = orbitRotateSpeed(camera);
+      const response = targetRotateSpeed < controlsRef.current.rotateSpeed ? 0.42 : 0.16;
+      controlsRef.current.rotateSpeed = THREE.MathUtils.lerp(controlsRef.current.rotateSpeed, targetRotateSpeed, response);
     }
 
     if (viewIntent.source !== "manual") {
@@ -885,6 +887,7 @@ function GlobeScene({
   });
 
   const handleManualStart = () => {
+    if (controlsRef.current) controlsRef.current.rotateSpeed = orbitRotateSpeed(camera);
     onManualView();
   };
 
