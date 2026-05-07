@@ -1,5 +1,5 @@
 import { Undo2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "@/store/appStore";
 import {
   buildGlobalDomain,
@@ -28,16 +28,32 @@ function TimeSegment({
   width: number;
   onClick: () => void;
 }) {
+  const [isPopping, setIsPopping] = useState(false);
+  const popTimer = useRef<number | undefined>(undefined);
+
+  useEffect(() => () => window.clearTimeout(popTimer.current), []);
+
+  const handleClick = () => {
+    window.clearTimeout(popTimer.current);
+    setIsPopping(false);
+    window.requestAnimationFrame(() => {
+      setIsPopping(true);
+      popTimer.current = window.setTimeout(() => setIsPopping(false), 320);
+    });
+
+    onClick();
+  };
+
   return (
     <button
-      className="time-incision-segment"
+      className={`time-incision-segment${isPopping ? " time-incision-segment-pop" : ""}`}
       data-active={segment.active || undefined}
       data-kind={segment.kind}
       style={{ left: `${left}%`, width: `${width}%` }}
       type="button"
       aria-label={segment.shortLabel ? `${segment.shortLabel} ${formatCompactDateRange(segment.start, segment.end)}` : formatCompactDateRange(segment.start, segment.end)}
       title={formatCompactDateRange(segment.start, segment.end)}
-      onClick={onClick}
+      onClick={handleClick}
     >
       {segment.shortLabel ? <span>{segment.shortLabel}</span> : null}
     </button>

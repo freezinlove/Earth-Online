@@ -1,5 +1,5 @@
 import { Archive, Bell, Globe2, MapPinned, Plus, Search, Settings } from "lucide-react";
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { clsx } from "clsx";
 import { useAppStore, type AppPanel } from "@/store/appStore";
 
@@ -9,13 +9,47 @@ const navItems: Array<{ panel: Exclude<AppPanel, "globe" | "upload" | "import" |
   { panel: "settings", label: "本地设置", icon: Settings },
 ];
 
+const navPanelOrder: AppPanel[] = ["upload", "globe", ...navItems.map((item) => item.panel)];
+
 export function MainLayout({ children }: { children: ReactNode }) {
   const activePanel = useAppStore((state) => state.activePanel);
   const setActivePanel = useAppStore((state) => state.setActivePanel);
   const pendingItems = useAppStore((state) => state.pendingItems);
+  const [indicatorMotion, setIndicatorMotion] = useState<{
+    direction: "up" | "down";
+    from: AppPanel;
+    id: number;
+    to: AppPanel;
+  } | null>(null);
+  const motionTimer = useRef<number | undefined>(undefined);
   const showChrome = activePanel === "globe";
   const openPendingCount = pendingItems.filter((item) => item.status === "open").length;
-  const togglePanel = (panel: AppPanel) => setActivePanel(activePanel === panel ? "globe" : panel);
+  const moveToPanel = (panel: AppPanel) => {
+    const fromIndex = navPanelOrder.indexOf(activePanel);
+    const toIndex = navPanelOrder.indexOf(panel);
+
+    if (fromIndex !== -1 && toIndex !== -1 && fromIndex !== toIndex) {
+      setIndicatorMotion({
+        direction: toIndex > fromIndex ? "down" : "up",
+        from: activePanel,
+        id: Date.now(),
+        to: panel,
+      });
+    } else {
+      setIndicatorMotion(null);
+    }
+
+    setActivePanel(panel);
+  };
+  const togglePanel = (panel: AppPanel) => moveToPanel(activePanel === panel ? "globe" : panel);
+
+  useEffect(() => {
+    if (!indicatorMotion) return;
+
+    window.clearTimeout(motionTimer.current);
+    motionTimer.current = window.setTimeout(() => setIndicatorMotion(null), 360);
+    return () => window.clearTimeout(motionTimer.current);
+  }, [indicatorMotion]);
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-background text-on-surface">
@@ -56,26 +90,46 @@ export function MainLayout({ children }: { children: ReactNode }) {
         </header>
       ) : null}
 
-      <nav className="fixed bottom-5 left-1/2 z-[60] flex -translate-x-1/2 items-center gap-3 md:bottom-auto md:left-8 md:top-1/2 md:-translate-x-0 md:-translate-y-1/2 md:flex-col">
+      <nav className="fixed bottom-5 left-1/2 z-[60] flex -translate-x-1/2 items-center gap-1.5 md:bottom-auto md:left-8 md:top-1/2 md:-translate-x-0 md:-translate-y-1/2 md:flex-col">
         <button
-          className="grid h-12 w-12 place-items-center rounded-full bg-primary text-white shadow-float transition hover:scale-105"
+          className={clsx(
+            "group relative grid h-11 w-11 place-items-center rounded-full text-primary transition active:scale-95",
+          )}
           aria-label="导入图片"
           onClick={() => togglePanel("upload")}
           type="button"
         >
-          <Plus size={22} />
+          <Plus className={clsx("transition-transform group-hover:scale-110", activePanel === "upload" && "nav-icon-pop")} size={20} strokeWidth={1.9} />
+          {activePanel === "upload" ? (
+            <span
+              key={indicatorMotion?.to === "upload" ? indicatorMotion.id : "upload-active"}
+              className={clsx("nav-indicator", indicatorMotion?.to === "upload" && `nav-indicator-enter-${indicatorMotion.direction}`)}
+            />
+          ) : null}
+          {indicatorMotion?.from === "upload" ? (
+            <span key={`${indicatorMotion.id}-upload-exit`} className={clsx("nav-indicator", `nav-indicator-exit-${indicatorMotion.direction}`)} />
+          ) : null}
         </button>
         <button
           className={clsx(
-            "group relative grid h-11 w-11 place-items-center rounded-full transition",
-            activePanel === "globe" ? "bg-primary text-white" : "bg-white/65 text-on-surface-variant hover:bg-primary-fixed hover:text-primary",
+            "group relative grid h-11 w-11 place-items-center rounded-full transition hover:text-primary active:scale-95",
+            activePanel === "globe" ? "text-primary" : "text-on-surface-variant",
           )}
-          onClick={() => setActivePanel("globe")}
+          onClick={() => moveToPanel("globe")}
           aria-label="时空主界面"
           title="时空主界面"
           type="button"
         >
-          <Globe2 size={19} />
+          <Globe2 className={clsx("transition-transform group-hover:scale-110", activePanel === "globe" && "nav-icon-pop")} size={20} strokeWidth={1.9} />
+          {activePanel === "globe" ? (
+            <span
+              key={indicatorMotion?.to === "globe" ? indicatorMotion.id : "globe-active"}
+              className={clsx("nav-indicator", indicatorMotion?.to === "globe" && `nav-indicator-enter-${indicatorMotion.direction}`)}
+            />
+          ) : null}
+          {indicatorMotion?.from === "globe" ? (
+            <span key={`${indicatorMotion.id}-globe-exit`} className={clsx("nav-indicator", `nav-indicator-exit-${indicatorMotion.direction}`)} />
+          ) : null}
         </button>
         {navItems.map((item) => {
           const Icon = item.icon;
@@ -84,15 +138,24 @@ export function MainLayout({ children }: { children: ReactNode }) {
             <button
               key={item.panel}
               className={clsx(
-                "group relative grid h-11 w-11 place-items-center rounded-full transition",
-                isActive ? "bg-primary text-white" : "bg-white/65 text-on-surface-variant hover:bg-primary-fixed hover:text-primary",
+                "group relative grid h-11 w-11 place-items-center rounded-full transition hover:text-primary active:scale-95",
+                isActive ? "text-primary" : "text-on-surface-variant",
               )}
               onClick={() => togglePanel(item.panel)}
               aria-label={item.label}
               title={item.label}
               type="button"
             >
-              <Icon size={19} />
+              <Icon className={clsx("transition-transform group-hover:scale-110", isActive && "nav-icon-pop")} size={20} strokeWidth={1.9} />
+              {isActive ? (
+                <span
+                  key={indicatorMotion?.to === item.panel ? indicatorMotion.id : `${item.panel}-active`}
+                  className={clsx("nav-indicator", indicatorMotion?.to === item.panel && `nav-indicator-enter-${indicatorMotion.direction}`)}
+                />
+              ) : null}
+              {indicatorMotion?.from === item.panel ? (
+                <span key={`${indicatorMotion.id}-${item.panel}-exit`} className={clsx("nav-indicator", `nav-indicator-exit-${indicatorMotion.direction}`)} />
+              ) : null}
               <span className="pointer-events-none absolute left-14 hidden whitespace-nowrap rounded-full bg-on-surface px-3 py-1.5 text-xs text-white opacity-0 shadow-soft transition group-hover:opacity-100 md:block">
                 {item.label}
               </span>
