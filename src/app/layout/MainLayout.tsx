@@ -5,7 +5,6 @@ import { useAppStore, type AppPanel } from "@/store/appStore";
 
 const navItems: Array<{ panel: Exclude<AppPanel, "globe" | "upload" | "import" | "tripDetail">; label: string; icon: typeof Archive }> = [
   { panel: "archive", label: "旅行档案", icon: Archive },
-  { panel: "search", label: "记忆搜索", icon: Search },
   { panel: "manual", label: "手动整理", icon: MapPinned },
   { panel: "settings", label: "本地设置", icon: Settings },
 ];
@@ -33,24 +32,24 @@ export function MainLayout({ children }: { children: ReactNode }) {
           </button>
           <div className="pointer-events-auto flex items-center gap-3">
             <button
-              className="hidden items-center gap-2 rounded-full bg-white/70 px-4 py-2 text-sm font-semibold text-on-surface-variant shadow-soft backdrop-blur-xl transition hover:text-primary md:inline-flex"
+              className="hidden h-11 w-11 place-items-center text-on-surface-variant transition hover:text-primary md:grid"
+              aria-label="记忆搜索"
+              title="记忆搜索"
               onClick={() => togglePanel("search")}
               type="button"
             >
-              <Search size={16} />
-              京都 夜景
+              <Search size={20} strokeWidth={2.15} />
             </button>
             <button
-              className="relative grid h-11 w-11 place-items-center rounded-full bg-white/70 text-on-surface-variant shadow-soft backdrop-blur-xl transition hover:text-primary"
+              className="relative grid h-11 w-11 place-items-center text-on-surface-variant transition hover:text-primary"
               aria-label="导入确认"
+              title="导入确认"
               onClick={() => togglePanel("import")}
               type="button"
             >
-              <Bell size={19} />
+              <Bell size={20} strokeWidth={2.15} />
               {openPendingCount > 0 ? (
-                <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-primary px-1 text-[10px] font-bold text-white">
-                  {openPendingCount}
-                </span>
+                <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-primary ring-2 ring-background" />
               ) : null}
             </button>
           </div>
