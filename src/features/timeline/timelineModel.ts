@@ -17,6 +17,13 @@ export type TimeIncisionDomain = {
   max: number;
 };
 
+export type TimeIncisionTick = {
+  id: string;
+  kind: "major" | "minor";
+  value: number;
+  label?: string;
+};
+
 export function timeValue(date?: string) {
   const value = date ? new Date(date).getTime() : Number.NaN;
   return Number.isFinite(value) ? value : 0;
@@ -91,4 +98,63 @@ export function buildPlaceSegments(places: PlaceNode[], selectedPlaceId?: string
       active: place.id === selectedPlaceId,
       label: place.name,
     }));
+}
+
+function monthStart(year: number, monthIndex: number) {
+  return new Date(Date.UTC(year, monthIndex, 1));
+}
+
+function addMonth(date: Date) {
+  return monthStart(date.getUTCFullYear(), date.getUTCMonth() + 1);
+}
+
+export function buildGlobalTicks(domain: TimeIncisionDomain): TimeIncisionTick[] {
+  const ticks: TimeIncisionTick[] = [];
+  const start = new Date(domain.min);
+  const end = new Date(domain.max);
+  let cursor = monthStart(start.getUTCFullYear(), start.getUTCMonth());
+
+  while (cursor.getTime() <= end.getTime()) {
+    const value = cursor.getTime();
+    const isYear = cursor.getUTCMonth() === 0;
+    ticks.push({
+      id: `global-${cursor.getUTCFullYear()}-${cursor.getUTCMonth()}`,
+      kind: isYear ? "major" : "minor",
+      value,
+      label: isYear ? String(cursor.getUTCFullYear()) : undefined,
+    });
+    cursor = addMonth(cursor);
+  }
+
+  const firstYear = new Date(domain.min).getUTCFullYear();
+  if (!ticks.some((tick) => tick.kind === "major" && tick.label === String(firstYear))) {
+    ticks.unshift({ id: `global-start-${firstYear}`, kind: "major", value: domain.min, label: String(firstYear) });
+  }
+
+  return ticks;
+}
+
+export function buildTripTicks(domain: TimeIncisionDomain): TimeIncisionTick[] {
+  const ticks: TimeIncisionTick[] = [];
+  const start = new Date(domain.min);
+  const end = new Date(domain.max);
+  let cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
+  const shownMonths = new Set<string>();
+
+  while (cursor.getTime() <= end.getTime()) {
+    const value = cursor.getTime();
+    const monthLabel = String(cursor.getUTCMonth() + 1).padStart(2, "0");
+    const monthKey = `${cursor.getUTCFullYear()}-${cursor.getUTCMonth()}`;
+    const isMonthStart = cursor.getUTCDate() === 1 || !shownMonths.has(monthKey);
+    if (isMonthStart) shownMonths.add(monthKey);
+    ticks.push({
+      id: `trip-${cursor.toISOString().slice(0, 10)}`,
+      kind: isMonthStart ? "major" : "minor",
+      value,
+      label: isMonthStart ? monthLabel : undefined,
+    });
+    cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate() + 1));
+  }
+
+  return ticks;
 }

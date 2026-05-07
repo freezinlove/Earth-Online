@@ -554,10 +554,10 @@ input {
 .time-incision-shell {
   position: fixed;
   left: 50%;
-  bottom: 6.2rem;
+  bottom: 4.8rem;
   z-index: 40;
   width: min(920px, calc(100vw - 112px));
-  height: 46px;
+  height: 58px;
   transform: translateX(-50%);
 }
 
@@ -578,9 +578,44 @@ input {
   height: 100%;
 }
 
+.time-incision-ticks {
+  position: absolute;
+  left: 0;
+  right: 34px;
+  top: 0;
+  height: 100%;
+}
+
+.time-incision-tick {
+  position: absolute;
+  top: 22px;
+  width: 1px;
+  height: 8px;
+  background: rgba(128, 98, 82, 0.24);
+  transform: translateX(-0.5px);
+}
+
+.time-incision-tick[data-kind="major"] {
+  height: 14px;
+  background: rgba(128, 98, 82, 0.36);
+}
+
+.time-incision-tick span {
+  position: absolute;
+  left: 50%;
+  top: 17px;
+  color: rgba(93, 68, 55, 0.42);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
 .time-incision-segment {
   position: absolute;
-  top: 18px;
+  top: 14px;
   height: 8px;
   padding: 0;
   border: 0;
@@ -595,6 +630,7 @@ input {
 }
 
 .time-incision-segment[data-kind="place"] {
+  top: 15px;
   height: 7px;
   background: rgba(15, 111, 120, 0.26);
 }
@@ -641,7 +677,7 @@ input {
 
 @media (max-width: 767px) {
   .time-incision-shell {
-    bottom: 5.8rem;
+    bottom: 4.7rem;
     width: min(100vw - 72px, 680px);
   }
 }

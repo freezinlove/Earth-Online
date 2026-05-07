@@ -3,13 +3,17 @@ import { useMemo, useState } from "react";
 import { useAppStore } from "@/store/appStore";
 import {
   buildGlobalDomain,
+  buildGlobalTicks,
   buildPlaceSegments,
   buildTripDomain,
+  buildTripTicks,
   buildTripSegments,
   formatCompactDateRange,
+  percentInDomain,
   segmentBounds,
   type TimelineLevel,
   type TimeIncisionSegment,
+  type TimeIncisionTick,
 } from "@/features/timeline/timelineModel";
 
 function TimeSegment({
@@ -37,6 +41,14 @@ function TimeSegment({
   );
 }
 
+function TimeTick({ tick, left }: { tick: TimeIncisionTick; left: number }) {
+  return (
+    <span className="time-incision-tick" data-kind={tick.kind} style={{ left: `${left}%` }} aria-hidden="true">
+      {tick.label ? <span>{tick.label}</span> : null}
+    </span>
+  );
+}
+
 export function TimelineDock() {
   const [level, setLevel] = useState<TimelineLevel>("global");
   const [primedTripId, setPrimedTripId] = useState<string>();
@@ -57,6 +69,7 @@ export function TimelineDock() {
     () => (level === "global" ? buildTripSegments(segments, selectedTripId) : buildPlaceSegments(tripPlaces, selectedPlaceId)),
     [level, segments, selectedPlaceId, selectedTripId, tripPlaces],
   );
+  const ticks = useMemo(() => (level === "global" ? buildGlobalTicks(domain) : buildTripTicks(domain)), [domain, level]);
 
   const focusTrip = (tripId: string) => {
     const places = placeNodes.filter((place) => place.tripId === tripId).sort((a, b) => a.timeRange.start.localeCompare(b.timeRange.start));
@@ -98,6 +111,11 @@ export function TimelineDock() {
   return (
     <section className="time-incision-shell" aria-label="旅行时间刻痕">
       <div className="time-incision-rail" aria-hidden="true" />
+      <div className="time-incision-ticks">
+        {ticks.map((tick) => (
+          <TimeTick key={tick.id} tick={tick} left={percentInDomain(tick.value, domain)} />
+        ))}
+      </div>
       <div className="time-incision-track">
         {visibleSegments.map((segment) => {
           const bounds = segmentBounds(segment, domain);
