@@ -147,6 +147,11 @@ function zoomProgress(camera: THREE.Camera) {
   return THREE.MathUtils.clamp((6.8 - camera.position.length()) / (6.8 - 2.05), 0, 1);
 }
 
+function orbitRotateSpeed(camera: THREE.Camera) {
+  const zoom = smoothstep(0.08, 0.92, zoomProgress(camera));
+  return THREE.MathUtils.lerp(0.58, 0.075, zoom);
+}
+
 function formatDate(date?: string) {
   if (!date) return "时间未记录";
   return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(date));
@@ -342,9 +347,9 @@ function focusQuaternion(point?: GeoPoint) {
 
 function cameraTargetForIntent(intent: GlobeViewIntent, fallbackPoint?: GeoPoint) {
   const point = "point" in intent ? intent.point : fallbackPoint;
-  const distance = intent.source === "timeline-place" ? 3.85 : intent.source === "timeline-trip" ? 5.85 : 5.25;
+  const distance = intent.source === "timeline-place" ? 2.18 : intent.source === "timeline-trip-entry" ? 3.85 : intent.source === "timeline-trip" ? 5.85 : 5.25;
   const latitude = point?.lat ?? 18;
-  const latitudeStrength = intent.source === "timeline-place" ? 1 : 0.58;
+  const latitudeStrength = intent.source === "timeline-place" ? 1 : intent.source === "timeline-trip-entry" ? 0.82 : 0.58;
   const y = THREE.MathUtils.clamp(Math.sin(THREE.MathUtils.degToRad(latitude)) * distance * latitudeStrength, -distance * 0.78, distance * 0.78);
   const z = Math.sqrt(Math.max(distance * distance - y * y, 0.4));
   return new THREE.Vector3(0, y, z);
@@ -865,6 +870,10 @@ function GlobeScene({
   }, [camera, focusPoint, viewIntent]);
 
   useFrame(() => {
+    if (controlsRef.current) {
+      controlsRef.current.rotateSpeed = THREE.MathUtils.lerp(controlsRef.current.rotateSpeed, orbitRotateSpeed(camera), 0.12);
+    }
+
     if (viewIntent.source !== "manual") {
       if (groupRef.current) groupRef.current.quaternion.slerp(targetQuaternion.current, 0.045);
       camera.position.lerp(targetCameraPosition.current, 0.055);

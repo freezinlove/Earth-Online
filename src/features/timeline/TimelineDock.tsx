@@ -59,7 +59,7 @@ export function TimelineDock() {
   );
 
   const focusTrip = (tripId: string) => {
-    const places = placeNodes.filter((place) => place.tripId === tripId);
+    const places = placeNodes.filter((place) => place.tripId === tripId).sort((a, b) => a.timeRange.start.localeCompare(b.timeRange.start));
     const focusPoint = places.length
       ? {
           lat: places.reduce((sum, place) => sum + place.center.lat, 0) / places.length,
@@ -70,6 +70,8 @@ export function TimelineDock() {
     if (level === "global" && primedTripId === tripId) {
       setLevel("trip");
       setPrimedTripId(undefined);
+      const entryPlace = places[0];
+      if (entryPlace) setGlobeViewIntent({ source: "timeline-trip-entry", point: entryPlace.center, distance: "mid" });
       return;
     }
 

@@ -6,6 +6,7 @@ export type AppPanel = "globe" | "archive" | "tripDetail" | "search" | "import" 
 export type TimelineZoom = "global" | "trip" | "day";
 export type GlobeViewIntent =
   | { source: "timeline-trip"; point: { lat: number; lng: number }; distance: "far" }
+  | { source: "timeline-trip-entry"; point: { lat: number; lng: number }; distance: "mid" }
   | { source: "timeline-place"; point: { lat: number; lng: number }; distance: "near" }
   | { source: "timeline-global" }
   | { source: "manual" };
