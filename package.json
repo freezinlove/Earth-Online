@@ -7,6 +7,7 @@
     "dev": "node server/dev.mjs --host 0.0.0.0",
     "frontend": "vite",
     "backend": "node server/index.mjs",
+    "generate:globe": "node scripts/generate_globe_assets.mjs",
     "build": "tsc -b && vite build",
     "test:mvp": "node scripts/mvp_acceptance.mjs",
     "lint": "eslint .",
