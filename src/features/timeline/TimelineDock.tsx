@@ -4,7 +4,7 @@ import { useAppStore } from "@/store/appStore";
 import {
   buildGlobalDomain,
   buildGlobalTicks,
-  buildPlaceSegments,
+  buildPlaceSegmentsFromMarkers,
   buildTripDomain,
   buildTripTicks,
   buildTripSegments,
@@ -15,6 +15,7 @@ import {
   type TimeIncisionSegment,
   type TimeIncisionTick,
 } from "@/features/timeline/timelineModel";
+import { applyRouteRoles, buildPlaceMarkers } from "@/features/earth/EarthStage";
 
 function TimeSegment({
   segment,
@@ -34,10 +35,12 @@ function TimeSegment({
       data-kind={segment.kind}
       style={{ left: `${left}%`, width: `${width}%` }}
       type="button"
-      aria-label={`${segment.label} ${formatCompactDateRange(segment.start, segment.end)}`}
+      aria-label={segment.shortLabel ? `${segment.shortLabel} ${formatCompactDateRange(segment.start, segment.end)}` : formatCompactDateRange(segment.start, segment.end)}
       title={formatCompactDateRange(segment.start, segment.end)}
       onClick={onClick}
-    />
+    >
+      {segment.shortLabel ? <span>{segment.shortLabel}</span> : null}
+    </button>
   );
 }
 
@@ -56,6 +59,7 @@ export function TimelineDock() {
   const selectedPlaceId = useAppStore((state) => state.selectedPlaceId);
   const segments = useAppStore((state) => state.timelineSegments);
   const trips = useAppStore((state) => state.trips);
+  const photos = useAppStore((state) => state.photos);
   const placeNodes = useAppStore((state) => state.placeNodes);
   const selectTrip = useAppStore((state) => state.selectTrip);
   const selectPlace = useAppStore((state) => state.selectPlace);
@@ -64,10 +68,12 @@ export function TimelineDock() {
 
   const selectedTrip = trips.find((trip) => trip.id === selectedTripId);
   const tripPlaces = useMemo(() => placeNodes.filter((place) => place.tripId === selectedTripId), [placeNodes, selectedTripId]);
+  const tripPhotos = useMemo(() => photos.filter((photo) => photo.tripId === selectedTripId && photo.location), [photos, selectedTripId]);
+  const placeMarkers = useMemo(() => applyRouteRoles(buildPlaceMarkers(tripPlaces, tripPhotos, selectedTrip)), [selectedTrip, tripPhotos, tripPlaces]);
   const domain = useMemo(() => (level === "global" ? buildGlobalDomain(trips) : buildTripDomain(selectedTrip)), [level, selectedTrip, trips]);
   const visibleSegments = useMemo(
-    () => (level === "global" ? buildTripSegments(segments, selectedTripId) : buildPlaceSegments(tripPlaces, selectedPlaceId)),
-    [level, segments, selectedPlaceId, selectedTripId, tripPlaces],
+    () => (level === "global" ? buildTripSegments(segments, selectedTripId) : buildPlaceSegmentsFromMarkers(placeMarkers, selectedPlaceId)),
+    [level, segments, selectedPlaceId, selectedTripId, placeMarkers],
   );
   const ticks = useMemo(() => (level === "global" ? buildGlobalTicks(domain) : buildTripTicks(domain)), [domain, level]);
 

@@ -649,6 +649,45 @@ input {
   transform: translateY(-1px);
 }
 
+.time-incision-segment > span {
+  pointer-events: none;
+  position: absolute;
+  left: 50%;
+  bottom: 13px;
+  max-width: 76px;
+  overflow: hidden;
+  color: rgba(79, 49, 35, 0.5);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1;
+  opacity: 0;
+  text-overflow: ellipsis;
+  transform: translateX(-50%) translateY(2px);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+  white-space: nowrap;
+}
+
+.time-incision-segment[data-kind="place"] > span {
+  color: rgba(15, 111, 120, 0.5);
+}
+
+.time-incision-segment:hover > span,
+.time-incision-segment[data-active] > span {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.time-incision-segment:hover > span {
+  color: rgba(79, 49, 35, 0.7);
+}
+
+.time-incision-segment[data-kind="place"]:hover > span {
+  color: rgba(15, 111, 120, 0.72);
+}
+
 .time-incision-back {
   position: absolute;
   right: 0;

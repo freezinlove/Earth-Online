@@ -1,4 +1,5 @@
 import type { PlaceNode, TimelineSegment, Trip } from "@/domain/models";
+import type { TravelMarker } from "@/features/earth/EarthStage";
 
 export type TimelineLevel = "global" | "trip";
 
@@ -10,6 +11,7 @@ export type TimeIncisionSegment = {
   relatedId: string;
   active: boolean;
   label: string;
+  shortLabel: string;
 };
 
 export type TimeIncisionDomain = {
@@ -35,6 +37,26 @@ export function formatCompactDateRange(start: string, end: string) {
   const format = new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit" });
   const year = Number.isFinite(startDate.getTime()) ? startDate.getFullYear() : "";
   return `${year}.${format.format(startDate).replace("/", ".")}-${format.format(endDate).replace("/", ".")}`;
+}
+
+function cleanTimelineLabel(label: string, kind: "trip" | "place") {
+  return label
+    .replace(/20\d{2}/g, "")
+    .replace(/[-–—_/.\s]*(0?[1-9]|1[0-2])(?=\D|$)/g, "")
+    .replace(/[·_｜|]/g, " ")
+    .replace(/待确认地点|待确认|未命名地点|临时地点|未知地点|地点\s*\d*/g, "")
+    .replace(kind === "trip" ? /多国|多城|旅行|之旅|自驾|档案|路线|回忆/g : /旅行|之旅|档案|路线|回忆/g, "")
+    .replace(kind === "place" ? /街景|山景|夜景|风景|湖景|河景|随拍|路边|附近|黄昏|清晨/g : /()/g, "")
+    .replace(/[()[\]{}【】「」『』]/g, "")
+    .replace(/\s+/g, "")
+    .trim();
+}
+
+export function shortTimelineLabel(label: string, kind: "trip" | "place") {
+  const value = cleanTimelineLabel(label, kind);
+  if (!value) return "";
+  const max = kind === "trip" ? 6 : 5;
+  return value.length > max ? value.slice(0, max) : value;
 }
 
 export function percentInDomain(value: number, domain: TimeIncisionDomain) {
@@ -82,6 +104,7 @@ export function buildTripSegments(segments: TimelineSegment[], selectedTripId: s
       relatedId: segment.relatedId,
       active: segment.relatedId === selectedTripId,
       label: segment.label,
+      shortLabel: shortTimelineLabel(segment.label, "trip"),
     }));
 }
 
@@ -97,36 +120,60 @@ export function buildPlaceSegments(places: PlaceNode[], selectedPlaceId?: string
       relatedId: place.id,
       active: place.id === selectedPlaceId,
       label: place.name,
+      shortLabel: shortTimelineLabel(place.name, "place"),
     }));
 }
 
+export function buildPlaceSegmentsFromMarkers(markers: TravelMarker[], selectedPlaceId?: string): TimeIncisionSegment[] {
+  return markers
+    .filter((marker) => marker.kind === "place" && marker.startTime)
+    .slice()
+    .sort((a, b) => String(a.startTime).localeCompare(String(b.startTime)))
+    .map((marker) => {
+      const relatedId = marker.placeIds?.[0] ?? marker.id;
+      const active = selectedPlaceId ? Boolean(marker.placeIds?.includes(selectedPlaceId)) : false;
+      const start = marker.startTime ?? marker.endTime ?? "";
+      const end = marker.endTime ?? marker.startTime ?? "";
+      return {
+        id: `time-marker-${marker.id}`,
+        kind: "place" as const,
+        start,
+        end,
+        relatedId,
+        active,
+        label: marker.label,
+        shortLabel: shortTimelineLabel(marker.label, "place"),
+      };
+    });
+}
+
 function monthStart(year: number, monthIndex: number) {
-  return new Date(Date.UTC(year, monthIndex, 1));
+  return new Date(year, monthIndex, 1);
 }
 
 function addMonth(date: Date) {
-  return monthStart(date.getUTCFullYear(), date.getUTCMonth() + 1);
+  return monthStart(date.getFullYear(), date.getMonth() + 1);
 }
 
 export function buildGlobalTicks(domain: TimeIncisionDomain): TimeIncisionTick[] {
   const ticks: TimeIncisionTick[] = [];
   const start = new Date(domain.min);
   const end = new Date(domain.max);
-  let cursor = monthStart(start.getUTCFullYear(), start.getUTCMonth());
+  let cursor = monthStart(start.getFullYear(), start.getMonth());
 
   while (cursor.getTime() <= end.getTime()) {
     const value = cursor.getTime();
-    const isYear = cursor.getUTCMonth() === 0;
+    const isYear = cursor.getMonth() === 0;
     ticks.push({
-      id: `global-${cursor.getUTCFullYear()}-${cursor.getUTCMonth()}`,
+      id: `global-${cursor.getFullYear()}-${cursor.getMonth()}`,
       kind: isYear ? "major" : "minor",
       value,
-      label: isYear ? String(cursor.getUTCFullYear()) : undefined,
+      label: isYear ? String(cursor.getFullYear()) : undefined,
     });
     cursor = addMonth(cursor);
   }
 
-  const firstYear = new Date(domain.min).getUTCFullYear();
+  const firstYear = new Date(domain.min).getFullYear();
   if (!ticks.some((tick) => tick.kind === "major" && tick.label === String(firstYear))) {
     ticks.unshift({ id: `global-start-${firstYear}`, kind: "major", value: domain.min, label: String(firstYear) });
   }
@@ -138,22 +185,22 @@ export function buildTripTicks(domain: TimeIncisionDomain): TimeIncisionTick[] {
   const ticks: TimeIncisionTick[] = [];
   const start = new Date(domain.min);
   const end = new Date(domain.max);
-  let cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
+  let cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate());
   const shownMonths = new Set<string>();
 
   while (cursor.getTime() <= end.getTime()) {
     const value = cursor.getTime();
-    const monthLabel = String(cursor.getUTCMonth() + 1).padStart(2, "0");
-    const monthKey = `${cursor.getUTCFullYear()}-${cursor.getUTCMonth()}`;
-    const isMonthStart = cursor.getUTCDate() === 1 || !shownMonths.has(monthKey);
+    const monthLabel = String(cursor.getMonth() + 1).padStart(2, "0");
+    const monthKey = `${cursor.getFullYear()}-${cursor.getMonth()}`;
+    const isMonthStart = cursor.getDate() === 1 || !shownMonths.has(monthKey);
     if (isMonthStart) shownMonths.add(monthKey);
     ticks.push({
-      id: `trip-${cursor.toISOString().slice(0, 10)}`,
+      id: `trip-${cursor.getFullYear()}-${cursor.getMonth()}-${cursor.getDate()}`,
       kind: isMonthStart ? "major" : "minor",
       value,
       label: isMonthStart ? monthLabel : undefined,
     });
-    cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate() + 1));
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1);
   }
 
   return ticks;

@@ -8,7 +8,7 @@ import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import type { GeoPoint, Photo, PlaceNode, Trip } from "@/domain/models";
 import { useAppStore, type GlobeViewIntent } from "@/store/appStore";
 
-type TravelMarker = {
+export type TravelMarker = {
   id: string;
   kind: "country" | "place";
   label: string;
@@ -19,6 +19,7 @@ type TravelMarker = {
   countryName?: string;
   placeIds?: string[];
   startTime?: string;
+  endTime?: string;
   routeRole?: "start" | "end";
   active: boolean;
 };
@@ -277,7 +278,7 @@ function buildRouteStops(places: TravelMarker[]) {
   }, []);
 }
 
-function applyRouteRoles(markers: TravelMarker[]) {
+export function applyRouteRoles(markers: TravelMarker[]) {
   const routeStops = buildRouteStops(markers);
   const firstStop = routeStops[0];
   const lastStop = routeStops[routeStops.length - 1];
@@ -413,7 +414,7 @@ function inferPlaceNameForGroup(group: { name: string; places: PlaceNode[]; phot
   return PLACE_NAME_HINTS.find((hint) => hint.keywords.some((keyword) => metadata.includes(keyword.toLowerCase())))?.name ?? group.name;
 }
 
-function buildPlaceMarkers(places: PlaceNode[], photos: Photo[], trip?: Trip) {
+export function buildPlaceMarkers(places: PlaceNode[], photos: Photo[], trip?: Trip) {
   const groups: Array<{ name: string; places: PlaceNode[]; photos: Photo[]; centers: GeoPoint[] }> = [];
 
   places.forEach((place) => {
@@ -440,6 +441,9 @@ function buildPlaceMarkers(places: PlaceNode[], photos: Photo[], trip?: Trip) {
     const startTime = group.places
       .map((place) => place.timeRange.start)
       .sort((a, b) => a.localeCompare(b))[0];
+    const endTime = group.places
+      .map((place) => place.timeRange.end)
+      .sort((a, b) => b.localeCompare(a))[0];
     return {
       id: `place-${placeIds.join("-")}`,
       kind: "place" as const,
@@ -451,6 +455,7 @@ function buildPlaceMarkers(places: PlaceNode[], photos: Photo[], trip?: Trip) {
       tripId: group.places[0]?.tripId ?? "",
       countryName: inferCountryForGroup(group, trip),
       startTime,
+      endTime,
       active: false,
     };
   });
@@ -470,6 +475,7 @@ function buildPlaceMarkers(places: PlaceNode[], photos: Photo[], trip?: Trip) {
     marker.count = marker.photoIds.length;
     marker.center = centerOf([marker.center, nearby.center]);
     marker.startTime = [marker.startTime, nearby.startTime].filter(Boolean).sort((a, b) => String(a).localeCompare(String(b)))[0];
+    marker.endTime = [marker.endTime, nearby.endTime].filter(Boolean).sort((a, b) => String(b).localeCompare(String(a)))[0];
     markers.splice(markers.indexOf(nearby), 1);
   }
 
