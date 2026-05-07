@@ -1,36 +1,48 @@
 import { Html, Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { Archive, X } from "lucide-react";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import ThreeGlobe from "three-globe";
-import type { GeoPoint, Photo, PlaceNode, Route } from "@/domain/models";
+import type { GeoPoint, Photo, PlaceNode, Trip } from "@/domain/models";
 import { useAppStore } from "@/store/appStore";
 
-type GlobePoint = {
+type TravelMarker = {
   id: string;
-  kind: "place" | "photo";
+  kind: "country" | "place";
   label: string;
   center: GeoPoint;
-  count?: number;
+  count: number;
+  photoIds: string[];
+  tripId: string;
+  countryName?: string;
+  placeIds?: string[];
+  startTime?: string;
+  routeRole?: "start" | "end";
   active: boolean;
 };
 
 type GlobePath = {
   id: string;
   points: Array<GeoPoint & { alt?: number }>;
-  color: string;
-  stroke: number;
+  crossCountry: boolean;
+  distanceKm: number;
+  longHop: boolean;
+  active: boolean;
 };
+
+type SelectedMapItem =
+  | { kind: "country"; id: string }
+  | { kind: "place"; id: string }
+  | undefined;
 
 type GlobeAssetKind = "landFar" | "landMid" | "landNear" | "coastLine" | "countryLine" | "provinceLine";
 
 const GLOBE_RADIUS = 100;
 const GLOBE_SCALE = 0.0185;
-const MARKER_ALTITUDE = 1.9;
-const MEMORY_CORAL = "#ff6b7a";
-const MEMORY_BLUE = "#3ddcff";
-const MEMORY_GOLD = "#ffd166";
-const ROUTE_VIOLET = "#9b7cff";
+const MARKER_ALTITUDE = 0.022;
+const ROUTE_LONG_HOP = "#8f3f32";
+const ROUTE_ARROW = "#0f6f78";
 const LAND_PARTICLE = "#3f9fb3";
 const MEDIUM_LAND_PARTICLE = "#49bfd1";
 const NEAR_LAND_PARTICLE = "#23abc0";
@@ -41,6 +53,62 @@ const GLOBE_SHELL = "#efe1cf";
 const LAND_PARTICLE_SIZE = 3.05;
 const MEDIUM_LAND_PARTICLE_SIZE = 2.85;
 const NEAR_LAND_PARTICLE_SIZE = 2.35;
+const AI_PLACEHOLDER = "这里将由 AI 根据地点和照片内容生成一段简短回忆。";
+const SCENE_SUFFIXES = ["街景", "山景", "夜景", "风景", "湖景", "河景", "随拍", "路边", "附近"];
+const COUNTRY_CENTERS: Record<string, GeoPoint> = {
+  中国: { lat: 35.8617, lng: 104.1954 },
+  日本: { lat: 36.2048, lng: 138.2529 },
+  法国: { lat: 46.2276, lng: 2.2137 },
+  瑞士: { lat: 46.8182, lng: 8.2275 },
+  意大利: { lat: 41.8719, lng: 12.5674 },
+  奥地利: { lat: 47.5162, lng: 14.5501 },
+  德国: { lat: 51.1657, lng: 10.4515 },
+  匈牙利: { lat: 47.1625, lng: 19.5033 },
+  捷克: { lat: 49.8175, lng: 15.473 },
+  英国: { lat: 55.3781, lng: -3.436 },
+};
+const COUNTRY_KEYWORDS: Array<{ country: string; keywords: string[] }> = [
+  { country: "日本", keywords: ["日本", "京都", "大阪", "奈良"] },
+  { country: "中国", keywords: ["中国", "成都", "康定", "理塘", "川西"] },
+  { country: "法国", keywords: ["法国", "巴黎"] },
+  { country: "瑞士", keywords: ["瑞士", "卢塞恩", "苏黎世", "SWISS"] },
+  { country: "意大利", keywords: ["意大利", "佛罗伦萨", "罗马"] },
+  { country: "奥地利", keywords: ["奥地利", "哈尔施塔特", "萨尔茨堡", "维也纳", "萨赫", "因斯布鲁克", "施华洛世奇", "Swarovski"] },
+  { country: "德国", keywords: ["德国", "巴伐利亚", "加米施", "帕滕基兴", "艾布湖", "新天鹅堡", "慕尼黑"] },
+  { country: "匈牙利", keywords: ["匈牙利", "布达佩斯", "多瑙河"] },
+  { country: "捷克", keywords: ["捷克", "布拉格", "查理大桥", "伏尔塔瓦"] },
+  { country: "英国", keywords: ["英国", "伦敦"] },
+];
+const COUNTRY_BOUNDS: Array<{ country: string; minLat: number; maxLat: number; minLng: number; maxLng: number }> = [
+  { country: "日本", minLat: 30, maxLat: 46, minLng: 128, maxLng: 146 },
+  { country: "中国", minLat: 18, maxLat: 54, minLng: 73, maxLng: 135 },
+  { country: "法国", minLat: 41, maxLat: 51.5, minLng: -5.5, maxLng: 9.8 },
+  { country: "瑞士", minLat: 45.7, maxLat: 47.9, minLng: 5.7, maxLng: 10.7 },
+  { country: "意大利", minLat: 36, maxLat: 47.2, minLng: 6.5, maxLng: 18.8 },
+  { country: "奥地利", minLat: 46.3, maxLat: 49.1, minLng: 9.4, maxLng: 17.2 },
+  { country: "德国", minLat: 47.2, maxLat: 55.2, minLng: 5.8, maxLng: 15.2 },
+  { country: "匈牙利", minLat: 45.6, maxLat: 48.7, minLng: 16, maxLng: 22.9 },
+  { country: "捷克", minLat: 48.5, maxLat: 51.1, minLng: 12, maxLng: 18.9 },
+  { country: "英国", minLat: 49.8, maxLat: 60.9, minLng: -8.8, maxLng: 2.1 },
+];
+const LOCAL_COUNTRY_HINTS: Array<{ country: string; center: GeoPoint; radiusKm: number }> = [
+  { country: "奥地利", center: { lat: 47.2692, lng: 11.4041 }, radiusKm: 34 },
+  { country: "奥地利", center: { lat: 47.8095, lng: 13.055 }, radiusKm: 28 },
+  { country: "奥地利", center: { lat: 47.5622, lng: 13.6493 }, radiusKm: 24 },
+  { country: "德国", center: { lat: 47.4917, lng: 11.0955 }, radiusKm: 32 },
+  { country: "瑞士", center: { lat: 47.3769, lng: 8.5417 }, radiusKm: 32 },
+  { country: "匈牙利", center: { lat: 47.4979, lng: 19.0402 }, radiusKm: 36 },
+];
+const PLACE_NAME_HINTS: Array<{ name: string; keywords: string[] }> = [
+  { name: "因斯布鲁克", keywords: ["因斯布鲁克", "施华洛世奇", "Swarovski", "AC Hotel", "万豪"] },
+  { name: "哈尔施塔特", keywords: ["哈尔施塔特", "Hallstatt"] },
+  { name: "萨尔茨堡", keywords: ["萨尔茨堡", "Salzburg", "萨赫"] },
+  { name: "加米施-帕滕基兴", keywords: ["加米施", "帕滕基兴", "Garmisch"] },
+  { name: "艾布湖", keywords: ["艾布湖", "Eibsee", "新天鹅堡"] },
+  { name: "布达佩斯", keywords: ["布达佩斯", "Budapest", "链子桥"] },
+  { name: "苏黎世", keywords: ["苏黎世", "Zurich", "SWISS"] },
+  { name: "布拉格", keywords: ["布拉格", "Prague", "Praha", "查理大桥"] },
+];
 const GLOBE_ASSET_PATHS: Record<GlobeAssetKind, string> = {
   landFar: "/data/globe/land-far.bin",
   landMid: "/data/globe/land-mid.bin",
@@ -76,6 +144,43 @@ function smoothstep(edge0: number, edge1: number, value: number) {
 
 function zoomProgress(camera: THREE.Camera) {
   return THREE.MathUtils.clamp((6.8 - camera.position.length()) / (6.8 - 2.05), 0, 1);
+}
+
+function formatDate(date?: string) {
+  if (!date) return "时间未记录";
+  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(date));
+}
+
+function normalizePlaceName(name: string) {
+  return (
+    SCENE_SUFFIXES.reduce((value, suffix) => value.replace(new RegExp(`${suffix}$`), ""), name)
+      .replace(/地点\s*\d+$/u, "")
+      .trim() || name
+  );
+}
+
+function distanceKm(start: GeoPoint, end: GeoPoint) {
+  const lat1 = THREE.MathUtils.degToRad(start.lat);
+  const lat2 = THREE.MathUtils.degToRad(end.lat);
+  const dLat = lat2 - lat1;
+  const dLng = THREE.MathUtils.degToRad(end.lng - start.lng);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function centerOf(points: GeoPoint[]) {
+  return {
+    lat: points.reduce((sum, point) => sum + point.lat, 0) / points.length,
+    lng: points.reduce((sum, point) => sum + point.lng, 0) / points.length,
+  };
+}
+
+function hoursBetween(first?: string, second?: string) {
+  if (!first || !second) return Number.POSITIVE_INFINITY;
+  const firstTime = new Date(first).getTime();
+  const secondTime = new Date(second).getTime();
+  if (!Number.isFinite(firstTime) || !Number.isFinite(secondTime)) return Number.POSITIVE_INFINITY;
+  return Math.abs(firstTime - secondTime) / 36e5;
 }
 
 function hideBackHemisphere(material: THREE.Material) {
@@ -133,32 +238,87 @@ function useGlobeAssetGeometry(kind: GlobeAssetKind) {
   return useMemo(() => createParticleGeometry(positions), [positions]);
 }
 
-function routeDistance(start: GeoPoint, end: GeoPoint) {
-  const lat1 = (start.lat * Math.PI) / 180;
-  const lat2 = (end.lat * Math.PI) / 180;
-  const dLat = lat2 - lat1;
-  const dLng = ((end.lng - start.lng) * Math.PI) / 180;
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
-  return 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+function buildRouteStops(places: TravelMarker[]) {
+  const orderedPlaces = places
+    .filter((place) => place.kind === "place")
+    .slice()
+    .sort((a, b) => (a.startTime ?? "").localeCompare(b.startTime ?? ""));
+
+  return orderedPlaces.reduce<TravelMarker[]>((stops, place) => {
+    const previous = stops[stops.length - 1];
+    if (!previous) return [place];
+    const sameCountry = previous.countryName === place.countryName;
+    const localStay = sameCountry && distanceKm(previous.center, place.center) < 35;
+    if (!localStay) return [...stops, place];
+
+    const previousWeight = Math.max(previous.count, 1);
+    const nextWeight = Math.max(place.count, 1);
+    const mergedWeight = previousWeight + nextWeight;
+    stops[stops.length - 1] = {
+      ...previous,
+      id: `${previous.id}-${place.id}`,
+      label: previous.label,
+      center: {
+        lat: (previous.center.lat * previousWeight + place.center.lat * nextWeight) / mergedWeight,
+        lng: (previous.center.lng * previousWeight + place.center.lng * nextWeight) / mergedWeight,
+      },
+      count: previous.count + place.count,
+      photoIds: Array.from(new Set([...previous.photoIds, ...place.photoIds])),
+      placeIds: Array.from(new Set([...(previous.placeIds ?? []), ...(place.placeIds ?? [])])),
+      active: previous.active || place.active,
+    };
+    return stops;
+  }, []);
 }
 
-function routePaths(route?: Route): GlobePath[] {
-  if (!route || route.points.length < 2) return [];
+function applyRouteRoles(markers: TravelMarker[]) {
+  const routeStops = buildRouteStops(markers);
+  const firstStop = routeStops[0];
+  const lastStop = routeStops[routeStops.length - 1];
+  if (!firstStop || !lastStop) return markers;
 
-  return route.points.slice(0, -1).map((point, index) => {
-    const next = route.points[index + 1];
-    const distance = routeDistance(point, next);
-    const shortHop = distance < 0.12;
-    const midAlt = shortHop ? 0.002 : Math.min(0.16, 0.025 + distance * 0.09);
+  const firstPlaceIds = new Set(firstStop.placeIds ?? []);
+  const lastPlaceIds = new Set(lastStop.placeIds ?? []);
+  return markers.map((marker) => {
+    const placeIds = marker.placeIds ?? [];
+    const routeRole: TravelMarker["routeRole"] = placeIds.some((id) => firstPlaceIds.has(id)) ? "start" : placeIds.some((id) => lastPlaceIds.has(id)) ? "end" : undefined;
+    return { ...marker, routeRole };
+  });
+}
+
+function routePaths(places: TravelMarker[], selected?: TravelMarker): GlobePath[] {
+  const orderedPlaces = buildRouteStops(places);
+  if (orderedPlaces.length < 2) return [];
+
+  return orderedPlaces.slice(0, -1).map((place, index) => {
+    const nextPlace = orderedPlaces[index + 1];
+    const point = place.center;
+    const next = nextPlace.center;
+    const segmentKm = distanceKm(point, next);
+    const distance = segmentKm / 6371;
+    const crossCountry = place.countryName !== nextPlace.countryName;
+    const longHop = segmentKm >= 120;
+    const midAlt = longHop ? Math.min(0.13, 0.024 + distance * 0.08) : 0.024;
+    const active =
+      !!selected &&
+      selected.kind === "place" &&
+      [point, next].some((routePoint) => distanceKm(routePoint, selected.center) < 18);
     return {
-      id: `${route.id}-${index}`,
-      color: shortHop ? MEMORY_BLUE : ROUTE_VIOLET,
-      stroke: shortHop ? 1.25 : 1.65,
-      points: [
-        { ...point, alt: 0.006 },
-        { lat: (point.lat + next.lat) / 2, lng: (point.lng + next.lng) / 2, alt: midAlt },
-        { ...next, alt: 0.006 },
-      ],
+      id: `${place.id}-${nextPlace.id}`,
+      active,
+      crossCountry,
+      distanceKm: segmentKm,
+      longHop,
+      points: !longHop
+        ? [
+            { ...point, alt: 0.024 },
+            { ...next, alt: 0.024 },
+          ]
+        : [
+            { ...point, alt: 0.024 },
+            { lat: (point.lat + next.lat) / 2, lng: (point.lng + next.lng) / 2, alt: midAlt },
+            { ...next, alt: 0.024 },
+          ],
     };
   });
 }
@@ -175,9 +335,165 @@ function threeGlobeVector(point: GeoPoint, radius = GLOBE_RADIUS, altitude = 0) 
 }
 
 function focusQuaternion(point?: GeoPoint) {
-  const target = new THREE.Quaternion();
   const longitude = point?.lng ?? 33.2;
-  return target.setFromEuler(new THREE.Euler(0, THREE.MathUtils.degToRad(-longitude), 0));
+  return new THREE.Quaternion().setFromEuler(new THREE.Euler(0, THREE.MathUtils.degToRad(-longitude), 0));
+}
+
+function getCountryForPoint(point: GeoPoint, trip: Trip) {
+  if (trip.countries.length <= 1) return trip.countries[0] ?? "未知国家";
+
+  return trip.countries.reduce((closest, country) => {
+    const center = COUNTRY_CENTERS[country];
+    if (!center) return closest;
+    const score = distanceKm(point, center);
+    return score < closest.score ? { name: country, score } : closest;
+  }, { name: trip.countries[0], score: Number.POSITIVE_INFINITY }).name;
+}
+
+function inferCountryFromText(text: string) {
+  const lowerText = text.toLowerCase();
+  return COUNTRY_KEYWORDS.find((entry) => entry.keywords.some((keyword) => lowerText.includes(keyword.toLowerCase())))?.country;
+}
+
+function inferCountryFromBounds(point: GeoPoint) {
+  return COUNTRY_BOUNDS.find(
+    (bounds) => point.lat >= bounds.minLat && point.lat <= bounds.maxLat && point.lng >= bounds.minLng && point.lng <= bounds.maxLng,
+  )?.country;
+}
+
+function inferCountryForGroup(group: { name: string; places: PlaceNode[]; photos: Photo[]; centers: GeoPoint[] }, trip?: Trip) {
+  const center = centerOf(group.centers);
+  const localHint = LOCAL_COUNTRY_HINTS.find((hint) => distanceKm(center, hint.center) <= hint.radiusKm);
+  if (localHint) return localHint.country;
+
+  const metadata = [
+    group.name,
+    ...group.places.map((place) => place.name),
+    ...group.photos.flatMap((photo) => [photo.title, photo.fileName, photo.aiCaption, ...(photo.tags ?? [])]),
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const textCountry = inferCountryFromText(metadata);
+  if (textCountry) return textCountry;
+
+  const boundCountry = inferCountryFromBounds(center);
+  if (boundCountry) return boundCountry;
+
+  return trip ? getCountryForPoint(center, trip) : "未知国家";
+}
+
+function groupMetadata(group: { name: string; places: PlaceNode[]; photos: Photo[] }) {
+  return [
+    group.name,
+    ...group.places.map((place) => place.name),
+    ...group.photos.flatMap((photo) => [photo.title, photo.fileName, photo.aiCaption, ...(photo.tags ?? [])]),
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function inferPlaceNameForGroup(group: { name: string; places: PlaceNode[]; photos: Photo[] }) {
+  const metadata = groupMetadata(group).toLowerCase();
+  return PLACE_NAME_HINTS.find((hint) => hint.keywords.some((keyword) => metadata.includes(keyword.toLowerCase())))?.name ?? group.name;
+}
+
+function buildPlaceMarkers(places: PlaceNode[], photos: Photo[], trip?: Trip) {
+  const groups: Array<{ name: string; places: PlaceNode[]; photos: Photo[]; centers: GeoPoint[] }> = [];
+
+  places.forEach((place) => {
+    const placePhotos = photos.filter((photo) => photo.placeNodeId === place.id || place.photoIds.includes(photo.id));
+    const photoCenters = placePhotos.map((photo) => photo.location).filter(Boolean) as GeoPoint[];
+    const centers = photoCenters.length ? photoCenters : [place.center];
+    const center = centerOf(centers);
+    const key = normalizePlaceName(place.name);
+    const entry = groups.find((group) => group.name === key && distanceKm(centerOf(group.centers), center) <= 8) ?? {
+      name: key,
+      places: [],
+      photos: [],
+      centers: [],
+    };
+    entry.places.push(place);
+    entry.photos.push(...placePhotos);
+    entry.centers.push(...centers);
+    if (!groups.includes(entry)) groups.push(entry);
+  });
+
+  const markers = groups.map((group) => {
+    const photoIds = Array.from(new Set(group.photos.map((photo) => photo.id)));
+    const placeIds = group.places.map((place) => place.id);
+    const startTime = group.places
+      .map((place) => place.timeRange.start)
+      .sort((a, b) => a.localeCompare(b))[0];
+    return {
+      id: `place-${placeIds.join("-")}`,
+      kind: "place" as const,
+      label: inferPlaceNameForGroup(group),
+      center: centerOf(group.centers),
+      count: photoIds.length,
+      photoIds,
+      placeIds,
+      tripId: group.places[0]?.tripId ?? "",
+      countryName: inferCountryForGroup(group, trip),
+      startTime,
+      active: false,
+    };
+  });
+
+  for (let index = 0; index < markers.length; index += 1) {
+    const marker = markers[index];
+    const nearby = markers.find((candidate, candidateIndex) => {
+      if (candidateIndex <= index || candidate.countryName !== marker.countryName) return false;
+      const distance = distanceKm(marker.center, candidate.center);
+      const closePoi = distance < 5;
+      const cityStay = distance < 25 && hoursBetween(marker.startTime, candidate.startTime) <= 36;
+      return closePoi || cityStay;
+    });
+    if (!nearby) continue;
+    marker.photoIds = Array.from(new Set([...marker.photoIds, ...nearby.photoIds]));
+    marker.placeIds = Array.from(new Set([...(marker.placeIds ?? []), ...(nearby.placeIds ?? [])]));
+    marker.count = marker.photoIds.length;
+    marker.center = centerOf([marker.center, nearby.center]);
+    marker.startTime = [marker.startTime, nearby.startTime].filter(Boolean).sort((a, b) => String(a).localeCompare(String(b)))[0];
+    markers.splice(markers.indexOf(nearby), 1);
+  }
+
+  return markers;
+}
+
+function buildCountryMarkers(trip: Trip | undefined, placeMarkers: TravelMarker[]) {
+  if (!trip) return [];
+
+  const groups = new Map<string, TravelMarker[]>();
+  placeMarkers.forEach((place) => {
+    const country = place.countryName ?? getCountryForPoint(place.center, trip);
+    groups.set(country, [...(groups.get(country) ?? []), place]);
+  });
+
+  return Array.from(groups.entries()).map(([country, places]) => {
+    const photoIds = Array.from(new Set(places.flatMap((place) => place.photoIds)));
+    const routeRole: TravelMarker["routeRole"] = places.some((place) => place.routeRole === "start")
+      ? "start"
+      : places.some((place) => place.routeRole === "end")
+        ? "end"
+        : undefined;
+    return {
+      id: `country-${country}`,
+      kind: "country" as const,
+      label: country,
+      center: centerOf(places.map((place) => place.center)),
+      count: places.length,
+      photoIds,
+      placeIds: places.flatMap((place) => place.placeIds ?? []),
+      tripId: trip.id,
+      countryName: country,
+      startTime: places
+        .map((place) => place.startTime)
+        .filter(Boolean)
+        .sort((a, b) => String(a).localeCompare(String(b)))[0],
+      routeRole,
+      active: false,
+    };
+  });
 }
 
 function LandParticleLayer() {
@@ -295,33 +611,8 @@ function NearLandParticleLayer() {
   );
 }
 
-function CoastLineLayer() {
-  const geometry = useGlobeAssetGeometry("coastLine");
-  const materialRef = useRef<THREE.LineBasicMaterial>(null);
-
-  useEffect(() => {
-    if (!materialRef.current) return;
-    hideBackHemisphere(materialRef.current);
-    materialRef.current.needsUpdate = true;
-  }, []);
-
-  return (
-    <lineSegments geometry={geometry} renderOrder={5}>
-      <lineBasicMaterial
-        ref={materialRef}
-        color={COAST_LINE}
-        transparent
-        opacity={0.66}
-        depthTest={false}
-        depthWrite={false}
-        blending={THREE.NormalBlending}
-      />
-    </lineSegments>
-  );
-}
-
-function CountryBoundaryLineLayer() {
-  const geometry = useGlobeAssetGeometry("countryLine");
+function AssetLineLayer({ kind, color, baseOpacity, renderOrder }: { kind: GlobeAssetKind; color: string; baseOpacity: number; renderOrder: number }) {
+  const geometry = useGlobeAssetGeometry(kind);
   const materialRef = useRef<THREE.LineBasicMaterial>(null);
   const camera = useThree((state) => state.camera);
 
@@ -332,48 +623,21 @@ function CountryBoundaryLineLayer() {
   }, []);
 
   useFrame(() => {
-    if (!materialRef.current) return;
-    materialRef.current.opacity = smoothstep(0.4, 0.7, zoomProgress(camera)) * (1 - smoothstep(0.76, 0.94, zoomProgress(camera)) * 0.32) * 0.48;
+    if (!materialRef.current || kind === "coastLine") return;
+    const zoom = zoomProgress(camera);
+    materialRef.current.opacity =
+      kind === "countryLine"
+        ? smoothstep(0.4, 0.7, zoom) * (1 - smoothstep(0.76, 0.94, zoom) * 0.32) * baseOpacity
+        : smoothstep(0.72, 0.92, zoom) * baseOpacity;
   });
 
   return (
-    <lineSegments geometry={geometry} renderOrder={6}>
+    <lineSegments geometry={geometry} renderOrder={renderOrder}>
       <lineBasicMaterial
         ref={materialRef}
-        color={COUNTRY_BOUNDARY_LINE}
+        color={color}
         transparent
-        opacity={0}
-        depthTest={false}
-        depthWrite={false}
-        blending={THREE.NormalBlending}
-      />
-    </lineSegments>
-  );
-}
-
-function ProvinceBoundaryLineLayer() {
-  const geometry = useGlobeAssetGeometry("provinceLine");
-  const materialRef = useRef<THREE.LineBasicMaterial>(null);
-  const camera = useThree((state) => state.camera);
-
-  useEffect(() => {
-    if (!materialRef.current) return;
-    hideBackHemisphere(materialRef.current);
-    materialRef.current.needsUpdate = true;
-  }, []);
-
-  useFrame(() => {
-    if (!materialRef.current) return;
-    materialRef.current.opacity = smoothstep(0.72, 0.92, zoomProgress(camera)) * 0.68;
-  });
-
-  return (
-    <lineSegments geometry={geometry} renderOrder={7}>
-      <lineBasicMaterial
-        ref={materialRef}
-        color={PROVINCE_BOUNDARY_LINE}
-        transparent
-        opacity={0}
+        opacity={kind === "coastLine" ? baseOpacity : 0}
         depthTest={false}
         depthWrite={false}
         blending={THREE.NormalBlending}
@@ -383,30 +647,104 @@ function ProvinceBoundaryLineLayer() {
 }
 
 function TravelRouteLayer({ paths }: { paths: GlobePath[] }) {
+  const camera = useThree((state) => state.camera);
+  const [zoom, setZoom] = useState(0);
   const lines = useMemo(
     () =>
       paths.map((path) => {
         const controlPoints = path.points.map((point) => threeGlobeVector(point, GLOBE_RADIUS, point.alt ?? 0.006));
         const curve = new THREE.CatmullRomCurve3(controlPoints);
+        const arrowPoint = curve.getPoint(0.58);
+        const arrowDirectionPoint = curve.getPoint(0.64);
         return {
           id: path.id,
-          color: path.color,
-          points: curve.getPoints(32).map((point) => point.toArray() as [number, number, number]),
+          active: path.active,
+          crossCountry: path.crossCountry,
+          distanceKm: path.distanceKm,
+          longHop: path.longHop,
+          points: curve.getPoints(42).map((point) => point.toArray() as [number, number, number]),
+          arrowPosition: arrowPoint.toArray() as [number, number, number],
+          arrowDirectionPoint: arrowDirectionPoint.toArray() as [number, number, number],
         };
       }),
     [paths],
   );
 
+  useFrame(() => {
+    const nextZoom = zoomProgress(camera);
+    setZoom((current) => (Math.abs(current - nextZoom) > 0.015 ? nextZoom : current));
+  });
+
   return (
     <>
-      {lines.map((line) => (
-        <Line key={line.id} points={line.points} color={line.color} lineWidth={2.2} transparent opacity={0.94} depthWrite={false} />
-      ))}
+      {lines.map((line) => {
+        const intraCountryOpacity = smoothstep(0.34, 0.6, zoom) * 0.88;
+        const crossCountryOpacity = THREE.MathUtils.lerp(0.92, 0.62, smoothstep(0.45, 0.82, zoom));
+        const opacity = line.crossCountry ? crossCountryOpacity : intraCountryOpacity;
+        const arrowOpacity = smoothstep(0.68, 0.84, zoom);
+        if (opacity < 0.025) return null;
+        const color = ROUTE_LONG_HOP;
+        return (
+          <group key={line.id}>
+            <Line
+              points={line.points}
+              color={color}
+              lineWidth={line.active ? 3.5 : line.longHop ? 3.05 : 2.45}
+              transparent
+              opacity={line.active ? Math.max(opacity, 0.72) : opacity}
+              depthWrite={false}
+              depthTest={false}
+              renderOrder={12}
+            />
+            {arrowOpacity > 0.02 ? (
+              <RouteArrow color={ROUTE_ARROW} directionPoint={line.arrowDirectionPoint} opacity={arrowOpacity} position={line.arrowPosition} />
+            ) : null}
+          </group>
+        );
+      })}
     </>
   );
 }
 
-function ThreeGlobeLayer({ paths }: { paths: GlobePath[] }) {
+function RouteArrow({
+  color,
+  directionPoint,
+  opacity,
+  position,
+}: {
+  color: string;
+  directionPoint: [number, number, number];
+  opacity: number;
+  position: [number, number, number];
+}) {
+  const camera = useThree((state) => state.camera);
+  const anchorRef = useRef<THREE.Group>(null);
+  const arrowRef = useRef<HTMLSpanElement>(null);
+  const localStart = useMemo(() => new THREE.Vector3(...position), [position]);
+  const localEnd = useMemo(() => new THREE.Vector3(...directionPoint), [directionPoint]);
+
+  useFrame(() => {
+    const parent = anchorRef.current?.parent;
+    if (!parent || !arrowRef.current) return;
+
+    const screenStart = localStart.clone().applyMatrix4(parent.matrixWorld).project(camera);
+    const screenEnd = localEnd.clone().applyMatrix4(parent.matrixWorld).project(camera);
+    const dx = screenEnd.x - screenStart.x;
+    const dy = screenStart.y - screenEnd.y;
+    if (Math.hypot(dx, dy) < 0.0001) return;
+    arrowRef.current.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
+  });
+
+  return (
+    <group ref={anchorRef}>
+      <Html center position={position} zIndexRange={[32, 14]} transform={false}>
+        <span ref={arrowRef} className="travel-route-arrow" style={{ color, opacity }} />
+      </Html>
+    </group>
+  );
+}
+
+function ThreeGlobeLayer() {
   const globe = useMemo(
     () =>
       new ThreeGlobe({
@@ -430,92 +768,63 @@ function ThreeGlobeLayer({ paths }: { paths: GlobePath[] }) {
       depthWrite: false,
     });
 
-    globe
-      .globeMaterial(material)
-      .showAtmosphere(true)
-      .atmosphereColor("#f7dcc0")
-      .atmosphereAltitude(0.1);
+    globe.globeMaterial(material).showAtmosphere(true).atmosphereColor("#f7dcc0").atmosphereAltitude(0.1);
   }, [globe]);
-
-  useEffect(() => {
-    globe
-      .pathsData(paths)
-      .pathPoints("points")
-      .pathPointLat((point) => (point as GeoPoint).lat)
-      .pathPointLng((point) => (point as GeoPoint).lng)
-      .pathPointAlt((point) => (point as { alt?: number }).alt ?? 0.004)
-      .pathColor("color")
-      .pathStroke("stroke")
-      .pathResolution(4)
-      .pathTransitionDuration(450);
-  }, [globe, paths]);
 
   return <primitive object={globe} />;
 }
 
-function GlobeMarker({
-  point,
+function BillboardMarker({
+  marker,
   onSelect,
 }: {
-  point: GlobePoint;
-  onSelect: (point: GlobePoint) => void;
+  marker: TravelMarker;
+  onSelect: (marker: TravelMarker) => void;
 }) {
-  const markerRef = useRef<THREE.Mesh>(null);
-  const position = useMemo(() => threeGlobeVector(point.center, GLOBE_RADIUS, MARKER_ALTITUDE / GLOBE_RADIUS).toArray(), [point.center]);
-  const markerRadius = point.kind === "place" ? (point.active ? 1.2 : 0.88) : point.active ? 0.72 : 0.5;
-  const color = point.active ? MEMORY_GOLD : point.kind === "place" ? MEMORY_CORAL : MEMORY_BLUE;
+  const camera = useThree((state) => state.camera);
+  const [opacity, setOpacity] = useState(0);
+  const position = useMemo(() => threeGlobeVector(marker.center, GLOBE_RADIUS, MARKER_ALTITUDE).toArray(), [marker.center]);
 
-  useFrame(({ clock }) => {
-    if (!markerRef.current || !point.active) return;
-    const pulse = 1 + Math.sin(clock.elapsedTime * 3.5) * 0.08;
-    markerRef.current.scale.setScalar(pulse);
+  useFrame(() => {
+    const zoom = zoomProgress(camera);
+    const lodOpacity =
+      marker.kind === "country"
+        ? 1 - smoothstep(0.28, 0.56, zoom)
+        : smoothstep(0.28, 0.56, zoom);
+    setOpacity(lodOpacity);
   });
 
+  if (opacity < 0.02) return null;
+
   return (
-    <group position={position}>
-      <mesh scale={point.active ? 2.8 : 2.05}>
-        <sphereGeometry args={[markerRadius, 24, 24]} />
-        <meshBasicMaterial color={color} transparent opacity={point.active ? 0.16 : 0.1} depthWrite={false} blending={THREE.AdditiveBlending} />
-      </mesh>
-      <mesh
-        ref={markerRef}
+    <Html center position={position} zIndexRange={[40, 20]} transform={false}>
+      <button
+        className={`travel-marker travel-marker--${marker.kind}${marker.active ? " is-selected" : ""}${marker.routeRole ? ` is-${marker.routeRole}` : ""}`}
+        style={{ opacity }}
+        aria-label={marker.label}
+        title={marker.label}
+        type="button"
         onClick={(event) => {
           event.stopPropagation();
-          onSelect(point);
+          onSelect(marker);
         }}
       >
-        <sphereGeometry args={[markerRadius, 20, 20]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.82} roughness={0.36} />
-      </mesh>
-      {point.active ? (
-        <Html center distanceFactor={5.6} position={[0, markerRadius + 3.2, 0]} zIndexRange={[30, 10]}>
-          <button
-            className="three-globe-label"
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              onSelect(point);
-            }}
-          >
-            <span>{point.label}</span>
-            {point.count ? <strong>{point.count}</strong> : null}
-          </button>
-        </Html>
-      ) : null}
-    </group>
+        {marker.kind === "country" ? null : <span className="travel-marker-dot" />}
+      </button>
+    </Html>
   );
 }
 
 function GlobeScene({
-  points,
+  markers,
   paths,
   focusPoint,
   onSelect,
 }: {
-  points: GlobePoint[];
+  markers: TravelMarker[];
   paths: GlobePath[];
   focusPoint?: GeoPoint;
-  onSelect: (point: GlobePoint) => void;
+  onSelect: (marker: TravelMarker) => void;
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const targetQuaternion = useRef(focusQuaternion(focusPoint));
@@ -536,16 +845,16 @@ function GlobeScene({
       <directionalLight position={[3, 4, 5]} intensity={1.35} color="#d9f6ff" />
       <pointLight position={[-4, -2, 3]} color="#ff7aa8" intensity={1.55} />
       <group ref={groupRef} scale={GLOBE_SCALE}>
-        <ThreeGlobeLayer paths={paths} />
+        <ThreeGlobeLayer />
         <LandParticleLayer />
         <MediumLandParticleLayer />
         <NearLandParticleLayer />
-        <CoastLineLayer />
-        <CountryBoundaryLineLayer />
-        <ProvinceBoundaryLineLayer />
+        <AssetLineLayer kind="coastLine" color={COAST_LINE} baseOpacity={0.5} renderOrder={5} />
+        <AssetLineLayer kind="countryLine" color={COUNTRY_BOUNDARY_LINE} baseOpacity={0.36} renderOrder={6} />
+        <AssetLineLayer kind="provinceLine" color={PROVINCE_BOUNDARY_LINE} baseOpacity={0.44} renderOrder={7} />
         <TravelRouteLayer paths={paths} />
-        {points.map((point) => (
-          <GlobeMarker key={point.id} point={point} onSelect={onSelect} />
+        {markers.map((marker) => (
+          <BillboardMarker key={marker.id} marker={marker} onSelect={onSelect} />
         ))}
       </group>
       <OrbitControls
@@ -562,72 +871,130 @@ function GlobeScene({
   );
 }
 
-function buildPoints(places: PlaceNode[], photos: Photo[], selectedPlaceId?: string, selectedPhotoId?: string): GlobePoint[] {
-  const selectedPhoto = photos.find((photo) => photo.id === selectedPhotoId);
-  const photoPoints = photos
-    .filter((photo) => photo.location)
-    .map((photo) => ({
-      id: `photo-${photo.id}`,
-      kind: "photo" as const,
-      label: photo.title ?? photo.fileName,
-      center: photo.location!,
-      active: photo.id === selectedPhotoId,
-    }));
+function TravelInfoPanel({
+  selected,
+  trip,
+  photos,
+  onOpenArchive,
+  onOpenPhoto,
+  onClose,
+}: {
+  selected?: TravelMarker;
+  trip?: Trip;
+  photos: Photo[];
+  onOpenArchive: () => void;
+  onOpenPhoto: (photo: Photo) => void;
+  onClose: () => void;
+}) {
+  if (!selected || !trip) return null;
 
-  const placePoints = places.map((place) => ({
-    id: `place-${place.id}`,
-    kind: "place" as const,
-    label: place.name,
-    center: place.center,
-    count: place.photoIds.length,
-    active: place.id === selectedPlaceId || selectedPhoto?.placeNodeId === place.id,
-  }));
+  const relatedPhotos = photos.filter((photo) => selected.photoIds.includes(photo.id));
 
-  return [...placePoints, ...photoPoints];
+  return (
+    <aside className="travel-info-panel">
+      <button className="travel-panel-close" type="button" aria-label="关闭信息面板" onClick={onClose}>
+        <X size={16} />
+      </button>
+      <p className="travel-panel-kicker">{selected.kind === "country" ? trip.title : "地点回忆"}</p>
+      <h2>{selected.kind === "country" ? selected.countryName : selected.label}</h2>
+      {selected.kind === "place" ? <p className="travel-panel-copy">{AI_PLACEHOLDER}</p> : <p className="travel-panel-copy">{trip.title}</p>}
+      {selected.kind === "place" && relatedPhotos.length > 0 ? (
+        <div className="travel-photo-strip" aria-label="相关照片">
+          {relatedPhotos.map((photo) => (
+            <button key={photo.id} type="button" className="travel-photo-thumb" onClick={() => onOpenPhoto(photo)} aria-label={photo.title ?? photo.fileName}>
+              <img src={photo.thumbnailUrl} alt={photo.title ?? photo.fileName} />
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <button className="travel-archive-button" type="button" onClick={onOpenArchive}>
+        <Archive size={16} />
+        进入档案
+      </button>
+    </aside>
+  );
+}
+
+function PhotoLightbox({ photo, placeName, onClose }: { photo?: Photo; placeName?: string; onClose: () => void }) {
+  if (!photo) return null;
+
+  return (
+    <div className="travel-lightbox" role="dialog" aria-modal="true" onClick={onClose}>
+      <div className="travel-lightbox-card" onClick={(event) => event.stopPropagation()}>
+        <button className="travel-lightbox-close" type="button" aria-label="关闭照片预览" onClick={onClose}>
+          <X size={18} />
+        </button>
+        <img src={photo.storageUrl ?? photo.thumbnailUrl} alt={photo.title ?? photo.fileName} />
+        <div>
+          <p>{formatDate(photo.capturedAt)}</p>
+          <h3>{photo.title ?? photo.fileName}</h3>
+          <span>{placeName ?? "地点未归档"}</span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function EarthStage() {
   const selectedTripId = useAppStore((state) => state.selectedTripId);
   const selectedPlaceId = useAppStore((state) => state.selectedPlaceId);
-  const selectedPhotoId = useAppStore((state) => state.selectedPhotoId);
+  const trips = useAppStore((state) => state.trips);
   const placeNodes = useAppStore((state) => state.placeNodes);
   const photos = useAppStore((state) => state.photos);
-  const routes = useAppStore((state) => state.routes);
   const selectPlace = useAppStore((state) => state.selectPlace);
-  const selectPhoto = useAppStore((state) => state.selectPhoto);
+  const setActivePanel = useAppStore((state) => state.setActivePanel);
+  const [selectedMapItem, setSelectedMapItem] = useState<SelectedMapItem>();
+  const [previewPhoto, setPreviewPhoto] = useState<Photo>();
 
+  const trip = trips.find((item) => item.id === selectedTripId);
   const places = useMemo(() => placeNodes.filter((place) => place.tripId === selectedTripId), [placeNodes, selectedTripId]);
   const tripPhotos = useMemo(() => photos.filter((photo) => photo.tripId === selectedTripId && photo.location), [photos, selectedTripId]);
-  const route = useMemo(() => routes.find((item) => item.tripId === selectedTripId), [routes, selectedTripId]);
-  const selectedPlace = places.find((place) => place.id === selectedPlaceId);
-  const selectedPhoto = tripPhotos.find((photo) => photo.id === selectedPhotoId);
-  const focusPoint = selectedPhoto?.location ?? selectedPlace?.center ?? places[0]?.center;
+  const placeMarkers = useMemo(() => applyRouteRoles(buildPlaceMarkers(places, tripPhotos, trip)), [places, trip, tripPhotos]);
+  const countryMarkers = useMemo(() => buildCountryMarkers(trip, placeMarkers), [placeMarkers, trip]);
+  const selectedMarker = [...countryMarkers, ...placeMarkers].find((marker) => marker.id === selectedMapItem?.id);
+  const markers = useMemo(
+    () => [...countryMarkers, ...placeMarkers].map((marker) => ({ ...marker, active: marker.id === selectedMapItem?.id || marker.active })),
+    [countryMarkers, placeMarkers, selectedMapItem?.id],
+  );
+  const activeMarker = markers.find((marker) => marker.id === selectedMapItem?.id) ?? markers.find((marker) => marker.active);
+  const focusPoint = activeMarker?.center ?? placeMarkers[0]?.center;
+  const paths = useMemo(() => routePaths(placeMarkers, activeMarker), [activeMarker, placeMarkers]);
+  const previewPlace = previewPhoto?.placeNodeId ? places.find((place) => place.id === previewPhoto.placeNodeId) : undefined;
 
-  const points = useMemo(() => buildPoints(places, tripPhotos, selectedPlaceId, selectedPhotoId), [places, selectedPlaceId, selectedPhotoId, tripPhotos]);
-  const paths = useMemo(() => routePaths(route), [route]);
+  useEffect(() => {
+    if (!selectedPlaceId) return;
+    const marker = placeMarkers.find((item) => item.placeIds?.includes(selectedPlaceId));
+    if (marker) setSelectedMapItem({ kind: "place", id: marker.id });
+  }, [placeMarkers, selectedPlaceId]);
 
-  const handleSelect = (point: GlobePoint) => {
-    if (point.kind === "photo") {
-      selectPhoto(point.id.replace(/^photo-/, ""));
+  const handleSelect = (marker: TravelMarker) => {
+    if (selectedMapItem?.id === marker.id) {
+      setSelectedMapItem(undefined);
       return;
     }
-    selectPlace(point.id.replace(/^place-/, ""));
+    setSelectedMapItem({ kind: marker.kind, id: marker.id });
+    if (marker.kind === "place" && marker.placeIds?.[0]) selectPlace(marker.placeIds[0]);
   };
 
   return (
     <section className="relative min-h-screen overflow-hidden">
       <div className="pointer-events-none fixed left-1/2 top-1/2 h-[76vmin] w-[76vmin] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary-fixed/20 blur-3xl" />
       <div className="three-globe-stage fixed inset-0 z-10 h-screen w-screen">
-        <Canvas
-          camera={{ position: [0, 0, 5.25], fov: 42, near: 0.1, far: 1000 }}
-          dpr={[1, 2]}
-          gl={{ antialias: true, alpha: true }}
-        >
+        <Canvas camera={{ position: [0, 0, 5.25], fov: 42, near: 0.1, far: 1000 }} dpr={[1, 2]} gl={{ antialias: true, alpha: true }}>
           <Suspense fallback={null}>
-            <GlobeScene points={points} paths={paths} focusPoint={focusPoint} onSelect={handleSelect} />
+            <GlobeScene markers={markers} paths={paths} focusPoint={focusPoint} onSelect={handleSelect} />
           </Suspense>
         </Canvas>
       </div>
+      <TravelInfoPanel
+        selected={selectedMarker}
+        trip={trip}
+        photos={tripPhotos}
+        onOpenArchive={() => setActivePanel("tripDetail")}
+        onOpenPhoto={setPreviewPhoto}
+        onClose={() => setSelectedMapItem(undefined)}
+      />
+      <PhotoLightbox photo={previewPhoto} placeName={previewPlace?.name} onClose={() => setPreviewPhoto(undefined)} />
     </section>
   );
 }

@@ -1,4 +1,4 @@
-import { Archive, Bell, BookOpen, Globe2, MapPinned, Plus, Search, Settings } from "lucide-react";
+import { Archive, Bell, Globe2, MapPinned, Plus, Search, Settings } from "lucide-react";
 import type { ReactNode } from "react";
 import { clsx } from "clsx";
 import { useAppStore, type AppPanel } from "@/store/appStore";
@@ -14,13 +14,8 @@ export function MainLayout({ children }: { children: ReactNode }) {
   const activePanel = useAppStore((state) => state.activePanel);
   const setActivePanel = useAppStore((state) => state.setActivePanel);
   const pendingItems = useAppStore((state) => state.pendingItems);
-  const trips = useAppStore((state) => state.trips);
-  const photos = useAppStore((state) => state.photos);
-  const selectedTripId = useAppStore((state) => state.selectedTripId);
   const showChrome = activePanel === "globe";
   const openPendingCount = pendingItems.filter((item) => item.status === "open").length;
-  const trip = trips.find((item) => item.id === selectedTripId);
-  const selectedPhotos = photos.filter((photo) => photo.tripId === selectedTripId);
   const togglePanel = (panel: AppPanel) => setActivePanel(activePanel === panel ? "globe" : panel);
 
   return (
@@ -108,30 +103,6 @@ export function MainLayout({ children }: { children: ReactNode }) {
       </nav>
 
       <main className="relative z-10 min-h-screen">{children}</main>
-
-      {showChrome && trip ? (
-        <aside className="ai-narrative-block fixed right-5 top-24 z-30 hidden w-[min(22vw,380px)] min-w-72 rounded-[24px] p-6 shadow-ambient backdrop-blur-2xl xl:block">
-          <div className="mb-4 flex items-center gap-3">
-            <div className="grid h-10 w-10 place-items-center rounded-full bg-tertiary-fixed text-tertiary">
-              <BookOpen size={18} />
-            </div>
-            <div>
-              <p className="font-serif text-lg font-semibold">正在回看</p>
-              <p className="text-xs text-on-surface-variant">{trip.title}</p>
-            </div>
-          </div>
-          <p className="text-sm leading-6 text-on-surface-variant">
-            时间光标停在 {trip.dateRange.start} 至 {trip.dateRange.end}。当前地球高亮 {selectedPhotos.length} 张照片、{trip.placeNodeCount} 个地点节点和一条基础路线。
-          </p>
-          <button
-            className="mt-5 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white shadow-soft"
-            onClick={() => setActivePanel("tripDetail")}
-            type="button"
-          >
-            查看档案详情
-          </button>
-        </aside>
-      ) : null}
     </div>
   );
 }
