@@ -115,6 +115,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
       {shouldRenderPrimaryNav ? (
       <nav
         className="primary-nav fixed bottom-5 left-1/2 z-[60] flex -translate-x-1/2 items-center gap-1.5 md:bottom-auto md:left-8 md:top-1/2 md:-translate-x-0 md:-translate-y-1/2 md:flex-col"
+        data-active-panel={activePanel}
         data-state={isPrimaryNavClosing ? "closing" : "open"}
       >
         <button

@@ -1,27 +1,51 @@
-import { FolderOpen, HardDrive, ImagePlus, Images, X } from "lucide-react";
+import { CheckCircle2, FolderOpen, HardDrive, ImagePlus, Images, LoaderCircle, Settings2, Sparkles, UploadCloud, X } from "lucide-react";
+import type { DragEvent } from "react";
 import { useRef, useState } from "react";
 import { useAppStore } from "@/store/appStore";
 
 export function UploadPhotosPanel() {
   const setActivePanel = useAppStore((state) => state.setActivePanel);
+  const aiCloudEnabled = useAppStore((state) => state.aiCloudEnabled);
+  const setAiCloudEnabled = useAppStore((state) => state.setAiCloudEnabled);
   const importFiles = useAppStore((state) => state.importFiles);
   const importAppleTestPhotos = useAppStore((state) => state.importAppleTestPhotos);
+  const importBatches = useAppStore((state) => state.importBatches);
+  const pendingItems = useAppStore((state) => state.pendingItems);
   const isImporting = useAppStore((state) => state.isImporting);
   const importProgress = useAppStore((state) => state.importProgress);
+  const error = useAppStore((state) => state.error);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const [selectedCount, setSelectedCount] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const latestBatch = importBatches[importBatches.length - 1];
+  const latestPendingCount = latestBatch ? pendingItems.filter((item) => latestBatch.pendingItemIds.includes(item.id) && item.status === "open").length : 0;
+  const progressPercent = importProgress ? Math.max(8, Math.round((importProgress.done / Math.max(1, importProgress.total)) * 100)) : 0;
+  const hasLatestPending = Boolean(latestBatch && latestBatch.status === "pending_confirmation");
+
+  const startImport = (files: FileList | File[]) => {
+    const nextFiles = Array.from(files).filter((file) => file.type.startsWith("image/"));
+    setSelectedCount(nextFiles.length);
+    if (nextFiles.length > 0) void importFiles(nextFiles);
+  };
+
+  const handleDrop = (event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    setIsDragging(false);
+    if (isImporting) return;
+    startImport(event.dataTransfer.files);
+  };
 
   return (
-    <section className="fixed inset-0 z-[70] overflow-y-auto bg-background/94 px-5 py-8 backdrop-blur-2xl md:px-24 md:py-12">
-      <div className="mx-auto max-w-5xl">
-        <div className="mb-10 flex items-start justify-between gap-6">
+    <section className="photo-import-panel fixed inset-0 z-[70] overflow-y-auto bg-background/94 px-5 py-8 backdrop-blur-2xl md:px-24 md:py-12">
+      <div className="mx-auto max-w-6xl">
+        <div className="photo-import-heading mb-8 flex items-start justify-between gap-6 md:mb-12">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.34em] text-outline">Photo Import</p>
-            <h2 className="mt-2 font-serif text-4xl font-semibold text-primary md:text-5xl">导入图片</h2>
+            <h2 className="mt-2 font-serif text-4xl font-semibold leading-tight text-primary md:text-6xl">导入图片</h2>
           </div>
           <button
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white/70 text-primary shadow-soft transition hover:bg-primary-fixed"
+            className="photo-import-close"
             aria-label="关闭导入图片"
             onClick={() => setActivePanel("globe")}
             type="button"
@@ -30,95 +54,130 @@ export function UploadPhotosPanel() {
           </button>
         </div>
 
-        <div className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
-          <div className="safe-panel rounded-[28px] p-6 md:p-8">
-            <div className="grid min-h-[340px] place-items-center rounded-[24px] bg-surface-container-low/70 px-6 py-12 text-center">
-              <div>
-                <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-primary-fixed text-primary">
-                  <ImagePlus size={28} />
-                </div>
-                <h3 className="mt-6 font-serif text-3xl font-semibold text-on-surface">选择本地照片</h3>
-                <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-on-surface-variant">
-                  MVP 会把照片发送到本地 Node 服务，复制到应用管理目录，读取 EXIF 时间/GPS，生成 Trip、地点节点、Qwen 标签、待确认事项，并进入确认或回撤流程。
-                </p>
-                <input
-                  ref={inputRef}
-                  className="sr-only"
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  onChange={(event) => {
-                    const files = event.target.files;
-                    setSelectedCount(files?.length ?? 0);
-                    if (files && files.length > 0) void importFiles(files);
-                  }}
-                />
-                <input
-                  ref={folderInputRef}
-                  className="sr-only"
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  {...({ webkitdirectory: "" } as Record<string, string>)}
-                  onChange={(event) => {
-                    const files = event.target.files;
-                    setSelectedCount(files?.length ?? 0);
-                    if (files && files.length > 0) void importFiles(files);
-                  }}
-                />
-                <button
-                  className="mt-7 inline-flex items-center gap-2 rounded-full bg-primary px-6 py-3 text-sm font-semibold text-white shadow-soft transition hover:bg-primary-container"
-                  type="button"
-                  onClick={() => inputRef.current?.click()}
-                  disabled={isImporting}
-                >
-                  <FolderOpen size={17} /> {isImporting ? "导入中" : "选择照片"}
-                </button>
-                <div className="mt-3 flex flex-wrap justify-center gap-3">
-                  <button
-                    className="inline-flex items-center gap-2 rounded-full bg-white/75 px-5 py-2.5 text-sm font-semibold text-primary shadow-soft transition hover:bg-primary-fixed disabled:opacity-50"
-                    type="button"
-                    onClick={() => folderInputRef.current?.click()}
-                    disabled={isImporting}
-                  >
-                    <Images size={16} /> 选择文件夹
-                  </button>
-                  <button
-                    className="inline-flex items-center gap-2 rounded-full bg-secondary-container/80 px-5 py-2.5 text-sm font-semibold text-secondary shadow-soft transition hover:bg-secondary-container disabled:opacity-50"
-                    type="button"
-                    onClick={() => void importAppleTestPhotos()}
-                    disabled={isImporting}
-                  >
-                    <HardDrive size={16} /> 导入 Apple 测试集
-                  </button>
-                </div>
-                {selectedCount > 0 ? <p className="mt-3 text-xs font-semibold text-outline">已选择 {selectedCount} 张，本地后端正在复制、解析并生成导入建议。</p> : null}
-                {importProgress ? (
-                  <div className="mx-auto mt-5 max-w-sm">
-                    <div className="h-2 overflow-hidden rounded-full bg-white/80">
-                      <div
-                        className="h-full rounded-full bg-primary transition-[width]"
-                        style={{ width: `${Math.max(8, Math.round((importProgress.done / Math.max(1, importProgress.total)) * 100))}%` }}
-                      />
-                    </div>
-                    <p className="mt-2 text-xs font-semibold text-outline">
-                      {importProgress.phase === "reading" ? "正在生成缩略图" : "后端正在解析 EXIF 与 AI 标签"} · {importProgress.done}/{importProgress.total}
-                    </p>
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          </div>
+        <div className="photo-import-grid">
+          <article
+            className="photo-import-dropzone"
+            data-dragging={isDragging || undefined}
+            onDragEnter={(event) => {
+              event.preventDefault();
+              setIsDragging(true);
+            }}
+            onDragOver={(event) => event.preventDefault()}
+            onDragLeave={(event) => {
+              if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+              setIsDragging(false);
+            }}
+            onDrop={handleDrop}
+          >
+            <input
+              ref={inputRef}
+              className="sr-only"
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={(event) => {
+                const files = event.target.files;
+                if (files) startImport(files);
+              }}
+            />
+            <input
+              ref={folderInputRef}
+              className="sr-only"
+              type="file"
+              accept="image/*"
+              multiple
+              {...({ webkitdirectory: "" } as Record<string, string>)}
+              onChange={(event) => {
+                const files = event.target.files;
+                if (files) startImport(files);
+              }}
+            />
 
-          <aside className="ai-narrative-block rounded-[28px] p-6 md:p-8">
-            <div className="grid h-12 w-12 place-items-center rounded-full bg-tertiary-fixed text-tertiary">
-              <HardDrive size={20} />
+            <div className="photo-import-drop-copy">
+              <div className="photo-import-glyph">
+                {isImporting ? <LoaderCircle className="animate-spin" size={28} /> : <ImagePlus size={29} />}
+              </div>
+              <p className="photo-import-kicker">Local Photo Intake</p>
+              <h3>把照片放进档案袋</h3>
+              <p>
+                读取照片、复制到本机应用目录、解析 EXIF 时间/GPS，并生成待确认的旅行与地点建议。
+              </p>
             </div>
-            <p className="mt-6 text-xs font-semibold uppercase tracking-[0.3em] text-outline">Local First</p>
-            <h3 className="mt-3 font-serif text-3xl font-semibold text-primary">可确认、可回滚</h3>
-            <p className="mt-4 text-base leading-8 text-on-surface-variant">
-              每次导入都会形成独立 Import Batch。系统只给出归档建议：创建新 Trip、追加已有 Trip、拆分多段旅行或暂不归档，都需要用户确认。
-            </p>
+
+            <div className="photo-import-actions">
+              <button className="photo-import-primary-action" type="button" onClick={() => inputRef.current?.click()} disabled={isImporting}>
+                <FolderOpen size={17} /> {isImporting ? "导入中" : "选择照片"}
+              </button>
+              <button className="photo-import-secondary-action" type="button" onClick={() => folderInputRef.current?.click()} disabled={isImporting}>
+                <Images size={16} /> 选择文件夹
+              </button>
+              <button className="photo-import-secondary-action" type="button" onClick={() => void importAppleTestPhotos()} disabled={isImporting}>
+                <HardDrive size={16} /> Apple 测试集
+              </button>
+            </div>
+
+            <div className="photo-import-progress" data-active={Boolean(importProgress) || undefined}>
+              <div className="photo-import-progress-bar">
+                <span style={{ width: `${progressPercent}%` }} />
+              </div>
+              <p>
+                {importProgress
+                  ? `${importProgress.phase === "reading" ? "正在读取与复制" : "正在解析 EXIF 与 AI 标签"} · ${importProgress.done}/${importProgress.total}`
+                  : selectedCount > 0
+                    ? `已选择 ${selectedCount} 张，等待后端处理`
+                    : "支持多选、文件夹与拖拽导入"}
+              </p>
+            </div>
+
+            {error ? <p className="photo-import-error">{error}</p> : null}
+          </article>
+
+          <aside className="photo-import-side">
+            <section className="photo-import-control-group">
+              <div className="photo-import-section-title">
+                <Settings2 size={17} />
+                <span>导入前设置</span>
+              </div>
+              <button className="photo-import-toggle-row" type="button" onClick={() => setAiCloudEnabled(!aiCloudEnabled)} aria-pressed={aiCloudEnabled}>
+                <span>
+                  <strong>AI 图片理解</strong>
+                  <small>{aiCloudEnabled ? "使用本地保存的 Qwen Key 生成标签与描述" : "只读取照片与 EXIF，不调用云端模型"}</small>
+                </span>
+                <span className="photo-import-switch" data-active={aiCloudEnabled || undefined}>
+                  <span />
+                </span>
+              </button>
+              <div className="photo-import-policy-list">
+                <span><CheckCircle2 size={15} /> 重复照片自动跳过</span>
+                <span><CheckCircle2 size={15} /> GPS 缺失进入待确认</span>
+                <span><CheckCircle2 size={15} /> 每次导入独立成批</span>
+              </div>
+            </section>
+
+            <section className="photo-import-control-group">
+              <div className="photo-import-section-title">
+                <UploadCloud size={17} />
+                <span>最近导入</span>
+              </div>
+              {latestBatch ? (
+                <>
+                  <div className="photo-import-batch-line">
+                    <span>{latestBatch.totalCount}</span>
+                    <p>{latestBatch.summary}</p>
+                  </div>
+                  <div className="photo-import-batch-meta">
+                    <span>{latestBatch.status}</span>
+                    <span>{latestPendingCount} 项待确认</span>
+                    {latestBatch.duplicateCount ? <span>跳过 {latestBatch.duplicateCount} 张重复</span> : null}
+                  </div>
+                  <button className="photo-import-next-action" type="button" onClick={() => setActivePanel("import")} disabled={!hasLatestPending}>
+                    <Sparkles size={16} /> {hasLatestPending ? "前往导入确认" : "暂无待确认批次"}
+                  </button>
+                </>
+              ) : (
+                <p className="photo-import-empty-note">还没有导入批次。选择照片后，这里会显示最近一次处理结果和确认入口。</p>
+              )}
+            </section>
           </aside>
         </div>
       </div>

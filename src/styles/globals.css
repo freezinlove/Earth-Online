@@ -1132,6 +1132,411 @@ input {
   }
 }
 
+.photo-import-panel {
+  background:
+    linear-gradient(115deg, rgba(250, 249, 245, 0.96), rgba(244, 246, 240, 0.9) 58%, rgba(230, 241, 238, 0.78)),
+    radial-gradient(circle at 82% 10%, rgba(214, 231, 161, 0.18), transparent 28%),
+    radial-gradient(circle at 34% 48%, rgba(255, 219, 206, 0.2), transparent 36%),
+    #faf9f5;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.photo-import-panel::before {
+  content: "";
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  opacity: 0.42;
+  background-image:
+    linear-gradient(rgba(136, 114, 107, 0.038) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(136, 114, 107, 0.024) 1px, transparent 1px);
+  background-size: 38px 38px, 31px 31px;
+  mask-image: radial-gradient(circle at 50% 30%, black 0%, transparent 78%);
+}
+
+.photo-import-heading,
+.photo-import-grid {
+  position: relative;
+  z-index: 1;
+}
+
+.photo-import-heading {
+  animation: archive-heading-in 720ms cubic-bezier(0.18, 0.88, 0.2, 1) 80ms both;
+}
+
+.photo-import-close {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.7);
+  color: #944521;
+  cursor: pointer;
+  box-shadow: 0 14px 34px rgba(90, 54, 39, 0.09);
+  transition:
+    background-color 180ms ease,
+    color 180ms ease,
+    transform 180ms ease;
+}
+
+.photo-import-close:hover {
+  background: rgba(255, 219, 206, 0.7);
+  transform: translateY(-1px);
+}
+
+.photo-import-grid {
+  display: grid;
+  gap: 28px;
+}
+
+.photo-import-dropzone {
+  position: relative;
+  min-height: 468px;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(219, 193, 184, 0.62);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.64), rgba(250, 249, 245, 0.62)),
+    radial-gradient(circle at 50% 26%, rgba(255, 219, 206, 0.32), transparent 26%),
+    rgba(255, 255, 255, 0.52);
+  padding: 46px 36px 38px;
+  text-align: center;
+  box-shadow:
+    0 22px 54px rgba(90, 54, 39, 0.09),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  animation: archive-entry-in 700ms cubic-bezier(0.18, 0.88, 0.2, 1) 160ms both;
+}
+
+.photo-import-dropzone::before {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 46px;
+  border: 1px dashed rgba(151, 71, 35, 0.22);
+  border-radius: 8px;
+  opacity: 0.86;
+  transition:
+    border-color 180ms ease,
+    opacity 180ms ease,
+    transform 220ms ease;
+}
+
+.photo-import-dropzone[data-dragging]::before {
+  border-color: rgba(151, 71, 35, 0.58);
+  opacity: 1;
+  transform: scale(0.985);
+}
+
+.photo-import-drop-copy {
+  max-width: 540px;
+}
+
+.photo-import-glyph {
+  display: grid;
+  width: 74px;
+  height: 74px;
+  margin: 0 auto;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(255, 219, 206, 0.78);
+  color: #944521;
+  box-shadow: 0 16px 34px rgba(151, 71, 35, 0.08);
+}
+
+.photo-import-kicker,
+.photo-import-section-title,
+.photo-import-policy-list,
+.photo-import-batch-meta,
+.photo-import-progress p,
+.photo-import-empty-note,
+.photo-import-error {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.photo-import-kicker {
+  margin-top: 28px;
+  color: #88726b;
+}
+
+.photo-import-drop-copy h3 {
+  margin-top: 10px;
+  color: #24201d;
+  font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+  font-size: clamp(36px, 5vw, 56px);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.photo-import-drop-copy p:not(.photo-import-kicker) {
+  max-width: 500px;
+  margin: 18px auto 0;
+  color: #5f514d;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.85;
+}
+
+.photo-import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 32px;
+}
+
+.photo-import-primary-action,
+.photo-import-secondary-action,
+.photo-import-next-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 42px;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 850;
+  transition:
+    background-color 180ms ease,
+    color 180ms ease,
+    opacity 180ms ease,
+    transform 180ms ease;
+}
+
+.photo-import-primary-action {
+  min-width: 148px;
+  background: #944521;
+  color: white;
+  padding: 0 22px;
+  box-shadow: 0 16px 32px rgba(151, 71, 35, 0.14);
+}
+
+.photo-import-secondary-action {
+  background: rgba(255, 255, 255, 0.72);
+  color: #944521;
+  padding: 0 18px;
+}
+
+.photo-import-primary-action:hover:not(:disabled),
+.photo-import-secondary-action:hover:not(:disabled),
+.photo-import-next-action:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.photo-import-primary-action:disabled,
+.photo-import-secondary-action:disabled,
+.photo-import-next-action:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.photo-import-progress {
+  width: min(460px, 100%);
+  margin-top: 24px;
+  opacity: 0.72;
+}
+
+.photo-import-progress[data-active] {
+  opacity: 1;
+}
+
+.photo-import-progress-bar {
+  height: 2px;
+  overflow: hidden;
+  background: rgba(151, 71, 35, 0.18);
+}
+
+.photo-import-progress-bar span {
+  display: block;
+  height: 100%;
+  background: #944521;
+  transition: width 260ms ease;
+}
+
+.photo-import-progress p,
+.photo-import-empty-note,
+.photo-import-error {
+  margin-top: 12px;
+  color: #88726b;
+  line-height: 1.7;
+}
+
+.photo-import-error {
+  color: #944521;
+}
+
+.photo-import-side {
+  display: grid;
+  align-content: start;
+  gap: 20px;
+}
+
+.photo-import-control-group {
+  border-top: 1px solid rgba(219, 193, 184, 0.62);
+  padding-top: 22px;
+  animation: archive-index-in 720ms cubic-bezier(0.18, 0.88, 0.2, 1) 240ms both;
+}
+
+.photo-import-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: #944521;
+}
+
+.photo-import-toggle-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 22px;
+  padding: 0 0 20px;
+  border: 0;
+  border-bottom: 1px solid rgba(219, 193, 184, 0.46);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.photo-import-toggle-row strong {
+  display: block;
+  color: #24201d;
+  font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.photo-import-toggle-row small {
+  display: block;
+  margin-top: 8px;
+  color: #6b5b55;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.7;
+}
+
+.photo-import-switch {
+  position: relative;
+  width: 46px;
+  height: 24px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(151, 71, 35, 0.28);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.74);
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease;
+}
+
+.photo-import-switch span {
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: #88726b;
+  transition:
+    background-color 180ms ease,
+    transform 180ms cubic-bezier(0.2, 0.9, 0.26, 1.16);
+}
+
+.photo-import-switch[data-active] {
+  border-color: rgba(151, 71, 35, 0.54);
+  background: rgba(255, 219, 206, 0.66);
+}
+
+.photo-import-switch[data-active] span {
+  background: #944521;
+  transform: translateX(22px);
+}
+
+.photo-import-policy-list,
+.photo-import-batch-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-top: 16px;
+  color: #88726b;
+}
+
+.photo-import-policy-list span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.photo-import-batch-line {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 18px;
+  margin-top: 22px;
+  align-items: start;
+}
+
+.photo-import-batch-line span {
+  color: #944521;
+  font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+  font-size: 48px;
+  font-weight: 600;
+  line-height: 0.9;
+}
+
+.photo-import-batch-line p {
+  color: #5f514d;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.8;
+}
+
+.photo-import-next-action {
+  margin-top: 20px;
+  border-bottom: 1px solid rgba(151, 71, 35, 0.3);
+  background: transparent;
+  color: #944521;
+}
+
+@media (min-width: 1024px) {
+  .photo-import-grid {
+    grid-template-columns: minmax(0, 1.16fr) minmax(340px, 0.84fr);
+  }
+}
+
+@media (max-width: 767px) {
+  .primary-nav[data-active-panel="upload"] {
+    pointer-events: none;
+    opacity: 0;
+    transform: translateX(-50%) translateY(14px);
+  }
+
+  .photo-import-dropzone {
+    min-height: 420px;
+    padding: 38px 22px 32px;
+  }
+
+  .photo-import-dropzone::before {
+    inset: 22px;
+  }
+
+  .photo-import-batch-line {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+}
+
 .timeline-paper-dock {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(250, 249, 245, 0.76)),
