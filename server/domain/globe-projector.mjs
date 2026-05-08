@@ -1,4 +1,5 @@
 import { centerOf, unique } from "./projection-utils.mjs";
+import { inferPreset } from "./geo.mjs";
 
 export function buildGlobeMarkers(state) {
   const markers = [];
@@ -55,6 +56,8 @@ function inferPlaceCountry(place, photos, trip) {
   const placePhotos = photos.filter((photo) => place.photoIds?.includes(photo.id));
   const candidateCountry = strongestCandidateCountry(placePhotos, place.center);
   if (candidateCountry) return candidateCountry;
+  const preset = inferPreset(place.name || place.displayName, place.center);
+  if (preset.country && preset.country !== "待确认") return preset.country;
   const text = [place.name, place.displayName, ...placePhotos.flatMap((photo) => [photo.title, photo.fileName, photo.aiCaption, ...(photo.tags ?? []), photo.locationResolution?.effectiveName])]
     .filter(Boolean)
     .join(" ");

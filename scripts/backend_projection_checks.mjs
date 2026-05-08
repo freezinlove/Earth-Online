@@ -256,6 +256,150 @@ assert.deepEqual(
 );
 assert.equal(centralEuropeProjected.globeMarkers.find((marker) => marker.kind === "place" && marker.label === "布拉格查理大桥")?.countryName, "捷克");
 
+const incrementalPlacePhotos = [
+  {
+    id: "photo-hallstatt-old",
+    fileName: "hallstatt-waterfront-old.jpg",
+    title: "哈尔施塔特湖畔",
+    thumbnailUrl: "/data/thumbs/hallstatt-old.jpg",
+    capturedAt: "2025-07-21T09:00:00Z",
+    tripId: "trip-incremental",
+    location: { lat: 47.5622, lng: 13.6493 },
+    tags: ["哈尔施塔特湖畔"],
+    locationResolution: {
+      status: "confirmed",
+      effectiveName: "哈尔施塔特",
+      candidates: [
+        {
+          id: "candidate-hallstatt-old",
+          name: "哈尔施塔特",
+          country: "奥地利",
+          city: "哈尔施塔特",
+          point: { lat: 47.5622, lng: 13.6493 },
+          confidence: 0.9,
+        },
+      ],
+      requiresUserAction: false,
+    },
+  },
+  {
+    id: "photo-prague-bridge",
+    fileName: "prague-charles-bridge.jpg",
+    title: "布拉格查理大桥",
+    thumbnailUrl: "/data/thumbs/prague-bridge.jpg",
+    capturedAt: "2025-07-21T11:00:00Z",
+    tripId: "trip-incremental",
+    location: { lat: 50.0865, lng: 14.4114 },
+    tags: ["布拉格查理大桥"],
+    ai: { visiblePlaceNames: ["布拉格查理大桥"] },
+    locationResolution: {
+      status: "confirmed",
+      effectiveName: "布拉格",
+      candidates: [
+        {
+          id: "candidate-prague-bridge",
+          name: "布拉格",
+          country: "捷克",
+          city: "布拉格",
+          point: { lat: 50.0865, lng: 14.4114 },
+          confidence: 0.92,
+        },
+      ],
+      requiresUserAction: false,
+    },
+  },
+  {
+    id: "photo-hallstatt-new",
+    fileName: "hallstatt-waterfront-new.jpg",
+    title: "哈尔施塔特小镇街边",
+    thumbnailUrl: "/data/thumbs/hallstatt-new.jpg",
+    capturedAt: "2025-07-21T13:00:00Z",
+    tripId: "trip-incremental",
+    location: { lat: 47.563, lng: 13.648 },
+    tags: ["哈尔施塔特"],
+    locationResolution: {
+      status: "confirmed",
+      effectiveName: "哈尔施塔特湖畔",
+      candidates: [
+        {
+          id: "candidate-hallstatt-new",
+          name: "哈尔施塔特湖畔",
+          country: "奥地利",
+          city: "哈尔施塔特",
+          point: { lat: 47.5628, lng: 13.6485 },
+          confidence: 0.88,
+        },
+      ],
+      requiresUserAction: false,
+    },
+  },
+  {
+    id: "photo-prague-castle",
+    fileName: "prague-castle.jpg",
+    title: "布拉格城堡",
+    thumbnailUrl: "/data/thumbs/prague-castle.jpg",
+    capturedAt: "2025-07-21T15:00:00Z",
+    tripId: "trip-incremental",
+    location: { lat: 50.0909, lng: 14.4005 },
+    tags: ["布拉格城堡"],
+    ai: { visiblePlaceNames: ["布拉格城堡"] },
+    locationResolution: {
+      status: "confirmed",
+      effectiveName: "布拉格城堡",
+      candidates: [
+        {
+          id: "candidate-prague-castle",
+          name: "布拉格城堡",
+          country: "捷克",
+          city: "布拉格",
+          point: { lat: 50.0909, lng: 14.4005 },
+          confidence: 0.9,
+        },
+      ],
+      requiresUserAction: false,
+    },
+  },
+];
+const incrementalPlaces = buildPlacesForGroup(incrementalPlacePhotos, "trip-incremental", { makeId });
+const incrementalPhotosWithPlaces = incrementalPlacePhotos.map((photo) => ({
+  ...photo,
+  placeNodeId: incrementalPlaces.find((place) => place.photoIds.includes(photo.id))?.id,
+}));
+const incrementalProjected = projectState({
+  trips: [
+    {
+      id: "trip-incremental",
+      title: "2025-07 欧洲多城旅行",
+      dateRange: { start: "2025-07-21", end: "2025-07-21" },
+      countries: ["奥地利"],
+      cities: ["哈尔施塔特"],
+      coverUrl: "",
+      photoCount: incrementalPlacePhotos.length,
+      placeNodeCount: incrementalPlaces.length,
+      status: "confirmed",
+      source: "import",
+    },
+  ],
+  photos: incrementalPhotosWithPlaces,
+  placeNodes: incrementalPlaces,
+  routes: [],
+  importBatches: [],
+  pendingItems: [],
+});
+const hallstattIncrementalPlaces = incrementalProjected.placeNodes.filter((place) => place.city === "哈尔施塔特");
+const pragueIncrementalPlaces = incrementalProjected.placeNodes.filter((place) => place.country === "捷克");
+assert.equal(hallstattIncrementalPlaces.length, 1);
+assert.deepEqual(new Set(hallstattIncrementalPlaces[0].photoIds), new Set(["photo-hallstatt-old", "photo-hallstatt-new"]));
+assert.equal(pragueIncrementalPlaces.length, 1);
+assert.deepEqual(new Set(pragueIncrementalPlaces[0].photoIds), new Set(["photo-prague-bridge", "photo-prague-castle"]));
+assert.equal(incrementalProjected.globeMarkers.filter((marker) => marker.kind === "place" && marker.countryName === "捷克").length, 1);
+assert.equal(incrementalProjected.globeMarkers.find((marker) => marker.kind === "country" && marker.countryName === "捷克")?.count, 2);
+assert.equal(incrementalProjected.globeMarkers.find((marker) => marker.kind === "country" && marker.countryName === "奥地利")?.count, 2);
+assert.deepEqual(
+  incrementalProjected.dossierGroups[0].countries.flatMap((group) => group.days.map((day) => day.placeIds.length)),
+  [1, 1],
+);
+
 const sameDayPhotos = [
   {
     id: "photo-salzburg",

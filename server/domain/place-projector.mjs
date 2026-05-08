@@ -3,6 +3,9 @@ import { haversineKm, inferPreset } from "./geo.mjs";
 const GENERIC_PLACE_SUFFIX = /地点\s*\d+$/u;
 const SCENE_WORDS = ["街景", "山景", "夜景", "风景", "湖景", "河景", "随拍", "路边", "附近", "小憩", "自拍", "合影", "打卡", "候机", "时光", "暮色", "晨雾"];
 const PLACE_WORDS = ["桥", "堡", "宫", "馆", "院", "街", "路", "河", "湖", "山", "机场", "酒店", "咖啡馆", "教堂", "广场", "Straße", "Street"];
+const DEFAULT_CLUSTER_RADIUS_KM = 2.5;
+const SAME_CITY_CLUSTER_RADIUS_KM = 12;
+const SAME_NAME_CLUSTER_RADIUS_KM = 25;
 
 export function buildPlacesForGroup(group, tripId, { makeId }) {
   const located = group
@@ -10,30 +13,141 @@ export function buildPlacesForGroup(group, tripId, { makeId }) {
     .sort((a, b) => (a.capturedAt ?? "").localeCompare(b.capturedAt ?? ""));
   const clusters = [];
   for (const photo of located) {
-    const last = clusters.at(-1);
-    const previous = last?.photos.at(-1);
-    const distance = previous?.location && photo.location ? haversineKm(previous.location, photo.location) : 0;
-    if (!last || distance > 2.5 || last.photos.length >= 24) clusters.push({ photos: [photo] });
-    else last.photos.push(photo);
+    const context = photoPlaceContext(photo);
+    const target = findMergeTarget(clusters, photo, context);
+    if (target) addPhotoToCluster(target, photo, context);
+    else clusters.push(createCluster(photo, context));
   }
-  return clusters.map((cluster, index) => {
-    const center = cluster.photos.reduce((sum, photo) => ({ lat: sum.lat + photo.location.lat, lng: sum.lng + photo.location.lng }), { lat: 0, lng: 0 });
-    center.lat /= cluster.photos.length;
-    center.lng /= cluster.photos.length;
-    const { name, displayName, country, city } = describeCluster(cluster.photos, center, index);
-    return {
-      id: makeId("place"),
-      tripId,
-      name,
-      displayName,
-      country,
-      city,
-      center,
-      photoIds: cluster.photos.map((photo) => photo.id),
-      timeRange: { start: cluster.photos[0]?.capturedAt, end: cluster.photos.at(-1)?.capturedAt },
-      pending: cluster.photos.some((photo) => photo.pendingReason),
-    };
-  });
+  return clusters
+    .sort((left, right) => (left.photos[0]?.capturedAt ?? "").localeCompare(right.photos[0]?.capturedAt ?? ""))
+    .map((cluster, index) => {
+      const center = cluster.center;
+      const { name, displayName, country, city } = describeCluster(cluster.photos, center, index);
+      return {
+        id: makeId("place"),
+        tripId,
+        name,
+        displayName,
+        country,
+        city,
+        center,
+        photoIds: cluster.photos.map((photo) => photo.id),
+        timeRange: { start: cluster.photos[0]?.capturedAt, end: cluster.photos.at(-1)?.capturedAt },
+        pending: cluster.photos.some((photo) => photo.pendingReason),
+      };
+    });
+}
+
+function createCluster(photo, context) {
+  return {
+    photos: [photo],
+    center: { ...photo.location },
+    context,
+  };
+}
+
+function addPhotoToCluster(cluster, photo, context) {
+  cluster.photos.push(photo);
+  const count = cluster.photos.length;
+  cluster.center = {
+    lat: (cluster.center.lat * (count - 1) + photo.location.lat) / count,
+    lng: (cluster.center.lng * (count - 1) + photo.location.lng) / count,
+  };
+  cluster.context = mergeContext(cluster.context, context);
+}
+
+function findMergeTarget(clusters, photo, context) {
+  let best;
+  for (const cluster of clusters) {
+    const distance = haversineKm(photo.location, cluster.center);
+    const relation = contextRelation(cluster.context, context);
+    const threshold = relation.sameName ? SAME_NAME_CLUSTER_RADIUS_KM : relation.sameCity ? SAME_CITY_CLUSTER_RADIUS_KM : DEFAULT_CLUSTER_RADIUS_KM;
+    if (distance > threshold) continue;
+    const score = distance - (relation.sameName ? 20 : 0) - (relation.sameCity ? 8 : 0) - (relation.sameCountry ? 1 : 0);
+    if (!best || score < best.score) best = { cluster, score };
+  }
+  return best?.cluster;
+}
+
+function photoPlaceContext(photo) {
+  const candidates = (photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? [])
+    .filter(Boolean)
+    .filter((candidate) => !candidate.point || !photo.location || haversineKm(candidate.point, photo.location) <= 35)
+    .sort((left, right) => Number(right.confidence ?? 0) - Number(left.confidence ?? 0));
+  const preset = inferPreset(photo.fileName, photo.location);
+  const effectiveName = cleanPlaceName(photo.locationResolution?.effectiveName);
+  const cities = new Set();
+  const countries = new Set();
+  const names = new Set();
+
+  for (const candidate of candidates) {
+    addClean(cities, candidate.city);
+    addClean(names, candidate.name);
+    addClean(names, candidate.city);
+    if (candidate.country && candidate.country !== "待确认") countries.add(candidate.country);
+  }
+  addClean(cities, effectiveName);
+  addClean(names, effectiveName);
+  if (!preset.city.includes("待确认")) {
+    addClean(cities, preset.city);
+    addClean(names, preset.city);
+  }
+  if (preset.country && preset.country !== "待确认") countries.add(preset.country);
+
+  for (const value of [
+    photo.title,
+    photo.locationResolution?.effectiveName,
+    ...(photo.tags ?? []),
+    ...(photo.ai?.visiblePlaceNames ?? []),
+  ]) {
+    addClean(names, stripSceneSuffix(cleanPlaceName(value)));
+  }
+
+  return {
+    cities,
+    countries,
+    names,
+  };
+}
+
+function mergeContext(left, right) {
+  return {
+    cities: new Set([...left.cities, ...right.cities]),
+    countries: new Set([...left.countries, ...right.countries]),
+    names: new Set([...left.names, ...right.names]),
+  };
+}
+
+function contextRelation(left, right) {
+  const sameCountry = intersects(left.countries, right.countries);
+  const sameCity = compatibleCountry(left, right) && intersects(left.cities, right.cities);
+  const sameName = compatibleCountry(left, right) && (intersects(left.names, right.names) || hasContainedName(left.names, right.names));
+  return { sameCountry, sameCity, sameName };
+}
+
+function compatibleCountry(left, right) {
+  return !left.countries.size || !right.countries.size || intersects(left.countries, right.countries);
+}
+
+function intersects(left, right) {
+  for (const value of left) {
+    if (right.has(value)) return true;
+  }
+  return false;
+}
+
+function hasContainedName(left, right) {
+  for (const a of left) {
+    for (const b of right) {
+      if (a.length >= 3 && b.length >= 3 && (a.includes(b) || b.includes(a))) return true;
+    }
+  }
+  return false;
+}
+
+function addClean(target, value) {
+  const clean = cleanPlaceName(value);
+  if (clean && !clean.includes("待确认") && !clean.includes("某地")) target.add(clean);
 }
 
 export function describeCluster(photos, center, index = 0) {

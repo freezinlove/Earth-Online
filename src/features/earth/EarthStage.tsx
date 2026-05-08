@@ -4,7 +4,7 @@ import { Archive, X } from "lucide-react";
 import { Suspense, useEffect, useMemo, useRef, useState, type PointerEvent, type WheelEvent } from "react";
 import * as THREE from "three";
 import ThreeGlobe from "three-globe";
-import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
+import type { Line2, LineSegments2, OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { capturedDateTimeLabel } from "@/domain/datetime";
 import { countryLabel, markerLabel, photoAltText, photoLabel, placeLabel } from "@/domain/labels";
 import type { GeoPoint, GlobeMarker, Photo, Trip } from "@/domain/models";
@@ -57,6 +57,8 @@ const GLOBE_SHELL = "#efe1cf";
 const LAND_PARTICLE_SIZE = 3.05;
 const MEDIUM_LAND_PARTICLE_SIZE = 2.85;
 const NEAR_LAND_PARTICLE_SIZE = 2.35;
+const MARKER_INTERACTIVE_OPACITY = 0.025;
+const PLACE_MARKER_INTERACTIVE_COUNTRY_OPACITY = 0.08;
 const GLOBE_ASSET_PATHS: Record<GlobeAssetKind, string> = {
   landFar: "/data/globe/land-far.bin",
   landMid: "/data/globe/land-mid.bin",
@@ -497,7 +499,7 @@ function TravelRouteSegment({
   };
 }) {
   const camera = useThree((state) => state.camera);
-  const lineRef = useRef<any>(null);
+  const lineRef = useRef<Line2 | LineSegments2 | null>(null);
 
   useFrame(() => {
     const zoom = zoomProgress(camera);
@@ -618,22 +620,28 @@ function BillboardMarker({
     const element = markerRef.current;
     if (!element) return;
     const zoom = zoomProgress(camera);
-    const lodOpacity =
-      marker.kind === "country"
-        ? 1 - smoothstep(0.28, 0.56, zoom)
-        : smoothstep(0.28, 0.56, zoom);
+    const countryOpacity = 1 - smoothstep(0.28, 0.56, zoom);
+    const placeOpacity = smoothstep(0.28, 0.56, zoom);
+    const lodOpacity = marker.kind === "country" ? countryOpacity : placeOpacity;
     if (Math.abs(opacityRef.current - lodOpacity) < 0.008) return;
     opacityRef.current = lodOpacity;
+    const isInteractive =
+      marker.kind === "country"
+        ? countryOpacity > MARKER_INTERACTIVE_OPACITY
+        : placeOpacity > MARKER_INTERACTIVE_OPACITY && countryOpacity <= PLACE_MARKER_INTERACTIVE_COUNTRY_OPACITY;
     element.style.opacity = String(lodOpacity);
-    element.style.pointerEvents = lodOpacity < 0.02 ? "none" : "auto";
+    element.style.pointerEvents = isInteractive ? "auto" : "none";
+    element.dataset.interactive = String(isInteractive);
   });
 
   return (
-    <Html center position={position} zIndexRange={[40, 20]} transform={false}>
+    <Html center position={position} zIndexRange={marker.kind === "country" ? [90, 70] : [40, 20]} transform={false} pointerEvents="auto">
       <button
         ref={markerRef}
         className={`travel-marker travel-marker--${marker.kind}${marker.active ? " is-selected" : ""}${marker.routeRole ? ` is-${marker.routeRole}` : ""}`}
         style={{ opacity: 0, pointerEvents: "none" }}
+        data-marker-kind={marker.kind}
+        data-marker-label={marker.label}
         aria-label={markerLabel(marker)}
         title={markerLabel(marker)}
         type="button"

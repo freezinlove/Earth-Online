@@ -264,13 +264,13 @@ input {
 }
 
 .travel-marker--country {
-  width: 20px;
-  height: 20px;
+  width: 34px;
+  height: 34px;
   color: #fff8ed;
 }
 
 .travel-marker--country::before {
-  inset: 5px;
+  inset: 12px;
   border: 0;
   background: rgba(215, 120, 80, 0.78);
   box-shadow:
@@ -279,7 +279,7 @@ input {
 }
 
 .travel-marker--country::after {
-  inset: 2px;
+  inset: 9px;
   border: 1px solid rgba(215, 120, 80, 0.26);
 }
 
