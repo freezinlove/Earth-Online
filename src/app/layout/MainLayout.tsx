@@ -10,6 +10,7 @@ const navItems: Array<{ panel: Exclude<AppPanel, "globe" | "upload" | "import" |
 ];
 
 const navPanelOrder: AppPanel[] = ["upload", "globe", ...navItems.map((item) => item.panel)];
+const primaryNavExitDuration = 240;
 
 export function MainLayout({ children }: { children: ReactNode }) {
   const activePanel = useAppStore((state) => state.activePanel);
@@ -21,7 +22,10 @@ export function MainLayout({ children }: { children: ReactNode }) {
     id: number;
     to: AppPanel;
   } | null>(null);
+  const [shouldRenderPrimaryNav, setShouldRenderPrimaryNav] = useState(activePanel !== "tripDetail");
+  const [isPrimaryNavClosing, setIsPrimaryNavClosing] = useState(false);
   const motionTimer = useRef<number | undefined>(undefined);
+  const primaryNavTimer = useRef<number | undefined>(undefined);
   const homeState = activePanel === "globe" ? "active" : "covered";
   const openPendingCount = pendingItems.filter((item) => item.status === "open").length;
   const moveToPanel = (panel: AppPanel) => {
@@ -50,6 +54,26 @@ export function MainLayout({ children }: { children: ReactNode }) {
     motionTimer.current = window.setTimeout(() => setIndicatorMotion(null), 360);
     return () => window.clearTimeout(motionTimer.current);
   }, [indicatorMotion]);
+
+  useEffect(() => {
+    window.clearTimeout(primaryNavTimer.current);
+
+    if (activePanel !== "tripDetail") {
+      setShouldRenderPrimaryNav(true);
+      setIsPrimaryNavClosing(false);
+      return;
+    }
+
+    if (shouldRenderPrimaryNav) {
+      setIsPrimaryNavClosing(true);
+      primaryNavTimer.current = window.setTimeout(() => {
+        setShouldRenderPrimaryNav(false);
+        setIsPrimaryNavClosing(false);
+      }, primaryNavExitDuration);
+    }
+
+    return () => window.clearTimeout(primaryNavTimer.current);
+  }, [activePanel, shouldRenderPrimaryNav]);
 
   return (
     <div className="app-shell relative min-h-screen overflow-hidden bg-background text-on-surface" data-home-state={homeState}>
@@ -88,7 +112,11 @@ export function MainLayout({ children }: { children: ReactNode }) {
           </div>
         </header>
 
-      <nav className="fixed bottom-5 left-1/2 z-[60] flex -translate-x-1/2 items-center gap-1.5 md:bottom-auto md:left-8 md:top-1/2 md:-translate-x-0 md:-translate-y-1/2 md:flex-col">
+      {shouldRenderPrimaryNav ? (
+      <nav
+        className="primary-nav fixed bottom-5 left-1/2 z-[60] flex -translate-x-1/2 items-center gap-1.5 md:bottom-auto md:left-8 md:top-1/2 md:-translate-x-0 md:-translate-y-1/2 md:flex-col"
+        data-state={isPrimaryNavClosing ? "closing" : "open"}
+      >
         <button
           className={clsx(
             "group relative grid h-11 w-11 place-items-center rounded-full text-primary transition active:scale-95",
@@ -161,6 +189,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
           );
         })}
       </nav>
+      ) : null}
 
       <main className="relative z-10 min-h-screen">{children}</main>
     </div>

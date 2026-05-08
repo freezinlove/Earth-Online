@@ -162,6 +162,19 @@ input {
   }
 }
 
+.primary-nav {
+  transition: opacity 220ms ease;
+}
+
+.primary-nav[data-state="open"] {
+  opacity: 1;
+}
+
+.primary-nav[data-state="closing"] {
+  pointer-events: none;
+  opacity: 0;
+}
+
 .home-chrome {
   transform-origin: center top;
   transition:
