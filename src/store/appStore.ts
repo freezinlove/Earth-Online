@@ -62,6 +62,7 @@ interface AppState {
   setActivePanel: (panel: AppPanel) => void;
   selectTrip: (tripId: ID, panel?: AppPanel) => void;
   selectPlace: (placeId: ID) => void;
+  focusPlaceOnGlobe: (placeId: ID, intent: GlobeViewIntent) => void;
   selectPhoto: (photoId: ID) => void;
   clearPlaceSelection: () => void;
   setCursorDate: (date: string) => void;
@@ -146,6 +147,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       selectedTripId: place?.tripId ?? get().selectedTripId,
       cursorDate: place?.timeRange.start.slice(0, 10) ?? get().cursorDate,
       activePanel: "globe",
+    });
+  },
+  focusPlaceOnGlobe: (placeId, intent) => {
+    const place = get().placeNodes.find((item) => item.id === placeId);
+    set({
+      selectedPlaceId: placeId,
+      selectedTripId: place?.tripId ?? get().selectedTripId,
+      selectedPhotoId: undefined,
+      cursorDate: place?.timeRange.start.slice(0, 10) ?? get().cursorDate,
+      activePanel: "globe",
+      globeViewIntent: intent,
     });
   },
   selectPhoto: (photoId) => {

@@ -78,7 +78,7 @@ export function TimelineDock() {
   const trips = useAppStore((state) => state.trips);
   const placeNodes = useAppStore((state) => state.placeNodes);
   const selectTrip = useAppStore((state) => state.selectTrip);
-  const selectPlace = useAppStore((state) => state.selectPlace);
+  const focusPlaceOnGlobe = useAppStore((state) => state.focusPlaceOnGlobe);
   const clearPlaceSelection = useAppStore((state) => state.clearPlaceSelection);
   const setGlobeViewIntent = useAppStore((state) => state.setGlobeViewIntent);
   const homeState = activePanel === "globe" ? "active" : "covered";
@@ -122,9 +122,8 @@ export function TimelineDock() {
   const focusPlace = (placeId: string) => {
     const place = placeNodes.find((item) => item.id === placeId);
     if (!place) return;
-    selectPlace(place.id);
     setPrimedTripId(undefined);
-    setGlobeViewIntent(placeFocusIntent(place));
+    focusPlaceOnGlobe(place.id, placeFocusIntent(place));
   };
 
   const backToGlobal = () => {

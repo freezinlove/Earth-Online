@@ -453,8 +453,6 @@ function AssetLineLayer({ kind, color, baseOpacity, renderOrder }: { kind: Globe
 }
 
 function TravelRouteLayer({ paths }: { paths: GlobePath[] }) {
-  const camera = useThree((state) => state.camera);
-  const [zoom, setZoom] = useState(0);
   const lines = useMemo(
     () =>
       paths.map((path) => {
@@ -476,51 +474,71 @@ function TravelRouteLayer({ paths }: { paths: GlobePath[] }) {
     [paths],
   );
 
+  return (
+    <>
+      {lines.map((line) => (
+        <TravelRouteSegment key={line.id} line={line} />
+      ))}
+    </>
+  );
+}
+
+function TravelRouteSegment({
+  line,
+}: {
+  line: {
+    id: string;
+    active: boolean;
+    crossCountry: boolean;
+    longHop: boolean;
+    points: [number, number, number][];
+    arrowPosition: [number, number, number];
+    arrowDirectionPoint: [number, number, number];
+  };
+}) {
+  const camera = useThree((state) => state.camera);
+  const lineRef = useRef<any>(null);
+
   useFrame(() => {
-    const nextZoom = zoomProgress(camera);
-    setZoom((current) => (Math.abs(current - nextZoom) > 0.015 ? nextZoom : current));
+    const zoom = zoomProgress(camera);
+    const intraCountryOpacity = smoothstep(0.34, 0.6, zoom) * 0.88;
+    const crossCountryOpacity = THREE.MathUtils.lerp(0.92, 0.62, smoothstep(0.45, 0.82, zoom));
+    const routeOpacity = line.crossCountry ? crossCountryOpacity : intraCountryOpacity;
+    const opacity = line.active ? Math.max(routeOpacity, 0.72) : routeOpacity;
+    const route = lineRef.current;
+    const material = Array.isArray(route?.material) ? route?.material[0] : route?.material;
+    if (route) route.visible = opacity >= 0.025;
+    if (material) {
+      material.transparent = true;
+      material.opacity = opacity;
+    }
   });
 
   return (
-    <>
-      {lines.map((line) => {
-        const intraCountryOpacity = smoothstep(0.34, 0.6, zoom) * 0.88;
-        const crossCountryOpacity = THREE.MathUtils.lerp(0.92, 0.62, smoothstep(0.45, 0.82, zoom));
-        const opacity = line.crossCountry ? crossCountryOpacity : intraCountryOpacity;
-        const arrowOpacity = smoothstep(0.68, 0.84, zoom);
-        if (opacity < 0.025) return null;
-        const color = ROUTE_LONG_HOP;
-        return (
-          <group key={line.id}>
-            <Line
-              points={line.points}
-              color={color}
-              lineWidth={line.active ? 3.5 : line.longHop ? 3.05 : 2.45}
-              transparent
-              opacity={line.active ? Math.max(opacity, 0.72) : opacity}
-              depthWrite={false}
-              depthTest={false}
-              renderOrder={12}
-            />
-            {arrowOpacity > 0.02 ? (
-              <RouteArrow color={ROUTE_ARROW} directionPoint={line.arrowDirectionPoint} opacity={arrowOpacity} position={line.arrowPosition} />
-            ) : null}
-          </group>
-        );
-      })}
-    </>
+    <group>
+      <Line
+        ref={lineRef}
+        points={line.points}
+        color={ROUTE_LONG_HOP}
+        lineWidth={line.active ? 3.5 : line.longHop ? 3.05 : 2.45}
+        transparent
+        opacity={0}
+        depthWrite={false}
+        depthTest={false}
+        renderOrder={12}
+      />
+      <RouteArrow color={ROUTE_ARROW} directionPoint={line.arrowDirectionPoint} position={line.arrowPosition} />
+    </group>
   );
 }
 
 function RouteArrow({
   color,
   directionPoint,
-  opacity,
   position,
 }: {
   color: string;
   directionPoint: [number, number, number];
-  opacity: number;
   position: [number, number, number];
 }) {
   const camera = useThree((state) => state.camera);
@@ -528,23 +546,27 @@ function RouteArrow({
   const arrowRef = useRef<HTMLSpanElement>(null);
   const localStart = useMemo(() => new THREE.Vector3(...position), [position]);
   const localEnd = useMemo(() => new THREE.Vector3(...directionPoint), [directionPoint]);
+  const screenStartRef = useRef(new THREE.Vector3());
+  const screenEndRef = useRef(new THREE.Vector3());
 
   useFrame(() => {
     const parent = anchorRef.current?.parent;
     if (!parent || !arrowRef.current) return;
 
-    const screenStart = localStart.clone().applyMatrix4(parent.matrixWorld).project(camera);
-    const screenEnd = localEnd.clone().applyMatrix4(parent.matrixWorld).project(camera);
+    const screenStart = screenStartRef.current.copy(localStart).applyMatrix4(parent.matrixWorld).project(camera);
+    const screenEnd = screenEndRef.current.copy(localEnd).applyMatrix4(parent.matrixWorld).project(camera);
     const dx = screenEnd.x - screenStart.x;
     const dy = screenStart.y - screenEnd.y;
     if (Math.hypot(dx, dy) < 0.0001) return;
+    const arrowOpacity = smoothstep(0.68, 0.84, zoomProgress(camera));
+    arrowRef.current.style.opacity = arrowOpacity > 0.02 ? String(arrowOpacity) : "0";
     arrowRef.current.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
   });
 
   return (
     <group ref={anchorRef}>
       <Html center position={position} zIndexRange={[32, 14]} transform={false}>
-        <span ref={arrowRef} className="travel-route-arrow" style={{ color, opacity }} />
+        <span ref={arrowRef} className="travel-route-arrow" style={{ color, opacity: 0 }} />
       </Html>
     </group>
   );
@@ -588,25 +610,30 @@ function BillboardMarker({
   onSelect: (marker: TravelMarker) => void;
 }) {
   const camera = useThree((state) => state.camera);
-  const [opacity, setOpacity] = useState(0);
+  const markerRef = useRef<HTMLButtonElement>(null);
+  const opacityRef = useRef(-1);
   const position = useMemo(() => threeGlobeVector(marker.center, GLOBE_RADIUS, MARKER_ALTITUDE).toArray(), [marker.center]);
 
   useFrame(() => {
+    const element = markerRef.current;
+    if (!element) return;
     const zoom = zoomProgress(camera);
     const lodOpacity =
       marker.kind === "country"
         ? 1 - smoothstep(0.28, 0.56, zoom)
         : smoothstep(0.28, 0.56, zoom);
-    setOpacity(lodOpacity);
+    if (Math.abs(opacityRef.current - lodOpacity) < 0.008) return;
+    opacityRef.current = lodOpacity;
+    element.style.opacity = String(lodOpacity);
+    element.style.pointerEvents = lodOpacity < 0.02 ? "none" : "auto";
   });
-
-  if (opacity < 0.02) return null;
 
   return (
     <Html center position={position} zIndexRange={[40, 20]} transform={false}>
       <button
+        ref={markerRef}
         className={`travel-marker travel-marker--${marker.kind}${marker.active ? " is-selected" : ""}${marker.routeRole ? ` is-${marker.routeRole}` : ""}`}
-        style={{ opacity }}
+        style={{ opacity: 0, pointerEvents: "none" }}
         aria-label={markerLabel(marker)}
         title={markerLabel(marker)}
         type="button"
@@ -671,18 +698,21 @@ function GlobeScene({
     targetCameraPosition.current = cameraTargetForIntent(viewIntent, focusPoint);
   }, [camera, focusPoint, viewIntent]);
 
-  useFrame(() => {
+  useFrame((_, delta) => {
     if (controlsRef.current) {
       const targetRotateSpeed = orbitRotateSpeed(camera);
-      const response = targetRotateSpeed < controlsRef.current.rotateSpeed ? 0.42 : 0.16;
+      const response = targetRotateSpeed < controlsRef.current.rotateSpeed ? 1 - Math.exp(-32 * delta) : 1 - Math.exp(-10 * delta);
       controlsRef.current.rotateSpeed = THREE.MathUtils.lerp(controlsRef.current.rotateSpeed, targetRotateSpeed, response);
     }
 
     if (viewIntent.source !== "manual") {
-      if (groupRef.current) groupRef.current.quaternion.slerp(targetQuaternion.current, 0.045);
-      camera.position.lerp(targetCameraPosition.current, 0.055);
+      const rotationStep = 1 - Math.exp(-3.1 * delta);
+      const cameraStep = 1 - Math.exp(-3.8 * delta);
+      const targetStep = 1 - Math.exp(-10.4 * delta);
+      if (groupRef.current) groupRef.current.quaternion.slerp(targetQuaternion.current, rotationStep);
+      camera.position.lerp(targetCameraPosition.current, cameraStep);
       camera.up.set(0, 1, 0);
-      controlsRef.current?.target.lerp(globeCenter, 0.16);
+      controlsRef.current?.target.lerp(globeCenter, targetStep);
       camera.lookAt(globeCenter);
       controlsRef.current?.update();
     }
@@ -752,7 +782,18 @@ function TravelMapAnnotation({
 }) {
   const photoStripRef = useRef<HTMLDivElement | null>(null);
   const photoDragRef = useRef({ isDragging: false, lastX: 0, moved: false, pointerId: -1, startX: 0 });
+  const photoStripTimer = useRef<number | undefined>(undefined);
+  const [showPhotoStrip, setShowPhotoStrip] = useState(false);
   const position = useMemo(() => (selected ? threeGlobeVector(selected.center, GLOBE_RADIUS, MARKER_ALTITUDE).toArray() : undefined), [selected]);
+
+  useEffect(() => {
+    window.clearTimeout(photoStripTimer.current);
+    setShowPhotoStrip(false);
+    if (!selected || isClosing) return undefined;
+
+    photoStripTimer.current = window.setTimeout(() => setShowPhotoStrip(true), 520);
+    return () => window.clearTimeout(photoStripTimer.current);
+  }, [isClosing, selected?.id]);
 
   if (!selected || !trip || !position) return null;
 
@@ -865,7 +906,7 @@ function TravelMapAnnotation({
                   <Archive size={16} />
                 </button>
               </div>
-              {relatedPhotos.length > 0 ? (
+              {showPhotoStrip && relatedPhotos.length > 0 ? (
                 <div
                   ref={photoStripRef}
                   className="travel-photo-strip"
@@ -888,7 +929,7 @@ function TravelMapAnnotation({
                       }}
                       aria-label={photoLabel(photo)}
                     >
-                      <img src={photo.thumbnailUrl} alt={photoAltText(photo)} />
+                      <img src={photo.thumbnailUrl} alt={photoAltText(photo)} decoding="async" loading="lazy" />
                     </button>
                   ))}
                 </div>
@@ -956,10 +997,11 @@ export function EarthStage() {
   const previewPlace = previewPhoto?.placeNodeId ? places.find((place) => place.id === previewPhoto.placeNodeId) : undefined;
   const homeState = activePanel === "globe" ? "active" : "covered";
 
-  const transitionToMapItem = (item: Exclude<SelectedMapItem, undefined>) => {
+  const transitionToMapItem = (item: Exclude<SelectedMapItem, undefined>, options: { waitForExit?: boolean } = {}) => {
     window.clearTimeout(infoPanelCloseTimer.current);
+    const waitForExit = options.waitForExit ?? true;
 
-    if (!selectedMapItem || selectedMapItem.id === item.id) {
+    if (!waitForExit || !selectedMapItem || selectedMapItem.id === item.id) {
       setInfoPanelClosing(false);
       setSelectedMapItem(item);
       return;
