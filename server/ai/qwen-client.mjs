@@ -3,6 +3,12 @@ import { envValue } from "../config/env.mjs";
 const qwenCompatibleBaseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1";
 const qwenMultimodalEmbeddingUrl =
   "https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding";
+const qwenRequestTimeoutMs = 45000;
+
+function requestSignal(rootDir) {
+  const timeout = Number(envValue(rootDir, "QWEN_REQUEST_TIMEOUT_MS", qwenRequestTimeoutMs));
+  return globalThis.AbortSignal.timeout(Number.isFinite(timeout) && timeout > 0 ? timeout : qwenRequestTimeoutMs);
+}
 
 export async function qwenChatCompletion({
   apiKey,
@@ -16,6 +22,7 @@ export async function qwenChatCompletion({
 
   const response = await fetch(`${qwenCompatibleBaseUrl}/chat/completions`, {
     method: "POST",
+    signal: requestSignal(rootDir),
     headers: {
       authorization: `Bearer ${apiKey}`,
       "content-type": "application/json",
@@ -45,6 +52,7 @@ export async function qwenMultimodalEmbedding({
 
   const response = await fetch(qwenMultimodalEmbeddingUrl, {
     method: "POST",
+    signal: requestSignal(rootDir),
     headers: {
       authorization: `Bearer ${apiKey}`,
       "content-type": "application/json",

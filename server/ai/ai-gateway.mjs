@@ -60,11 +60,13 @@ export async function analyzeTravelImage({
     if (!imageProvider) throw new Error("no image analysis provider configured");
     if (!embeddingProvider) throw new Error("no embedding provider configured");
 
-    const vision = await imageProvider.analyzeImage({ rootDir, secretProvider, fileName, mime, dataUrl, preset, geoContext });
+    const visionPromise = imageProvider.analyzeImage({ rootDir, secretProvider, fileName, mime, dataUrl, preset, geoContext });
+    const embeddingPromise = embeddingProvider.embed({ rootDir, secretProvider, fileName, dataUrl });
+    const vision = await visionPromise;
     const text = [vision.caption, ...vision.tags].join(" ");
     let embeddingResult;
     try {
-      embeddingResult = await embeddingProvider.embed({ rootDir, secretProvider, fileName, dataUrl, text });
+      embeddingResult = await embeddingPromise;
     } catch {
       embeddingResult = {
         embedding: deterministicVector([fileName, text].filter(Boolean).join(" ")),

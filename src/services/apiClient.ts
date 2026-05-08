@@ -57,8 +57,7 @@ function fileToDataUrl(file: File) {
   });
 }
 
-async function fileToThumbnailDataUrl(file: File) {
-  const source = await fileToDataUrl(file);
+async function fileToThumbnailDataUrl(source: string) {
   return new Promise<string>((resolve) => {
     const image = new Image();
     image.onload = () => {
@@ -84,13 +83,14 @@ async function toImportPayload(filesLike: FileList | File[], onProgress?: (done:
   const files = Array.from(filesLike);
   const payload: ImportFilePayload[] = [];
   for (const file of files) {
+    const dataUrl = await fileToDataUrl(file);
     payload.push({
       name: file.name,
       type: file.type,
       size: file.size,
       lastModified: file.lastModified,
-      dataUrl: await fileToDataUrl(file),
-      thumbnailDataUrl: await fileToThumbnailDataUrl(file),
+      dataUrl,
+      thumbnailDataUrl: await fileToThumbnailDataUrl(dataUrl),
     });
     onProgress?.(payload.length, files.length);
   }
