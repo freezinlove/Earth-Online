@@ -1,6 +1,10 @@
 node_modules
 dist
 output
+data/**
+!data/
+!data/.gitkeep
+!data/README.md
 test-results
 external/cobe
 .env

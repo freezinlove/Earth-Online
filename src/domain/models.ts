@@ -8,9 +8,48 @@ export interface GeoPoint {
 export type PendingReason =
   | "missing_gps"
   | "missing_time"
+  | "confirm_location_candidate"
   | "needs_trip_confirmation"
   | "split_suggestion"
+  | "merge_suggestion"
   | "recent_import";
+
+export interface LocationCandidate {
+  id: ID;
+  name: string;
+  country?: string;
+  city?: string;
+  point?: GeoPoint;
+  confidence: number;
+  source: "exif" | "ai_vision" | "filename" | "geo_catalog" | "nearby_trip" | "manual";
+  reason: string;
+}
+
+export interface PhotoAiEvidence {
+  provider: "qwen" | "qwen-mock" | "mock";
+  promptId: string;
+  promptVersion: string;
+  analyzedAt: string;
+  title?: string;
+  caption: string;
+  tags: string[];
+  visiblePlaceNames: string[];
+  locationCandidates: LocationCandidate[];
+  uncertainties?: string[];
+  fallbackReason?: string;
+}
+
+export interface LocationResolution {
+  status: "confirmed" | "suggested" | "missing" | "rejected";
+  effectiveName?: string;
+  effectivePoint?: GeoPoint;
+  confidence?: number;
+  source?: LocationCandidate["source"];
+  candidateId?: ID;
+  candidates: LocationCandidate[];
+  requiresUserAction: boolean;
+  updatedAt: string;
+}
 
 export interface Photo {
   id: ID;
@@ -26,6 +65,8 @@ export interface Photo {
   placeNodeId?: ID;
   tags: string[];
   aiCaption: string;
+  ai?: PhotoAiEvidence;
+  locationResolution?: LocationResolution;
   aiProvider?: "qwen" | "qwen-mock" | "mock";
   embeddingProvider?: "qwen" | "deterministic";
   embeddingDimension?: number;
@@ -82,6 +123,9 @@ export interface PlaceNode {
   id: ID;
   tripId: ID;
   name: string;
+  displayName?: string;
+  country?: string;
+  city?: string;
   center: GeoPoint;
   photoIds: ID[];
   timeRange: {
@@ -101,12 +145,14 @@ export interface Route {
 export interface TimelineSegment {
   id: ID;
   label: string;
+  shortLabel?: string;
   start: string;
   end: string;
   granularity: "year" | "month" | "day" | "photo";
   relatedType: "trip" | "place" | "photo";
   relatedId: ID;
   photoCount: number;
+  status?: "confirmed" | "suggested" | "missing";
 }
 
 export interface PendingItem {
@@ -117,6 +163,75 @@ export interface PendingItem {
   suggestion: string;
   reason: string;
   status: "open" | "accepted" | "ignored";
+  proposal?: PendingProposal;
+}
+
+export type PendingProposal =
+  | {
+      action: "confirm_location_candidate";
+      photoIds: ID[];
+      candidateId: ID;
+      createPlaceNode?: boolean;
+    }
+  | {
+      action: "bind_photos_to_place";
+      photoIds: ID[];
+      placeId: ID;
+    }
+  | {
+      action: "create_place_from_candidate";
+      tripId: ID;
+      photoIds: ID[];
+      candidate: LocationCandidate;
+    }
+  | {
+      action: "confirm_trip_assignment";
+      tripId: ID;
+      photoIds: ID[];
+    }
+  | {
+      action: "merge_trips";
+      targetTripId: ID;
+      sourceTripIds: ID[];
+    };
+
+export interface GlobeMarker {
+  id: ID;
+  kind: "country" | "place";
+  label: string;
+  center: GeoPoint;
+  count: number;
+  photoIds: ID[];
+  placeIds?: ID[];
+  tripId: ID;
+  countryName?: string;
+  startTime?: string;
+  endTime?: string;
+  status: "confirmed" | "suggested" | "missing";
+}
+
+export interface DossierDayGroup {
+  day: string;
+  country: string;
+  photoIds: ID[];
+  placeIds: ID[];
+  status: "confirmed" | "suggested" | "missing";
+}
+
+export interface DossierTripGroup {
+  tripId: ID;
+  countries: Array<{ country: string; days: DossierDayGroup[] }>;
+}
+
+export interface SearchDocument {
+  id: ID;
+  photoId: ID;
+  tripId?: ID;
+  placeNodeId?: ID;
+  capturedAt?: string;
+  tags: string[];
+  locationNames: string[];
+  text: string;
 }
 
 export interface SearchResult {

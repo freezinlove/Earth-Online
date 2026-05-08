@@ -1,5 +1,7 @@
 import { LocateFixed, Search, X } from "lucide-react";
 import { useEffect, useMemo } from "react";
+import { capturedDateLabel } from "@/domain/datetime";
+import { photoAltText, photoLabel, placeLabel, tripLabel } from "@/domain/labels";
 import { useAppStore } from "@/store/appStore";
 
 export function SearchPanel() {
@@ -65,7 +67,7 @@ export function SearchPanel() {
           <select className="soft-input text-sm outline-none" value={filters.tripId ?? ""} onChange={(event) => setFilters({ ...filters, tripId: event.target.value || undefined, placeId: undefined })}>
             <option value="">全部旅行</option>
             {trips.map((trip) => (
-              <option key={trip.id} value={trip.id}>{trip.title}</option>
+              <option key={trip.id} value={trip.id}>{tripLabel(trip)}</option>
             ))}
           </select>
           <select className="soft-input text-sm outline-none" value={filters.placeId ?? ""} onChange={(event) => setFilters({ ...filters, placeId: event.target.value || undefined })}>
@@ -73,7 +75,7 @@ export function SearchPanel() {
             {places
               .filter((place) => !filters.tripId || place.tripId === filters.tripId)
               .map((place) => (
-                <option key={place.id} value={place.id}>{place.name}</option>
+                <option key={place.id} value={place.id}>{placeLabel(place)}</option>
               ))}
           </select>
           <input className="soft-input text-sm outline-none" type="date" value={filters.date ?? ""} onChange={(event) => setFilters({ ...filters, date: event.target.value || undefined })} />
@@ -89,10 +91,10 @@ export function SearchPanel() {
               onClick={() => selectPhoto(photo.id)}
               type="button"
             >
-              <img src={photo.thumbnailUrl} alt={photo.aiCaption} className="h-44 w-full object-cover" />
+              <img src={photo.thumbnailUrl} alt={photoAltText(photo)} className="h-44 w-full object-cover" />
               <div className="p-5">
-                <p className="font-serif text-xl font-semibold">{photo.title ?? trip?.title ?? "未归档照片"}</p>
-                <p className="mt-1 text-xs text-outline">{photo.capturedAt?.slice(0, 10) ?? "待补时间"} · {photo.tags.join(" / ")}</p>
+                <p className="font-serif text-xl font-semibold">{photo.title ? photoLabel(photo) : tripLabel(trip)}</p>
+                <p className="mt-1 text-xs text-outline">{capturedDateLabel(photo.capturedAt)} · {photo.tags.join(" / ")}</p>
                 <p className="mt-3 text-sm leading-6 text-on-surface-variant">{reason || photo.aiCaption}</p>
                 <span className="mt-4 inline-flex items-center gap-2 rounded-full bg-primary-fixed px-3 py-1.5 text-xs font-semibold text-primary">
                   <LocateFixed size={14} /> 定位到地球与时间轴

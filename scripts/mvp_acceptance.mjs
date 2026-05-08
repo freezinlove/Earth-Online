@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { EarthRepository } from "../server/repository.mjs";
+import { dataDir, dbPath, thumbDir, vectorPath } from "../server/config/paths.mjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const baseUrl = process.env.EARTH_ONLINE_BASE_URL ?? "http://127.0.0.1:8787";
@@ -92,16 +93,16 @@ async function testManualAndSearch() {
 }
 
 async function testStorageFiles() {
-  assert(existsSync(path.join(rootDir, "output", "earth-online-data", "earth-online.sqlite")), "SQLite database should exist");
-  assert(existsSync(path.join(rootDir, "output", "earth-online-data", "vector-index.json")), "vector index should exist");
-  await fs.mkdir(path.join(rootDir, "output", "earth-online-data", "thumbnails"), { recursive: true });
+  assert(existsSync(path.join(dataDir, "earth-online.sqlite")), "SQLite database should exist");
+  assert(existsSync(vectorPath), "vector index should exist");
+  await fs.mkdir(thumbDir, { recursive: true });
 }
 
 async function main() {
   await ensureServer();
   const repository = new EarthRepository({
-    dataDir: path.join(rootDir, "output", "earth-online-data"),
-    dbJsonPath: path.join(rootDir, "output", "earth-online-data", "db.json"),
+    dataDir,
+    dbJsonPath: dbPath,
   });
   await repository.ensureInitialized();
   beforeState = repository.readState();
@@ -122,8 +123,8 @@ main()
     if (beforeState) {
       try {
         const repository = new EarthRepository({
-          dataDir: path.join(rootDir, "output", "earth-online-data"),
-          dbJsonPath: path.join(rootDir, "output", "earth-online-data", "db.json"),
+          dataDir,
+          dbJsonPath: dbPath,
         });
         repository.saveState(beforeState);
       } catch {

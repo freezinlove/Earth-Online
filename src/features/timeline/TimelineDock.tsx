@@ -1,10 +1,11 @@
 import { Undo2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { placeFocusIntent } from "@/domain/globeIntent";
 import { useAppStore } from "@/store/appStore";
 import {
   buildGlobalDomain,
   buildGlobalTicks,
-  buildPlaceSegmentsFromMarkers,
+  buildProjectedPlaceSegments,
   buildTripDomain,
   buildTripTicks,
   buildTripSegments,
@@ -15,7 +16,6 @@ import {
   type TimeIncisionSegment,
   type TimeIncisionTick,
 } from "@/features/timeline/timelineModel";
-import { applyRouteRoles, buildPlaceMarkers } from "@/features/earth/EarthStage";
 
 function TimeSegment({
   segment,
@@ -75,7 +75,6 @@ export function TimelineDock() {
   const selectedPlaceId = useAppStore((state) => state.selectedPlaceId);
   const segments = useAppStore((state) => state.timelineSegments);
   const trips = useAppStore((state) => state.trips);
-  const photos = useAppStore((state) => state.photos);
   const placeNodes = useAppStore((state) => state.placeNodes);
   const selectTrip = useAppStore((state) => state.selectTrip);
   const selectPlace = useAppStore((state) => state.selectPlace);
@@ -83,13 +82,16 @@ export function TimelineDock() {
   const setGlobeViewIntent = useAppStore((state) => state.setGlobeViewIntent);
 
   const selectedTrip = trips.find((trip) => trip.id === selectedTripId);
-  const tripPlaces = useMemo(() => placeNodes.filter((place) => place.tripId === selectedTripId), [placeNodes, selectedTripId]);
-  const tripPhotos = useMemo(() => photos.filter((photo) => photo.tripId === selectedTripId && photo.location), [photos, selectedTripId]);
-  const placeMarkers = useMemo(() => applyRouteRoles(buildPlaceMarkers(tripPlaces, tripPhotos, selectedTrip)), [selectedTrip, tripPhotos, tripPlaces]);
   const domain = useMemo(() => (level === "global" ? buildGlobalDomain(trips) : buildTripDomain(selectedTrip)), [level, selectedTrip, trips]);
   const visibleSegments = useMemo(
-    () => (level === "global" ? buildTripSegments(segments, selectedTripId) : buildPlaceSegmentsFromMarkers(placeMarkers, selectedPlaceId)),
-    [level, segments, selectedPlaceId, selectedTripId, placeMarkers],
+    () =>
+      level === "global"
+        ? buildTripSegments(segments, selectedTripId)
+        : buildProjectedPlaceSegments(
+            segments.filter((segment) => placeNodes.some((place) => place.tripId === selectedTripId && place.id === segment.relatedId)),
+            selectedPlaceId,
+          ),
+    [level, segments, selectedPlaceId, selectedTripId, placeNodes],
   );
   const ticks = useMemo(() => (level === "global" ? buildGlobalTicks(domain) : buildTripTicks(domain)), [domain, level]);
 
@@ -120,7 +122,7 @@ export function TimelineDock() {
     if (!place) return;
     selectPlace(place.id);
     setPrimedTripId(undefined);
-    setGlobeViewIntent({ source: "timeline-place", point: place.center, distance: "near" });
+    setGlobeViewIntent(placeFocusIntent(place));
   };
 
   const backToGlobal = () => {

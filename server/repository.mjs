@@ -1,8 +1,8 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { seedState } from "./seed.mjs";
+import { emptyState } from "./domain/empty-state.mjs";
 
 const tableMap = {
   trips: "trips",
@@ -15,6 +15,7 @@ const tableMap = {
 
 export class EarthRepository {
   constructor({ dataDir, dbJsonPath }) {
+    mkdirSync(dataDir, { recursive: true });
     this.sqlitePath = path.join(dataDir, "earth-online.sqlite");
     this.dbJsonPath = dbJsonPath;
     this.db = new DatabaseSync(this.sqlitePath);
@@ -71,17 +72,21 @@ export class EarthRepository {
 
   async ensureInitialized() {
     if (this.isInitialized()) return;
-    let state = seedState;
+    let state = emptyState;
     if (existsSync(this.dbJsonPath)) {
       try {
         state = JSON.parse(await fs.readFile(this.dbJsonPath, "utf8"));
       } catch {
-        state = seedState;
+        state = emptyState;
       }
     }
     this.saveState({ ...state, vectorIndex: undefined });
     this.db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)").run("initialized", "1");
     this.db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)").run("schema_version", "1");
+  }
+
+  close() {
+    this.db.close();
   }
 
   readState() {

@@ -1,4 +1,4 @@
-import type { ImportBatch, PendingItem, Photo, PlaceNode, Route, SearchResult, TimelineSegment, Trip } from "@/domain/models";
+import type { DossierTripGroup, GlobeMarker, ImportBatch, PendingItem, Photo, PlaceNode, Route, SearchDocument, SearchResult, TimelineSegment, Trip } from "@/domain/models";
 
 export interface AppSnapshot {
   trips: Trip[];
@@ -8,6 +8,9 @@ export interface AppSnapshot {
   importBatches: ImportBatch[];
   pendingItems: PendingItem[];
   timelineSegments: TimelineSegment[];
+  globeMarkers?: GlobeMarker[];
+  dossierGroups?: DossierTripGroup[];
+  searchDocuments?: SearchDocument[];
 }
 
 interface ImportFilePayload {

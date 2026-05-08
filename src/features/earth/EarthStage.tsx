@@ -5,7 +5,9 @@ import { Suspense, useEffect, useMemo, useRef, useState, type PointerEvent, type
 import * as THREE from "three";
 import ThreeGlobe from "three-globe";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
-import type { GeoPoint, Photo, PlaceNode, Trip } from "@/domain/models";
+import { capturedDateTimeLabel } from "@/domain/datetime";
+import { countryLabel, markerLabel, photoAltText, photoLabel, placeLabel } from "@/domain/labels";
+import type { GeoPoint, GlobeMarker, Photo, Trip } from "@/domain/models";
 import { useAppStore, type GlobeViewIntent } from "@/store/appStore";
 
 export type TravelMarker = {
@@ -55,61 +57,6 @@ const GLOBE_SHELL = "#efe1cf";
 const LAND_PARTICLE_SIZE = 3.05;
 const MEDIUM_LAND_PARTICLE_SIZE = 2.85;
 const NEAR_LAND_PARTICLE_SIZE = 2.35;
-const SCENE_SUFFIXES = ["街景", "山景", "夜景", "风景", "湖景", "河景", "随拍", "路边", "附近"];
-const COUNTRY_CENTERS: Record<string, GeoPoint> = {
-  中国: { lat: 35.8617, lng: 104.1954 },
-  日本: { lat: 36.2048, lng: 138.2529 },
-  法国: { lat: 46.2276, lng: 2.2137 },
-  瑞士: { lat: 46.8182, lng: 8.2275 },
-  意大利: { lat: 41.8719, lng: 12.5674 },
-  奥地利: { lat: 47.5162, lng: 14.5501 },
-  德国: { lat: 51.1657, lng: 10.4515 },
-  匈牙利: { lat: 47.1625, lng: 19.5033 },
-  捷克: { lat: 49.8175, lng: 15.473 },
-  英国: { lat: 55.3781, lng: -3.436 },
-};
-const COUNTRY_KEYWORDS: Array<{ country: string; keywords: string[] }> = [
-  { country: "日本", keywords: ["日本", "京都", "大阪", "奈良"] },
-  { country: "中国", keywords: ["中国", "成都", "康定", "理塘", "川西"] },
-  { country: "法国", keywords: ["法国", "巴黎"] },
-  { country: "瑞士", keywords: ["瑞士", "卢塞恩", "苏黎世", "SWISS"] },
-  { country: "意大利", keywords: ["意大利", "佛罗伦萨", "罗马"] },
-  { country: "奥地利", keywords: ["奥地利", "哈尔施塔特", "萨尔茨堡", "维也纳", "萨赫", "因斯布鲁克", "施华洛世奇", "Swarovski"] },
-  { country: "德国", keywords: ["德国", "巴伐利亚", "加米施", "帕滕基兴", "艾布湖", "新天鹅堡", "慕尼黑"] },
-  { country: "匈牙利", keywords: ["匈牙利", "布达佩斯", "多瑙河"] },
-  { country: "捷克", keywords: ["捷克", "布拉格", "查理大桥", "伏尔塔瓦"] },
-  { country: "英国", keywords: ["英国", "伦敦"] },
-];
-const COUNTRY_BOUNDS: Array<{ country: string; minLat: number; maxLat: number; minLng: number; maxLng: number }> = [
-  { country: "日本", minLat: 30, maxLat: 46, minLng: 128, maxLng: 146 },
-  { country: "中国", minLat: 18, maxLat: 54, minLng: 73, maxLng: 135 },
-  { country: "法国", minLat: 41, maxLat: 51.5, minLng: -5.5, maxLng: 9.8 },
-  { country: "瑞士", minLat: 45.7, maxLat: 47.9, minLng: 5.7, maxLng: 10.7 },
-  { country: "意大利", minLat: 36, maxLat: 47.2, minLng: 6.5, maxLng: 18.8 },
-  { country: "奥地利", minLat: 46.3, maxLat: 49.1, minLng: 9.4, maxLng: 17.2 },
-  { country: "德国", minLat: 47.2, maxLat: 55.2, minLng: 5.8, maxLng: 15.2 },
-  { country: "匈牙利", minLat: 45.6, maxLat: 48.7, minLng: 16, maxLng: 22.9 },
-  { country: "捷克", minLat: 48.5, maxLat: 51.1, minLng: 12, maxLng: 18.9 },
-  { country: "英国", minLat: 49.8, maxLat: 60.9, minLng: -8.8, maxLng: 2.1 },
-];
-const LOCAL_COUNTRY_HINTS: Array<{ country: string; center: GeoPoint; radiusKm: number }> = [
-  { country: "奥地利", center: { lat: 47.2692, lng: 11.4041 }, radiusKm: 34 },
-  { country: "奥地利", center: { lat: 47.8095, lng: 13.055 }, radiusKm: 28 },
-  { country: "奥地利", center: { lat: 47.5622, lng: 13.6493 }, radiusKm: 24 },
-  { country: "德国", center: { lat: 47.4917, lng: 11.0955 }, radiusKm: 32 },
-  { country: "瑞士", center: { lat: 47.3769, lng: 8.5417 }, radiusKm: 32 },
-  { country: "匈牙利", center: { lat: 47.4979, lng: 19.0402 }, radiusKm: 36 },
-];
-const PLACE_NAME_HINTS: Array<{ name: string; keywords: string[] }> = [
-  { name: "因斯布鲁克", keywords: ["因斯布鲁克", "施华洛世奇", "Swarovski", "AC Hotel", "万豪"] },
-  { name: "哈尔施塔特", keywords: ["哈尔施塔特", "Hallstatt"] },
-  { name: "萨尔茨堡", keywords: ["萨尔茨堡", "Salzburg", "萨赫"] },
-  { name: "加米施-帕滕基兴", keywords: ["加米施", "帕滕基兴", "Garmisch"] },
-  { name: "艾布湖", keywords: ["艾布湖", "Eibsee", "新天鹅堡"] },
-  { name: "布达佩斯", keywords: ["布达佩斯", "Budapest", "链子桥"] },
-  { name: "苏黎世", keywords: ["苏黎世", "Zurich", "SWISS"] },
-  { name: "布拉格", keywords: ["布拉格", "Prague", "Praha", "查理大桥"] },
-];
 const GLOBE_ASSET_PATHS: Record<GlobeAssetKind, string> = {
   landFar: "/data/globe/land-far.bin",
   landMid: "/data/globe/land-mid.bin",
@@ -153,16 +100,7 @@ function orbitRotateSpeed(camera: THREE.Camera) {
 }
 
 function formatDate(date?: string) {
-  if (!date) return "时间未记录";
-  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(date));
-}
-
-function normalizePlaceName(name: string) {
-  return (
-    SCENE_SUFFIXES.reduce((value, suffix) => value.replace(new RegExp(`${suffix}$`), ""), name)
-      .replace(/地点\s*\d+$/u, "")
-      .trim() || name
-  );
+  return capturedDateTimeLabel(date);
 }
 
 function distanceKm(start: GeoPoint, end: GeoPoint) {
@@ -179,14 +117,6 @@ function centerOf(points: GeoPoint[]) {
     lat: points.reduce((sum, point) => sum + point.lat, 0) / points.length,
     lng: points.reduce((sum, point) => sum + point.lng, 0) / points.length,
   };
-}
-
-function hoursBetween(first?: string, second?: string) {
-  if (!first || !second) return Number.POSITIVE_INFINITY;
-  const firstTime = new Date(first).getTime();
-  const secondTime = new Date(second).getTime();
-  if (!Number.isFinite(firstTime) || !Number.isFinite(secondTime)) return Number.POSITIVE_INFINITY;
-  return Math.abs(firstTime - secondTime) / 36e5;
 }
 
 function hideBackHemisphere(material: THREE.Material) {
@@ -355,166 +285,21 @@ function cameraTargetForIntent(intent: GlobeViewIntent, fallbackPoint?: GeoPoint
   return new THREE.Vector3(0, y, z);
 }
 
-function getCountryForPoint(point: GeoPoint, trip: Trip) {
-  if (trip.countries.length <= 1) return trip.countries[0] ?? "未知国家";
-
-  return trip.countries.reduce((closest, country) => {
-    const center = COUNTRY_CENTERS[country];
-    if (!center) return closest;
-    const score = distanceKm(point, center);
-    return score < closest.score ? { name: country, score } : closest;
-  }, { name: trip.countries[0], score: Number.POSITIVE_INFINITY }).name;
-}
-
-function inferCountryFromText(text: string) {
-  const lowerText = text.toLowerCase();
-  return COUNTRY_KEYWORDS.find((entry) => entry.keywords.some((keyword) => lowerText.includes(keyword.toLowerCase())))?.country;
-}
-
-function inferCountryFromBounds(point: GeoPoint) {
-  return COUNTRY_BOUNDS.find(
-    (bounds) => point.lat >= bounds.minLat && point.lat <= bounds.maxLat && point.lng >= bounds.minLng && point.lng <= bounds.maxLng,
-  )?.country;
-}
-
-function inferCountryForGroup(group: { name: string; places: PlaceNode[]; photos: Photo[]; centers: GeoPoint[] }, trip?: Trip) {
-  const center = centerOf(group.centers);
-  const localHint = LOCAL_COUNTRY_HINTS.find((hint) => distanceKm(center, hint.center) <= hint.radiusKm);
-  if (localHint) return localHint.country;
-
-  const metadata = [
-    group.name,
-    ...group.places.map((place) => place.name),
-    ...group.photos.flatMap((photo) => [photo.title, photo.fileName, photo.aiCaption, ...(photo.tags ?? [])]),
-  ]
-    .filter(Boolean)
-    .join(" ");
-  const textCountry = inferCountryFromText(metadata);
-  if (textCountry) return textCountry;
-
-  const boundCountry = inferCountryFromBounds(center);
-  if (boundCountry) return boundCountry;
-
-  return trip ? getCountryForPoint(center, trip) : "未知国家";
-}
-
-function groupMetadata(group: { name: string; places: PlaceNode[]; photos: Photo[] }) {
-  return [
-    group.name,
-    ...group.places.map((place) => place.name),
-    ...group.photos.flatMap((photo) => [photo.title, photo.fileName, photo.aiCaption, ...(photo.tags ?? [])]),
-  ]
-    .filter(Boolean)
-    .join(" ");
-}
-
-function inferPlaceNameForGroup(group: { name: string; places: PlaceNode[]; photos: Photo[] }) {
-  const metadata = groupMetadata(group).toLowerCase();
-  return PLACE_NAME_HINTS.find((hint) => hint.keywords.some((keyword) => metadata.includes(keyword.toLowerCase())))?.name ?? group.name;
-}
-
-export function buildPlaceMarkers(places: PlaceNode[], photos: Photo[], trip?: Trip) {
-  const groups: Array<{ name: string; places: PlaceNode[]; photos: Photo[]; centers: GeoPoint[] }> = [];
-
-  places.forEach((place) => {
-    const placePhotos = photos.filter((photo) => photo.placeNodeId === place.id || place.photoIds.includes(photo.id));
-    const photoCenters = placePhotos.map((photo) => photo.location).filter(Boolean) as GeoPoint[];
-    const centers = photoCenters.length ? photoCenters : [place.center];
-    const center = centerOf(centers);
-    const key = normalizePlaceName(place.name);
-    const entry = groups.find((group) => group.name === key && distanceKm(centerOf(group.centers), center) <= 8) ?? {
-      name: key,
-      places: [],
-      photos: [],
-      centers: [],
-    };
-    entry.places.push(place);
-    entry.photos.push(...placePhotos);
-    entry.centers.push(...centers);
-    if (!groups.includes(entry)) groups.push(entry);
-  });
-
-  const markers = groups.map((group) => {
-    const photoIds = Array.from(new Set(group.photos.map((photo) => photo.id)));
-    const placeIds = group.places.map((place) => place.id);
-    const startTime = group.places
-      .map((place) => place.timeRange.start)
-      .sort((a, b) => a.localeCompare(b))[0];
-    const endTime = group.places
-      .map((place) => place.timeRange.end)
-      .sort((a, b) => b.localeCompare(a))[0];
-    return {
-      id: `place-${placeIds.join("-")}`,
-      kind: "place" as const,
-      label: inferPlaceNameForGroup(group),
-      center: centerOf(group.centers),
-      count: photoIds.length,
-      photoIds,
-      placeIds,
-      tripId: group.places[0]?.tripId ?? "",
-      countryName: inferCountryForGroup(group, trip),
-      startTime,
-      endTime,
-      active: false,
-    };
-  });
-
-  for (let index = 0; index < markers.length; index += 1) {
-    const marker = markers[index];
-    const nearby = markers.find((candidate, candidateIndex) => {
-      if (candidateIndex <= index || candidate.countryName !== marker.countryName) return false;
-      const distance = distanceKm(marker.center, candidate.center);
-      const closePoi = distance < 5;
-      const cityStay = distance < 25 && hoursBetween(marker.startTime, candidate.startTime) <= 36;
-      return closePoi || cityStay;
-    });
-    if (!nearby) continue;
-    marker.photoIds = Array.from(new Set([...marker.photoIds, ...nearby.photoIds]));
-    marker.placeIds = Array.from(new Set([...(marker.placeIds ?? []), ...(nearby.placeIds ?? [])]));
-    marker.count = marker.photoIds.length;
-    marker.center = centerOf([marker.center, nearby.center]);
-    marker.startTime = [marker.startTime, nearby.startTime].filter(Boolean).sort((a, b) => String(a).localeCompare(String(b)))[0];
-    marker.endTime = [marker.endTime, nearby.endTime].filter(Boolean).sort((a, b) => String(b).localeCompare(String(a)))[0];
-    markers.splice(markers.indexOf(nearby), 1);
-  }
-
-  return markers;
-}
-
-function buildCountryMarkers(trip: Trip | undefined, placeMarkers: TravelMarker[]) {
-  if (!trip) return [];
-
-  const groups = new Map<string, TravelMarker[]>();
-  placeMarkers.forEach((place) => {
-    const country = place.countryName ?? getCountryForPoint(place.center, trip);
-    groups.set(country, [...(groups.get(country) ?? []), place]);
-  });
-
-  return Array.from(groups.entries()).map(([country, places]) => {
-    const photoIds = Array.from(new Set(places.flatMap((place) => place.photoIds)));
-    const routeRole: TravelMarker["routeRole"] = places.some((place) => place.routeRole === "start")
-      ? "start"
-      : places.some((place) => place.routeRole === "end")
-        ? "end"
-        : undefined;
-    return {
-      id: `country-${country}`,
-      kind: "country" as const,
-      label: country,
-      center: centerOf(places.map((place) => place.center)),
-      count: places.length,
-      photoIds,
-      placeIds: places.flatMap((place) => place.placeIds ?? []),
-      tripId: trip.id,
-      countryName: country,
-      startTime: places
-        .map((place) => place.startTime)
-        .filter(Boolean)
-        .sort((a, b) => String(a).localeCompare(String(b)))[0],
-      routeRole,
-      active: false,
-    };
-  });
+function toTravelMarker(marker: GlobeMarker): TravelMarker {
+  return {
+    id: marker.id,
+    kind: marker.kind,
+    label: marker.label,
+    center: marker.center,
+    count: marker.count,
+    photoIds: marker.photoIds,
+    placeIds: marker.placeIds,
+    tripId: marker.tripId,
+    countryName: marker.countryName,
+    startTime: marker.startTime,
+    endTime: marker.endTime,
+    active: false,
+  };
 }
 
 function LandParticleLayer() {
@@ -822,8 +607,8 @@ function BillboardMarker({
       <button
         className={`travel-marker travel-marker--${marker.kind}${marker.active ? " is-selected" : ""}${marker.routeRole ? ` is-${marker.routeRole}` : ""}`}
         style={{ opacity }}
-        aria-label={marker.label}
-        title={marker.label}
+        aria-label={markerLabel(marker)}
+        title={markerLabel(marker)}
         type="button"
         onClick={(event) => {
           event.stopPropagation();
@@ -1041,7 +826,7 @@ function TravelMapAnnotation({
         className="travel-map-note"
         data-kind={selected.kind}
         data-state={isClosing ? "closing" : "open"}
-        aria-label={selected.kind === "country" ? selected.countryName : selected.label}
+        aria-label={selected.kind === "country" ? countryLabel(selected.countryName) : markerLabel(selected)}
       >
         <span className="travel-map-note-line travel-map-note-line-diagonal" aria-hidden="true" />
         <span className="travel-map-note-line travel-map-note-line-horizontal" aria-hidden="true" />
@@ -1049,7 +834,7 @@ function TravelMapAnnotation({
         <div className="travel-map-note-body">
           {selected.kind === "country" ? (
             <div className="travel-map-note-country-row">
-              <h2>{selected.countryName}</h2>
+              <h2>{countryLabel(selected.countryName)}</h2>
               <button
                 className="travel-map-note-action"
                 type="button"
@@ -1066,7 +851,7 @@ function TravelMapAnnotation({
           ) : (
             <>
               <div className="travel-map-note-title-row">
-                <h2>{selected.label}</h2>
+                <h2>{markerLabel(selected)}</h2>
                 <button
                   className="travel-map-note-action"
                   type="button"
@@ -1101,9 +886,9 @@ function TravelMapAnnotation({
                         event.stopPropagation();
                         openPhotoFromStrip(photo);
                       }}
-                      aria-label={photo.title ?? photo.fileName}
+                      aria-label={photoLabel(photo)}
                     >
-                      <img src={photo.thumbnailUrl} alt={photo.title ?? photo.fileName} />
+                      <img src={photo.thumbnailUrl} alt={photoAltText(photo)} />
                     </button>
                   ))}
                 </div>
@@ -1125,11 +910,11 @@ function PhotoLightbox({ photo, placeName, onClose }: { photo?: Photo; placeName
         <button className="travel-lightbox-close" type="button" aria-label="关闭照片预览" onClick={onClose}>
           <X size={18} />
         </button>
-        <img src={photo.storageUrl ?? photo.thumbnailUrl} alt={photo.title ?? photo.fileName} />
+        <img src={photo.storageUrl ?? photo.thumbnailUrl} alt={photoAltText(photo)} />
         <div>
           <p>{formatDate(photo.capturedAt)}</p>
-          <h3>{photo.title ?? photo.fileName}</h3>
-          <span>{placeName ?? "地点未归档"}</span>
+          <h3>{photoLabel(photo)}</h3>
+          <span>{placeName ?? placeLabel(undefined)}</span>
         </div>
       </div>
     </div>
@@ -1142,6 +927,7 @@ export function EarthStage() {
   const trips = useAppStore((state) => state.trips);
   const placeNodes = useAppStore((state) => state.placeNodes);
   const photos = useAppStore((state) => state.photos);
+  const globeMarkers = useAppStore((state) => state.globeMarkers);
   const selectPlace = useAppStore((state) => state.selectPlace);
   const setActivePanel = useAppStore((state) => state.setActivePanel);
   const globeViewIntent = useAppStore((state) => state.globeViewIntent);
@@ -1153,9 +939,10 @@ export function EarthStage() {
 
   const trip = trips.find((item) => item.id === selectedTripId);
   const places = useMemo(() => placeNodes.filter((place) => place.tripId === selectedTripId), [placeNodes, selectedTripId]);
-  const tripPhotos = useMemo(() => photos.filter((photo) => photo.tripId === selectedTripId && photo.location), [photos, selectedTripId]);
-  const placeMarkers = useMemo(() => applyRouteRoles(buildPlaceMarkers(places, tripPhotos, trip)), [places, trip, tripPhotos]);
-  const countryMarkers = useMemo(() => buildCountryMarkers(trip, placeMarkers), [placeMarkers, trip]);
+  const tripPhotos = useMemo(() => photos.filter((photo) => photo.tripId === selectedTripId), [photos, selectedTripId]);
+  const projectedMarkers = useMemo(() => globeMarkers.filter((marker) => marker.tripId === selectedTripId).map(toTravelMarker), [globeMarkers, selectedTripId]);
+  const placeMarkers = useMemo(() => applyRouteRoles(projectedMarkers.filter((marker) => marker.kind === "place")), [projectedMarkers]);
+  const countryMarkers = useMemo(() => projectedMarkers.filter((marker) => marker.kind === "country"), [projectedMarkers]);
   const selectedMarker = [...countryMarkers, ...placeMarkers].find((marker) => marker.id === selectedMapItem?.id);
   const markers = useMemo(
     () => [...countryMarkers, ...placeMarkers].map((marker) => ({ ...marker, active: marker.id === selectedMapItem?.id || marker.active })),

@@ -1,5 +1,6 @@
 import { ArrowDown, ArrowUp, Link2, MapPinned, Plus, Trash2, X } from "lucide-react";
 import { useState } from "react";
+import { photoAltText, photoLabel, placeLabel, tripLabel } from "@/domain/labels";
 import { useAppStore } from "@/store/appStore";
 
 export function ManualEditorPanel() {
@@ -76,7 +77,7 @@ export function ManualEditorPanel() {
 
           <div className="safe-panel rounded-[28px] p-6 md:p-8">
             <h3 className="font-serif text-2xl font-semibold text-on-surface">创建地点节点</h3>
-            <p className="mt-2 text-sm text-on-surface-variant">当前 Trip：{trips.find((trip) => trip.id === selectedTripId)?.title}</p>
+            <p className="mt-2 text-sm text-on-surface-variant">当前 Trip：{tripLabel(trips.find((trip) => trip.id === selectedTripId))}</p>
             <div className="mt-5 grid gap-4">
               <label className="block">
                 <span className="text-xs font-semibold uppercase tracking-[0.18em] text-outline">地点名称</span>
@@ -107,7 +108,7 @@ export function ManualEditorPanel() {
                 <div key={place.id} className="rounded-2xl bg-white/50 px-4 py-3">
                   <div className="flex items-center justify-between gap-3">
                     <span>
-                      <span className="block text-sm font-semibold">{index + 1}. {place.name}</span>
+                      <span className="block text-sm font-semibold">{index + 1}. {placeLabel(place)}</span>
                       <span className="text-xs text-outline">{place.center.lat.toFixed(3)}, {place.center.lng.toFixed(3)} · {place.photoIds.length} 张</span>
                     </span>
                     <span className="flex shrink-0 gap-1">
@@ -133,12 +134,12 @@ export function ManualEditorPanel() {
             <div className="mt-4 grid gap-3 md:grid-cols-2">
               {unboundPhotos.map((photo) => (
                 <div key={photo.id} className="rounded-2xl bg-white/55 p-3">
-                  <img src={photo.thumbnailUrl} alt={photo.aiCaption} className="h-32 w-full rounded-xl object-cover" />
-                  <p className="mt-2 truncate text-sm font-semibold">{photo.title ?? photo.fileName}</p>
+                  <img src={photo.thumbnailUrl} alt={photoAltText(photo)} className="h-32 w-full rounded-xl object-cover" />
+                  <p className="mt-2 truncate text-sm font-semibold">{photoLabel(photo)}</p>
                   <select className="mt-3 w-full rounded-full border-0 bg-surface-container-low px-3 py-2 text-sm outline-none" onChange={(event) => void bindPhotoToPlace(photo.id, event.target.value)} defaultValue="">
                     <option value="" disabled>选择地点</option>
                     {tripPlaces.map((place) => (
-                      <option key={place.id} value={place.id}>{place.name}</option>
+                      <option key={place.id} value={place.id}>{placeLabel(place)}</option>
                     ))}
                   </select>
                 </div>

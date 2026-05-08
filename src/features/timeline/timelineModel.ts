@@ -1,5 +1,6 @@
-import type { PlaceNode, TimelineSegment, Trip } from "@/domain/models";
-import type { TravelMarker } from "@/features/earth/EarthStage";
+import { capturedTimeValue } from "@/domain/datetime";
+import { timelineLabel } from "@/domain/labels";
+import type { TimelineSegment, Trip } from "@/domain/models";
 
 export type TimelineLevel = "global" | "trip";
 
@@ -27,8 +28,7 @@ export type TimeIncisionTick = {
 };
 
 export function timeValue(date?: string) {
-  const value = date ? new Date(date).getTime() : Number.NaN;
-  return Number.isFinite(value) ? value : 0;
+  return capturedTimeValue(date);
 }
 
 export function formatCompactDateRange(start: string, end: string) {
@@ -37,26 +37,6 @@ export function formatCompactDateRange(start: string, end: string) {
   const format = new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit" });
   const year = Number.isFinite(startDate.getTime()) ? startDate.getFullYear() : "";
   return `${year}.${format.format(startDate).replace("/", ".")}-${format.format(endDate).replace("/", ".")}`;
-}
-
-function cleanTimelineLabel(label: string, kind: "trip" | "place") {
-  return label
-    .replace(/20\d{2}/g, "")
-    .replace(/[-–—_/.\s]*(0?[1-9]|1[0-2])(?=\D|$)/g, "")
-    .replace(/[·_｜|]/g, " ")
-    .replace(/待确认地点|待确认|未命名地点|临时地点|未知地点|地点\s*\d*/g, "")
-    .replace(kind === "trip" ? /多国|多城|旅行|之旅|自驾|档案|路线|回忆/g : /旅行|之旅|档案|路线|回忆/g, "")
-    .replace(kind === "place" ? /街景|山景|夜景|风景|湖景|河景|随拍|路边|附近|黄昏|清晨/g : /()/g, "")
-    .replace(/[()[\]{}【】「」『』]/g, "")
-    .replace(/\s+/g, "")
-    .trim();
-}
-
-export function shortTimelineLabel(label: string, kind: "trip" | "place") {
-  const value = cleanTimelineLabel(label, kind);
-  if (!value) return "";
-  const max = kind === "trip" ? 6 : 5;
-  return value.length > max ? value.slice(0, max) : value;
 }
 
 export function percentInDomain(value: number, domain: TimeIncisionDomain) {
@@ -103,48 +83,26 @@ export function buildTripSegments(segments: TimelineSegment[], selectedTripId: s
       end: segment.end,
       relatedId: segment.relatedId,
       active: segment.relatedId === selectedTripId,
-      label: segment.label,
-      shortLabel: shortTimelineLabel(segment.label, "trip"),
+      label: timelineLabel(segment),
+      shortLabel: segment.shortLabel ?? timelineLabel(segment),
     }));
 }
 
-export function buildPlaceSegments(places: PlaceNode[], selectedPlaceId?: string): TimeIncisionSegment[] {
-  return places
+export function buildProjectedPlaceSegments(segments: TimelineSegment[], selectedPlaceId?: string): TimeIncisionSegment[] {
+  return segments
+    .filter((segment) => segment.relatedType === "place" && segment.start && segment.end)
     .slice()
-    .sort((a, b) => a.timeRange.start.localeCompare(b.timeRange.start))
-    .map((place) => ({
-      id: `time-place-${place.id}`,
+    .sort((a, b) => String(a.start).localeCompare(String(b.start)))
+    .map((segment) => ({
+      id: segment.id,
       kind: "place" as const,
-      start: place.timeRange.start,
-      end: place.timeRange.end,
-      relatedId: place.id,
-      active: place.id === selectedPlaceId,
-      label: place.name,
-      shortLabel: shortTimelineLabel(place.name, "place"),
+      start: segment.start,
+      end: segment.end,
+      relatedId: segment.relatedId,
+      active: segment.relatedId === selectedPlaceId,
+      label: timelineLabel(segment),
+      shortLabel: segment.shortLabel ?? timelineLabel(segment),
     }));
-}
-
-export function buildPlaceSegmentsFromMarkers(markers: TravelMarker[], selectedPlaceId?: string): TimeIncisionSegment[] {
-  return markers
-    .filter((marker) => marker.kind === "place" && marker.startTime)
-    .slice()
-    .sort((a, b) => String(a.startTime).localeCompare(String(b.startTime)))
-    .map((marker) => {
-      const relatedId = marker.placeIds?.[0] ?? marker.id;
-      const active = selectedPlaceId ? Boolean(marker.placeIds?.includes(selectedPlaceId)) : false;
-      const start = marker.startTime ?? marker.endTime ?? "";
-      const end = marker.endTime ?? marker.startTime ?? "";
-      return {
-        id: `time-marker-${marker.id}`,
-        kind: "place" as const,
-        start,
-        end,
-        relatedId,
-        active,
-        label: marker.label,
-        shortLabel: shortTimelineLabel(marker.label, "place"),
-      };
-    });
 }
 
 function monthStart(year: number, monthIndex: number) {

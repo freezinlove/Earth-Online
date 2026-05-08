@@ -1,6 +1,9 @@
 import { ArrowLeft, CalendarDays, Image, MapPin, PencilLine, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
+import { capturedDateLabel, capturedTimeLabel, toCapturedDateTimeInput } from "@/domain/datetime";
+import { placeFocusIntent } from "@/domain/globeIntent";
+import { photoAltText, photoLabel, placeLabel, tripLabel } from "@/domain/labels";
 import type { Photo, PlaceNode } from "@/domain/models";
 import { useAppStore } from "@/store/appStore";
 
@@ -32,63 +35,23 @@ function getHighResolutionSource(source: string, width = 1800) {
     .replace(/([?&]q=)\d+/g, (_match, prefix: string) => `${prefix}90`);
 }
 
-function getRouteLabel(group: DayGroup) {
-  return group.places[0]?.name ?? "未标地点";
-}
-
-function getRoutePlace(group: DayGroup) {
-  return group.places[0];
-}
-
-const placeCountryHints: Record<string, string> = {
-  巴黎: "法国",
-  卢塞恩: "瑞士",
-  佛罗伦萨: "意大利",
-  大阪: "日本",
-  京都: "日本",
-  奈良: "日本",
-  成都: "中国",
-  康定: "中国",
-  理塘: "中国",
-  布拉格: "捷克",
-  维也纳: "奥地利",
-  哈尔施塔特: "奥地利",
-  萨尔茨堡: "奥地利",
-  布达佩斯: "匈牙利",
-  加米施: "德国",
-  艾布湖: "德国",
-};
-
-function inferCountry(group: { photos: Photo[]; places: PlaceNode[] }, countries: string[], fallback: string) {
-  const text = [
-    ...group.places.map((place) => place.name),
-    ...group.photos.flatMap((photo) => [photo.title, photo.fileName, photo.aiCaption, ...photo.tags]),
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  const direct = countries.find((country) => text.includes(country));
-  if (direct) return direct;
-
-  const hint = Object.entries(placeCountryHints).find(([keyword, country]) => text.includes(keyword) && countries.includes(country));
-  return hint?.[1] ?? fallback;
-}
-
 export function TripDetailPanel() {
   const selectedTripId = useAppStore((state) => state.selectedTripId);
   const trips = useAppStore((state) => state.trips);
   const allPhotos = useAppStore((state) => state.photos);
   const allPlaces = useAppStore((state) => state.placeNodes);
+  const dossierGroups = useAppStore((state) => state.dossierGroups);
   const allPendingItems = useAppStore((state) => state.pendingItems);
   const setActivePanel = useAppStore((state) => state.setActivePanel);
   const updateTripTitle = useAppStore((state) => state.updateTripTitle);
   const updatePhotoMetadata = useAppStore((state) => state.updatePhotoMetadata);
   const selectPhoto = useAppStore((state) => state.selectPhoto);
   const selectPlace = useAppStore((state) => state.selectPlace);
+  const setGlobeViewIntent = useAppStore((state) => state.setGlobeViewIntent);
   const movePhotoToTrip = useAppStore((state) => state.movePhotoToTrip);
   const acknowledgePendingItem = useAppStore((state) => state.acknowledgePendingItem);
   const trip = trips.find((item) => item.id === selectedTripId);
-  const [title, setTitle] = useState(trip?.title ?? "");
+  const [title, setTitle] = useState(tripLabel(trip));
   const [editingPhotoId, setEditingPhotoId] = useState<string>();
   const [openPhotoId, setOpenPhotoId] = useState<string>();
   const photos = useMemo(
@@ -96,58 +59,41 @@ export function TripDetailPanel() {
     [allPhotos, selectedTripId],
   );
   const places = useMemo(() => allPlaces.filter((place) => place.tripId === selectedTripId), [allPlaces, selectedTripId]);
+  const dossier = dossierGroups.find((group) => group.tripId === selectedTripId);
+  const photoById = useMemo(() => new Map(photos.map((photo) => [photo.id, photo])), [photos]);
   const placeById = useMemo(() => new Map(places.map((place) => [place.id, place])), [places]);
   const pendingItems = allPendingItems.filter((item) => item.relatedTripId === selectedTripId && item.status === "open");
-  const tripCountries = useMemo(() => trip?.countries ?? [], [trip?.countries]);
-
-  const dayGroups = useMemo<DayGroup[]>(() => {
-    const groups = photos.reduce<Record<string, Photo[]>>((result, photo) => {
-      const day = photo.capturedAt?.slice(0, 10) ?? "待补时间";
-      result[day] = [...(result[day] ?? []), photo];
-      return result;
-    }, {});
-
-    return Object.entries(groups)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([day, dayPhotos], groupIndex) => {
-        const dayPlaces = dayPhotos
-          .map((photo) => (photo.placeNodeId ? placeById.get(photo.placeNodeId) : undefined))
-          .filter((place): place is PlaceNode => Boolean(place))
-          .filter((place, index, list) => list.findIndex((item) => item.id === place.id) === index);
-
-        const fallbackCountry = tripCountries[Math.min(groupIndex, tripCountries.length - 1)] ?? tripCountries[0] ?? "未标国家";
-        const country = inferCountry({ photos: dayPhotos, places: dayPlaces }, tripCountries, fallbackCountry);
-
-        return { country, day, photos: dayPhotos, places: dayPlaces };
-      });
-  }, [photos, placeById, tripCountries]);
 
   const countryGroups = useMemo<CountryGroup[]>(() => {
-    return dayGroups.reduce<CountryGroup[]>((groups, day) => {
-      const current = groups[groups.length - 1];
-      if (current?.country === day.country) {
-        current.days.push(day);
-      } else {
-        groups.push({ country: day.country, days: [day] });
-      }
-      return groups;
-    }, []);
-  }, [dayGroups]);
+    return (dossier?.countries ?? []).map((countryGroup) => ({
+      country: countryGroup.country,
+      days: countryGroup.days.map((day) => ({
+        country: day.country,
+        day: day.day,
+        photos: day.photoIds.map((id) => photoById.get(id)).filter((photo): photo is Photo => Boolean(photo)),
+        places: day.placeIds.map((id) => placeById.get(id)).filter((place): place is PlaceNode => Boolean(place)),
+      })),
+    }));
+  }, [dossier?.countries, photoById, placeById]);
 
   useEffect(() => {
-    setTitle(trip?.title ?? "");
-  }, [trip?.title]);
+    setTitle(tripLabel(trip));
+  }, [trip]);
 
   if (!trip) return null;
 
   const heroPhoto = getPhotoSource(photos[0]) || getHighResolutionSource(trip.coverUrl, 2200);
+  const focusPlaceOnGlobe = (place: PlaceNode) => {
+    selectPlace(place.id);
+    setGlobeViewIntent(placeFocusIntent(place));
+  };
 
   return (
     <section className="trip-dossier fixed inset-0 z-[70] overflow-y-auto bg-background/94 backdrop-blur-2xl">
       <TripDossierBackButton onBack={() => setActivePanel("archive")} />
 
       <header className="trip-dossier-hero">
-        <img src={heroPhoto} alt={trip.title} className="trip-dossier-hero-image" />
+        <img src={heroPhoto} alt={tripLabel(trip)} className="trip-dossier-hero-image" />
         <div className="trip-dossier-hero-copy">
           <p className="text-xs font-semibold uppercase tracking-[0.34em] text-white/72">Travel Dossier</p>
           <label className="mt-4 block max-w-4xl">
@@ -192,18 +138,22 @@ export function TripDetailPanel() {
               <div className="trip-country-days">
                 {countryGroup.days.map((group, groupIndex) => (
                   <section
-                    key={group.day}
+                    key={`${group.day}-${group.places.map((place) => place.id).join("-") || group.photos.map((photo) => photo.id).join("-")}`}
                     className="trip-day-section"
                     style={{ "--trip-day-delay": `${(countryIndex + groupIndex) * 90}ms` } as CSSProperties}
                   >
                     <div className="trip-route-column">
                       <span className="trip-route-dot" />
-                      {getRoutePlace(group) ? (
-                        <button className="trip-route-label" onClick={() => selectPlace(getRoutePlace(group)!.id)} type="button">
-                          {getRouteLabel(group)}
-                        </button>
+                      {group.places.length ? (
+                        <div className="trip-route-labels">
+                          {group.places.map((place) => (
+                            <button className="trip-route-label" key={place.id} onClick={() => focusPlaceOnGlobe(place)} title={placeLabel(place)} type="button">
+                              {placeLabel(place)}
+                            </button>
+                          ))}
+                        </div>
                       ) : (
-                        <span className="trip-route-label">{getRouteLabel(group)}</span>
+                        <span className="trip-route-label">未标地点</span>
                       )}
                     </div>
 
@@ -215,14 +165,13 @@ export function TripDetailPanel() {
 
                       <div className="trip-photo-flow">
                         {group.photos.map((photo, index) => {
-                          const place = photo.placeNodeId ? placeById.get(photo.placeNodeId) : undefined;
                           return (
                             <article key={photo.id} className={index === 0 ? "trip-photo-piece trip-photo-piece-featured" : "trip-photo-piece"}>
                               <button className="block w-full text-left" onClick={() => setOpenPhotoId(photo.id)} type="button">
-                                <img src={getPhotoSource(photo)} alt={photo.title ?? photo.aiCaption} />
+                                <img src={getPhotoSource(photo)} alt={photoAltText(photo)} />
                                 <span className="trip-photo-caption">
-                                  <strong>{place?.name ?? photo.title ?? photo.fileName}</strong>
-                                  <em>{photo.capturedAt?.slice(11, 16) ?? photo.fileName}</em>
+                                  <strong>{photoLabel(photo)}</strong>
+                                  <em>{capturedTimeLabel(photo.capturedAt) || photo.fileName}</em>
                                 </span>
                               </button>
                             </article>
@@ -315,13 +264,13 @@ function PhotoDetailModal({
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="trip-photo-modal-media">
-          <img src={getHighResolutionSource(photo.storageUrl ?? photo.thumbnailUrl, 2200)} alt={photo.title ?? photo.aiCaption} />
+          <img src={getHighResolutionSource(photo.storageUrl ?? photo.thumbnailUrl, 2200)} alt={photoAltText(photo)} />
         </div>
         <div className="trip-photo-modal-copy">
           <div className="trip-photo-modal-heading">
             <div>
-              <p>{photo.capturedAt?.slice(0, 10) ?? "待补时间"}</p>
-              <h3>{photo.title ?? photo.fileName}</h3>
+              <p>{capturedDateLabel(photo.capturedAt)}</p>
+              <h3>{photoLabel(photo)}</h3>
             </div>
             <button className="trip-photo-modal-close" onClick={onClose} type="button" aria-label="关闭照片详情">
               <X size={17} />
@@ -362,10 +311,7 @@ function PhotoDetailModal({
 }
 
 function toLocalDateTime(value?: string) {
-  if (!value) return "";
-  const date = new Date(value);
-  const offset = date.getTimezoneOffset();
-  return new Date(date.getTime() - offset * 60000).toISOString().slice(0, 16);
+  return toCapturedDateTimeInput(value);
 }
 
 function PhotoMetadataEditor({

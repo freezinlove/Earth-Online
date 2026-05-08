@@ -10,6 +10,11 @@
     "generate:globe": "node scripts/generate_globe_assets.mjs",
     "build": "tsc -b && vite build",
     "test:mvp": "node scripts/mvp_acceptance.mjs",
+    "test:backend": "node scripts/backend_projection_checks.mjs",
+    "data:backup": "node scripts/data_backup.mjs",
+    "data:reset": "node scripts/data_reset.mjs",
+    "data:rebuild": "node scripts/data_rebuild_from_existing_photos.mjs",
+    "seed:demo": "node scripts/seed_demo.mjs",
     "lint": "eslint .",
     "preview": "vite preview --host 0.0.0.0"
   },

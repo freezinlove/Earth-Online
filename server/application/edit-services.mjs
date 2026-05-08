@@ -1,0 +1,251 @@
+import { safeArray } from "../domain/arrays.mjs";
+import { applyPendingDecision } from "../domain/pending-workflow.mjs";
+import { buildRoute } from "../domain/route-projector.mjs";
+import { rebuildTrips, rebuildTripsForPhotos } from "../domain/trip-rebuilder.mjs";
+
+export function createEditServices({ readState, writeState, responseState, makeId }) {
+  async function createTrip(body) {
+    const state = await readState();
+    const trip = {
+      id: makeId("manual-trip"),
+      title: body.title?.trim() || "未命名旅行档案",
+      dateRange: { start: body.start, end: body.end },
+      countries: ["待确认"],
+      cities: ["手动标记"],
+      coverUrl: "https://images.unsplash.com/photo-1488646953014-85cb44e25828?auto=format&fit=crop&w=1200&q=82",
+      photoCount: 0,
+      placeNodeCount: 0,
+      status: "draft",
+      source: "manual",
+    };
+    await writeState({ ...state, trips: [...state.trips, trip] });
+    return responseState();
+  }
+
+  async function patchTrip(id, body) {
+    const state = await readState();
+    await writeState({
+      ...state,
+      trips: state.trips.map((trip) =>
+        trip.id === id
+          ? {
+              ...trip,
+              title: body.title?.trim() || trip.title,
+              dateRange: body.dateRange ?? trip.dateRange,
+            }
+          : trip,
+      ),
+    });
+    return responseState();
+  }
+
+  async function createPlace(body) {
+    const state = await readState();
+    const now = new Date().toISOString();
+    const place = {
+      id: makeId("manual-place"),
+      tripId: body.tripId,
+      name: body.name?.trim() || "手动地点",
+      center: { lat: Number(body.lat), lng: Number(body.lng) },
+      photoIds: [],
+      timeRange: { start: now, end: now },
+      pending: false,
+    };
+    const placeNodes = [...state.placeNodes, place];
+    const tripPlaces = placeNodes.filter((item) => item.tripId === body.tripId);
+    const routes = state.routes.filter((route) => route.tripId !== body.tripId).concat(buildRoute(body.tripId, tripPlaces));
+    await writeState({ ...state, placeNodes, routes });
+    return responseState();
+  }
+
+  async function deletePlace(placeId) {
+    const state = await readState();
+    const place = state.placeNodes.find((item) => item.id === placeId);
+    if (!place) return responseState();
+    const placeNodes = state.placeNodes.filter((item) => item.id !== placeId);
+    const tripPlaces = placeNodes.filter((item) => item.tripId === place.tripId);
+    const routes = state.routes.filter((route) => route.tripId !== place.tripId).concat(buildRoute(place.tripId, tripPlaces));
+    await writeState({
+      ...state,
+      photos: state.photos.map((photo) => (photo.placeNodeId === placeId ? { ...photo, placeNodeId: undefined } : photo)),
+      placeNodes,
+      routes,
+    });
+    return responseState();
+  }
+
+  async function reorderPlaces(tripId, body) {
+    const state = await readState();
+    const order = safeArray(body.placeIds);
+    const owned = state.placeNodes.filter((place) => place.tripId === tripId);
+    const byId = new Map(owned.map((place) => [place.id, place]));
+    const orderedOwned = order.map((id) => byId.get(id)).filter(Boolean);
+    for (const place of owned) {
+      if (!orderedOwned.some((item) => item.id === place.id)) orderedOwned.push(place);
+    }
+    const other = state.placeNodes.filter((place) => place.tripId !== tripId);
+    const placeNodes = [...other, ...orderedOwned];
+    const routes = state.routes.filter((route) => route.tripId !== tripId).concat(buildRoute(tripId, orderedOwned));
+    await writeState({ ...state, placeNodes, routes });
+    return responseState();
+  }
+
+  async function movePhoto(photoId, body) {
+    const state = await readState();
+    const beforeTripId = state.photos.find((photo) => photo.id === photoId)?.tripId;
+    const patched = {
+      ...state,
+      photos: state.photos.map((photo) => (photo.id === photoId ? { ...photo, tripId: body.tripId, placeNodeId: undefined } : photo)),
+      placeNodes: state.placeNodes.map((place) => ({ ...place, photoIds: place.photoIds.filter((id) => id !== photoId) })),
+    };
+    await writeState(rebuildTrips(patched, new Set([beforeTripId, body.tripId].filter(Boolean)), { makeId }));
+    return responseState();
+  }
+
+  async function patchPhoto(photoId, body) {
+    const state = await readState();
+    const lat = body.location?.lat === "" || body.location?.lat === undefined ? undefined : Number(body.location.lat);
+    const lng = body.location?.lng === "" || body.location?.lng === undefined ? undefined : Number(body.location.lng);
+    const hasLocation = Number.isFinite(lat) && Number.isFinite(lng);
+    const patched = {
+      ...state,
+      photos: state.photos.map((photo) =>
+        photo.id === photoId
+          ? {
+              ...photo,
+              capturedAt: body.capturedAt === "" ? undefined : body.capturedAt ?? photo.capturedAt,
+              location: body.location === undefined ? photo.location : hasLocation ? { lat, lng } : undefined,
+              tags: Array.isArray(body.tags) ? body.tags.map(String).filter(Boolean) : photo.tags,
+              pendingReason: hasLocation && (body.capturedAt ?? photo.capturedAt) ? undefined : photo.pendingReason,
+            }
+          : photo,
+      ),
+    };
+    await writeState(rebuildTripsForPhotos(patched, new Set([photoId]), { makeId }));
+    return responseState();
+  }
+
+  async function bindPhoto(photoId, body) {
+    const state = await readState();
+    const place = state.placeNodes.find((item) => item.id === body.placeId);
+    const beforeTripId = state.photos.find((photo) => photo.id === photoId)?.tripId;
+    const patched = {
+      ...state,
+      photos: state.photos.map((photo) =>
+        photo.id === photoId
+          ? { ...photo, tripId: place?.tripId ?? photo.tripId, placeNodeId: place?.id, location: place?.center ?? photo.location, pendingReason: undefined }
+          : photo,
+      ),
+      placeNodes: state.placeNodes.map((item) => ({
+        ...item,
+        photoIds: item.id === body.placeId ? Array.from(new Set([...item.photoIds, photoId])) : item.photoIds.filter((id) => id !== photoId),
+        pending: item.id === body.placeId ? false : item.pending,
+      })),
+    };
+    await writeState(rebuildTrips(patched, new Set([beforeTripId, place?.tripId].filter(Boolean)), { makeId }));
+    return responseState();
+  }
+
+  async function updatePending(id, body) {
+    const state = await readState();
+    const pending = state.pendingItems.find((item) => item.id === id);
+    const applied = applyPendingDecision(state, id, { accepted: Boolean(body.accepted) });
+    const rebuilt = body.accepted ? rebuildTripsForPhotos(applied, new Set(pending?.relatedPhotoIds ?? []), { makeId }) : applied;
+    await writeState(rebuilt);
+    return responseState();
+  }
+
+  async function confirmPhotoLocation(photoId, body = {}) {
+    const state = await readState();
+    const photo = state.photos.find((item) => item.id === photoId);
+    if (!photo) return responseState();
+    const candidates = photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? [];
+    const candidate = candidates.find((item) => item.id === body.candidateId) ?? candidates.find((item) => item.id === photo.locationResolution?.candidateId) ?? candidates[0];
+    if (!candidate?.point) throw new Error("没有可确认的地点候选。");
+    const patched = {
+      ...state,
+      photos: state.photos.map((item) =>
+        item.id === photoId
+          ? {
+              ...item,
+              location: candidate.point,
+              pendingReason: undefined,
+              locationResolution: {
+                ...(item.locationResolution ?? {}),
+                status: "confirmed",
+                effectiveName: candidate.name,
+                effectivePoint: candidate.point,
+                confidence: candidate.confidence,
+                source: candidate.source ?? "ai_vision",
+                candidateId: candidate.id,
+                candidates,
+                requiresUserAction: false,
+                updatedAt: new Date().toISOString(),
+              },
+            }
+          : item,
+      ),
+      pendingItems: state.pendingItems.map((item) =>
+        item.relatedPhotoIds?.includes(photoId) && item.type === "confirm_location_candidate" ? { ...item, status: "accepted" } : item,
+      ),
+    };
+    await writeState(rebuildTripsForPhotos(patched, new Set([photoId]), { makeId }));
+    return responseState();
+  }
+
+  async function rejectPhotoLocation(photoId, body = {}) {
+    const state = await readState();
+    const patched = {
+      ...state,
+      photos: state.photos.map((photo) => {
+        if (photo.id !== photoId) return photo;
+        const candidates = photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? [];
+        return {
+          ...photo,
+          locationResolution: {
+            ...(photo.locationResolution ?? {}),
+            status: "rejected",
+            rejectedCandidateId: body.candidateId ?? photo.locationResolution?.candidateId,
+            candidates,
+            requiresUserAction: false,
+            updatedAt: new Date().toISOString(),
+          },
+        };
+      }),
+      pendingItems: state.pendingItems.map((item) =>
+        item.relatedPhotoIds?.includes(photoId) && item.type === "confirm_location_candidate" ? { ...item, status: "ignored" } : item,
+      ),
+    };
+    await writeState(patched);
+    return responseState();
+  }
+
+  async function tripProjection(tripId) {
+    const snapshot = await responseState();
+    return {
+      trip: snapshot.trips.find((trip) => trip.id === tripId),
+      photos: snapshot.photos.filter((photo) => photo.tripId === tripId),
+      placeNodes: snapshot.placeNodes.filter((place) => place.tripId === tripId),
+      routes: snapshot.routes.filter((route) => route.tripId === tripId),
+      timelineSegments: snapshot.timelineSegments.filter((segment) => segment.relatedId === tripId || snapshot.placeNodes.some((place) => place.tripId === tripId && place.id === segment.relatedId)),
+      globeMarkers: snapshot.globeMarkers.filter((marker) => marker.tripId === tripId),
+      dossierGroup: snapshot.dossierGroups.find((group) => group.tripId === tripId),
+      pendingItems: snapshot.pendingItems.filter((item) => item.relatedTripId === tripId),
+    };
+  }
+
+  return {
+    createTrip,
+    patchTrip,
+    createPlace,
+    deletePlace,
+    reorderPlaces,
+    movePhoto,
+    patchPhoto,
+    bindPhoto,
+    updatePending,
+    confirmPhotoLocation,
+    rejectPhotoLocation,
+    tripProjection,
+  };
+}

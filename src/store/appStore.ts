@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import type { ID, ImportBatch, PendingItem, Photo, PlaceNode, Route, SearchResult, TimelineSegment, Trip } from "@/domain/models";
+import { capturedDateLabel, normalizeCapturedDateTimeInput } from "@/domain/datetime";
+import type { DossierTripGroup, GlobeMarker, ID, ImportBatch, PendingItem, Photo, PlaceNode, Route, SearchDocument, SearchResult, TimelineSegment, Trip } from "@/domain/models";
 import { apiClient, type AppSnapshot } from "@/services/apiClient";
 
 export type AppPanel = "globe" | "archive" | "tripDetail" | "search" | "import" | "settings" | "upload" | "manual";
@@ -12,7 +13,7 @@ export type GlobeViewIntent =
   | { source: "manual" };
 
 function toDateInput(date?: string) {
-  return date ? date.slice(0, 10) : new Date().toISOString().slice(0, 10);
+  return date ? capturedDateLabel(date) : new Date().toISOString().slice(0, 10);
 }
 
 function applySnapshot(snapshot: AppSnapshot) {
@@ -24,6 +25,9 @@ function applySnapshot(snapshot: AppSnapshot) {
     importBatches: snapshot.importBatches,
     pendingItems: snapshot.pendingItems,
     timelineSegments: snapshot.timelineSegments,
+    globeMarkers: snapshot.globeMarkers ?? [],
+    dossierGroups: snapshot.dossierGroups ?? [],
+    searchDocuments: snapshot.searchDocuments ?? [],
   };
 }
 
@@ -51,6 +55,9 @@ interface AppState {
   importBatches: ImportBatch[];
   pendingItems: PendingItem[];
   timelineSegments: TimelineSegment[];
+  globeMarkers: GlobeMarker[];
+  dossierGroups: DossierTripGroup[];
+  searchDocuments: SearchDocument[];
   loadState: () => Promise<void>;
   setActivePanel: (panel: AppPanel) => void;
   selectTrip: (tripId: ID, panel?: AppPanel) => void;
@@ -83,8 +90,8 @@ interface AppState {
 
 export const useAppStore = create<AppState>((set, get) => ({
   activePanel: "globe",
-  selectedTripId: "trip-kansai-2025",
-  cursorDate: "2025-10-04",
+  selectedTripId: "",
+  cursorDate: new Date().toISOString().slice(0, 10),
   timelineZoom: "global",
   globeViewIntent: { source: "manual" },
   searchQuery: "",
@@ -102,14 +109,19 @@ export const useAppStore = create<AppState>((set, get) => ({
   importBatches: [],
   pendingItems: [],
   timelineSegments: [],
+  globeMarkers: [],
+  dossierGroups: [],
+  searchDocuments: [],
   loadState: async () => {
     set({ isLoading: true, error: undefined });
     try {
       const snapshot = await apiClient.getState();
+      const selectedTripExists = snapshot.trips.some((trip) => trip.id === get().selectedTripId);
+      const nextSelectedTripId = selectedTripExists ? get().selectedTripId : snapshot.trips[0]?.id ?? "";
       set((state) => ({
         ...applySnapshot(snapshot),
-        selectedTripId: state.selectedTripId || snapshot.trips[0]?.id || "",
-        cursorDate: state.cursorDate || snapshot.trips[0]?.dateRange.start || new Date().toISOString().slice(0, 10),
+        selectedTripId: nextSelectedTripId,
+        cursorDate: selectedTripExists ? state.cursorDate : snapshot.trips[0]?.dateRange.start || new Date().toISOString().slice(0, 10),
         isLoading: false,
       }));
     } catch (error) {
@@ -254,7 +266,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   updatePhotoMetadata: async (photoId, capturedAt, lat, lng, tags) => {
     const snapshot = await apiClient.updatePhoto(photoId, {
-      capturedAt: capturedAt ? new Date(capturedAt).toISOString() : "",
+      capturedAt: normalizeCapturedDateTimeInput(capturedAt),
       location: { lat, lng },
       tags: tags
         .split(/[,\s，、/]+/)

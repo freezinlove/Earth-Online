@@ -1675,9 +1675,15 @@ input {
   box-shadow: none;
 }
 
+.trip-route-labels {
+  display: grid;
+  max-width: 112px;
+  gap: 8px;
+  margin-top: -6px;
+}
+
 .trip-route-label {
-  max-width: 86px;
-  margin-top: -4px;
+  max-width: 112px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -2104,6 +2110,11 @@ input {
   .trip-route-label {
     max-width: 34px;
     font-size: 10px;
+  }
+
+  .trip-route-labels {
+    max-width: 40px;
+    gap: 6px;
   }
 
   .trip-photo-modal {

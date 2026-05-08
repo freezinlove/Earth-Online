@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import { ArrowUpRight, CalendarDays, Image, MapPin } from "lucide-react";
+import { countryLabel, tripLabel } from "@/domain/labels";
 import type { Trip } from "@/domain/models";
 import { useAppStore } from "@/store/appStore";
 
@@ -71,20 +72,20 @@ export function ArchiveDrawer({ isClosing = false }: { isClosing?: boolean }) {
                       type="button"
                     >
                       <span className="archive-entry-media block h-40 w-full overflow-hidden rounded-lg bg-surface-container md:h-32">
-                        <img src={trip.coverUrl} alt={trip.title} className="h-full w-full object-cover" />
+                        <img src={trip.coverUrl} alt={tripLabel(trip)} className="h-full w-full object-cover" />
                       </span>
 
                       <span className="flex min-w-0 flex-col gap-4">
                         <span>
                           <span className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                            <h3 className="archive-entry-title font-serif text-2xl font-semibold leading-tight text-on-surface md:text-3xl">{trip.title}</h3>
+                            <h3 className="archive-entry-title font-serif text-2xl font-semibold leading-tight text-on-surface md:text-3xl">{tripLabel(trip)}</h3>
                             <span className="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-outline">
                               <span className={`h-1.5 w-1.5 rounded-full ${status.tone}`} />
                               {status.label}
                             </span>
                           </span>
                           <span className="mt-3 block text-sm leading-6 text-on-surface-variant">
-                            {trip.countries.join(" / ")} · {trip.cities.join(" / ")}
+                            {trip.countries.map(countryLabel).join(" / ")} · {trip.cities.join(" / ")}
                           </span>
                         </span>
 
