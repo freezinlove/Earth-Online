@@ -20,6 +20,7 @@ export function createImportServices({
   readVectorIndex,
   repository,
   responseState,
+  secretProvider,
   writeState,
   writeVectorIndex,
 }) {
@@ -427,6 +428,7 @@ export function createImportServices({
   async function analyzePhoto({ fileName, mime, dataUrl, preset, location, allowCloud }) {
     return analyzeTravelImage({
       rootDir: paths.rootDir,
+      secretProvider,
       fileName,
       mime,
       dataUrl,

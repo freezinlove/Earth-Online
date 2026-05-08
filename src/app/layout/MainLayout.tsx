@@ -22,7 +22,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
     to: AppPanel;
   } | null>(null);
   const motionTimer = useRef<number | undefined>(undefined);
-  const showChrome = activePanel === "globe";
+  const homeState = activePanel === "globe" ? "active" : "covered";
   const openPendingCount = pendingItems.filter((item) => item.status === "open").length;
   const moveToPanel = (panel: AppPanel) => {
     const fromIndex = navPanelOrder.indexOf(activePanel);
@@ -51,14 +51,11 @@ export function MainLayout({ children }: { children: ReactNode }) {
     return () => window.clearTimeout(motionTimer.current);
   }, [indicatorMotion]);
 
-  const showPrimaryNav = activePanel !== "tripDetail";
-
   return (
-    <div className="relative min-h-screen overflow-hidden bg-background text-on-surface">
+    <div className="app-shell relative min-h-screen overflow-hidden bg-background text-on-surface" data-home-state={homeState}>
       <div className="paper-grain" />
 
-      {showChrome ? (
-        <header className="pointer-events-none fixed inset-x-0 top-0 z-40 flex items-start justify-between px-5 py-5 md:px-8 md:py-7">
+      <header className="home-chrome pointer-events-none fixed inset-x-0 top-0 z-40 flex items-start justify-between px-5 py-5 md:px-8 md:py-7" data-home-state={homeState}>
           <button
             className="pointer-events-auto rounded-full px-2 py-1 text-left font-serif text-2xl font-bold text-primary md:text-[28px]"
             onClick={() => setActivePanel("globe")}
@@ -90,9 +87,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
             </button>
           </div>
         </header>
-      ) : null}
 
-      {showPrimaryNav ? (
       <nav className="fixed bottom-5 left-1/2 z-[60] flex -translate-x-1/2 items-center gap-1.5 md:bottom-auto md:left-8 md:top-1/2 md:-translate-x-0 md:-translate-y-1/2 md:flex-col">
         <button
           className={clsx(
@@ -166,7 +161,6 @@ export function MainLayout({ children }: { children: ReactNode }) {
           );
         })}
       </nav>
-      ) : null}
 
       <main className="relative z-10 min-h-screen">{children}</main>
     </div>

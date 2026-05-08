@@ -1,14 +1,14 @@
 import { projectState } from "../domain/state-projector.mjs";
 import { cosine } from "../domain/vectors.mjs";
 
-export function createSearchService({ readState, readVectorIndex, embedSearchQuery, rootDir }) {
+export function createSearchService({ readState, readVectorIndex, embedSearchQuery, rootDir, secretProvider }) {
   async function search(params) {
     const q = params.get("q") ?? "";
     const state = await readState();
     const projection = projectState(state);
     const vectorIndex = await readVectorIndex();
     const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
-    const queryVector = await embedSearchQuery(q, { rootDir, allowCloud: true });
+    const queryVector = await embedSearchQuery(q, { rootDir, allowCloud: true, secretProvider });
     const tripId = params.get("tripId") || undefined;
     const placeId = params.get("placeId") || undefined;
     const date = params.get("date") || undefined;

@@ -1,9 +1,6 @@
 import path from "node:path";
 import { deterministicVector } from "../domain/vectors.mjs";
-import { validatePhotoAnalysisResult } from "./ai-schemas.mjs";
-import { embedPhotoEvidence, embedSearchQuery, readProvidedApiKey } from "./embedding-service.mjs";
-import { loadPrompt } from "./prompt-registry.mjs";
-import { qwenChatCompletion } from "./qwen-client.mjs";
+import { getAiProvider, listAiProviders } from "./provider-registry.mjs";
 
 function inferTags(fileName, preset) {
   const lower = fileName.toLowerCase();
@@ -18,56 +15,12 @@ function inferTags(fileName, preset) {
   return Array.from(new Set([...(preset?.tags ?? []), ...sceneTags])).slice(0, 8);
 }
 
-function parseJsonObject(text) {
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) return undefined;
-  try {
-    return JSON.parse(match[0]);
-  } catch {
-    return undefined;
-  }
-}
-
-async function chatAnalyzeImage({ rootDir, apiKey, fileName, mime, dataUrl, preset, geoContext }) {
-  const prompt = await loadPrompt("photoAnalysis");
-  const content = await qwenChatCompletion({
-    rootDir,
-    apiKey,
-    messages: [
-      {
-        role: "system",
-        content: prompt.content,
-      },
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: [
-              `分析这张旅行照片，文件名：${fileName}。`,
-              `EXIF/GPS 地理上下文：${JSON.stringify(geoContext ?? { cityHint: preset?.city ?? "未知" })}。`,
-              "请给这张照片起一个简短中文名，并给出 6-10 个中文搜索标签。标签要具体，例如「哈尔施塔特湖畔」「布达佩斯多瑙河」「维也纳街景」「查理大桥」「山间湖泊」「教堂内景」「咖啡馆甜点」「蓝天积云」。",
-              "如果 GPS 城市候选和画面明显冲突，可以保留画面判断，但不要把一个城市标签强行套到另一座城市；caption 里可以写“GPS 位于某地附近”。",
-            ].join("\n"),
-          },
-          { type: "image_url", image_url: { url: dataUrl || `data:${mime};base64,` } },
-        ],
-      },
-    ],
-  });
-  const parsed = parseJsonObject(typeof content === "string" ? content : JSON.stringify(content));
-  return {
-    ...validatePhotoAnalysisResult(parsed, preset),
-    promptId: prompt.id,
-    promptVersion: prompt.version,
-  };
-}
-
-export async function analyzeTravelImage({ rootDir = process.cwd(), fileName, mime, dataUrl, preset, geoContext, allowCloud = true }) {
+function fallbackPhotoAnalysis({ fileName, preset }) {
   const fallbackTags = inferTags(fileName, preset);
   const fallbackTitle = preset?.city && !preset.city.includes("待确认") ? `${preset.city}记忆` : path.basename(fileName, path.extname(fileName));
   const fallbackCaption = `${preset?.city ?? "未知地点"}附近的旅行照片，系统已根据 GPS/文件名生成「${fallbackTags.slice(0, 3).join(" / ")}」等搜索标签，画面细节需要云端 AI 进一步确认。`;
-  const fallback = {
+
+  return {
     provider: "qwen-mock",
     promptId: "photo-analysis",
     promptVersion: "1.0.0",
@@ -82,34 +35,76 @@ export async function analyzeTravelImage({ rootDir = process.cwd(), fileName, mi
     embeddingDimension: 64,
     fallbackReason: undefined,
   };
+}
+
+export { listAiProviders };
+
+export async function analyzeTravelImage({
+  rootDir = process.cwd(),
+  secretProvider,
+  imageAnalysisProviderId,
+  embeddingProviderId,
+  fileName,
+  mime,
+  dataUrl,
+  preset,
+  geoContext,
+  allowCloud = true,
+}) {
+  const fallback = fallbackPhotoAnalysis({ fileName, preset });
 
   if (!allowCloud) return fallback;
   try {
-    const apiKey = readProvidedApiKey(rootDir);
-    const vision = await chatAnalyzeImage({ rootDir, apiKey, fileName, mime, dataUrl, preset, geoContext });
+    const imageProvider = getAiProvider("imageAnalysis", imageAnalysisProviderId);
+    const embeddingProvider = getAiProvider("embedding", embeddingProviderId);
+    if (!imageProvider) throw new Error("no image analysis provider configured");
+    if (!embeddingProvider) throw new Error("no embedding provider configured");
+
+    const vision = await imageProvider.analyzeImage({ rootDir, secretProvider, fileName, mime, dataUrl, preset, geoContext });
     const text = [vision.caption, ...vision.tags].join(" ");
-    const { embedding, embeddingProvider } = await embedPhotoEvidence({ rootDir, apiKey, fileName, dataUrl, text });
+    let embeddingResult;
+    try {
+      embeddingResult = await embeddingProvider.embed({ rootDir, secretProvider, fileName, dataUrl, text });
+    } catch {
+      embeddingResult = {
+        embedding: deterministicVector([fileName, text].filter(Boolean).join(" ")),
+        embeddingProvider: "deterministic",
+      };
+    }
+
     return {
-      provider: "qwen",
+      provider: vision.provider ?? imageProvider.id,
       promptId: vision.promptId,
       promptVersion: vision.promptVersion,
-      title: vision.title || fallbackTitle,
+      title: vision.title || fallback.title,
       tags: vision.tags,
       caption: vision.caption,
       visiblePlaceNames: vision.visiblePlaceNames,
       locationCandidates: vision.locationCandidates,
       uncertainties: vision.uncertainties,
-      embedding,
-      embeddingProvider,
-      embeddingDimension: embedding.length,
+      embedding: embeddingResult.embedding,
+      embeddingProvider: embeddingResult.embeddingProvider,
+      embeddingDimension: embeddingResult.embedding.length,
       fallbackReason: undefined,
     };
   } catch (error) {
     return {
       ...fallback,
-      fallbackReason: error instanceof Error ? error.message : "qwen provider failed",
+      fallbackReason: error instanceof Error ? error.message : "AI provider failed",
     };
   }
 }
 
-export { embedSearchQuery };
+export async function embedSearchQuery(query, { rootDir = process.cwd(), allowCloud = true, secretProvider, embeddingProviderId } = {}) {
+  if (allowCloud) {
+    try {
+      const embeddingProvider = getAiProvider("embedding", embeddingProviderId);
+      if (!embeddingProvider) throw new Error("no embedding provider configured");
+      const result = await embeddingProvider.embed({ rootDir, secretProvider, fileName: "search-query", text: query });
+      return result.embedding;
+    } catch {
+      // fall back below
+    }
+  }
+  return deterministicVector(query);
+}

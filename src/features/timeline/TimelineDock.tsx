@@ -69,6 +69,7 @@ function TimeTick({ tick, left }: { tick: TimeIncisionTick; left: number }) {
 }
 
 export function TimelineDock() {
+  const activePanel = useAppStore((state) => state.activePanel);
   const [level, setLevel] = useState<TimelineLevel>("global");
   const [primedTripId, setPrimedTripId] = useState<string>();
   const selectedTripId = useAppStore((state) => state.selectedTripId);
@@ -80,6 +81,7 @@ export function TimelineDock() {
   const selectPlace = useAppStore((state) => state.selectPlace);
   const clearPlaceSelection = useAppStore((state) => state.clearPlaceSelection);
   const setGlobeViewIntent = useAppStore((state) => state.setGlobeViewIntent);
+  const homeState = activePanel === "globe" ? "active" : "covered";
 
   const selectedTrip = trips.find((trip) => trip.id === selectedTripId);
   const domain = useMemo(() => (level === "global" ? buildGlobalDomain(trips) : buildTripDomain(selectedTrip)), [level, selectedTrip, trips]);
@@ -133,7 +135,7 @@ export function TimelineDock() {
   };
 
   return (
-    <section className="time-incision-shell" aria-label="旅行时间刻痕">
+    <section className="time-incision-shell" data-home-state={homeState} aria-label="旅行时间刻痕">
       <div className="time-incision-rail" aria-hidden="true" />
       <div className="time-incision-ticks">
         {ticks.map((tick) => (

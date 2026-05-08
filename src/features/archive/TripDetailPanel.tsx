@@ -35,7 +35,7 @@ function getHighResolutionSource(source: string, width = 1800) {
     .replace(/([?&]q=)\d+/g, (_match, prefix: string) => `${prefix}90`);
 }
 
-export function TripDetailPanel() {
+export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) {
   const selectedTripId = useAppStore((state) => state.selectedTripId);
   const trips = useAppStore((state) => state.trips);
   const allPhotos = useAppStore((state) => state.photos);
@@ -89,7 +89,7 @@ export function TripDetailPanel() {
   };
 
   return (
-    <section className="trip-dossier fixed inset-0 z-[70] overflow-y-auto bg-background/94 backdrop-blur-2xl">
+    <section className="trip-dossier fixed inset-0 z-[70] overflow-y-auto bg-background/94 backdrop-blur-2xl" data-state={isClosing ? "closing" : "open"}>
       <TripDossierBackButton onBack={() => setActivePanel("archive")} />
 
       <header className="trip-dossier-hero">

@@ -12,14 +12,21 @@ import { useAppStore } from "@/store/appStore";
 import { useEffect, useRef, useState } from "react";
 
 const archiveExitDuration = 520;
+const tripDetailExitDuration = 420;
+const settingsExitDuration = 420;
 
 export function App() {
   const activePanel = useAppStore((state) => state.activePanel);
   const loadState = useAppStore((state) => state.loadState);
   const [shouldRenderArchive, setShouldRenderArchive] = useState(activePanel === "archive");
   const [isArchiveClosing, setIsArchiveClosing] = useState(false);
+  const [shouldRenderTripDetail, setShouldRenderTripDetail] = useState(activePanel === "tripDetail");
+  const [isTripDetailClosing, setIsTripDetailClosing] = useState(false);
+  const [shouldRenderSettings, setShouldRenderSettings] = useState(activePanel === "settings");
+  const [isSettingsClosing, setIsSettingsClosing] = useState(false);
   const archiveExitTimer = useRef<number | undefined>(undefined);
-  const isArchiveExitBlocking = shouldRenderArchive && activePanel !== "archive";
+  const tripDetailExitTimer = useRef<number | undefined>(undefined);
+  const settingsExitTimer = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     void loadState();
@@ -45,17 +52,57 @@ export function App() {
     return () => window.clearTimeout(archiveExitTimer.current);
   }, [activePanel, shouldRenderArchive]);
 
+  useEffect(() => {
+    window.clearTimeout(settingsExitTimer.current);
+
+    if (activePanel === "settings") {
+      setShouldRenderSettings(true);
+      setIsSettingsClosing(false);
+      return;
+    }
+
+    if (shouldRenderSettings) {
+      setIsSettingsClosing(true);
+      settingsExitTimer.current = window.setTimeout(() => {
+        setShouldRenderSettings(false);
+        setIsSettingsClosing(false);
+      }, settingsExitDuration);
+    }
+
+    return () => window.clearTimeout(settingsExitTimer.current);
+  }, [activePanel, shouldRenderSettings]);
+
+  useEffect(() => {
+    window.clearTimeout(tripDetailExitTimer.current);
+
+    if (activePanel === "tripDetail") {
+      setShouldRenderTripDetail(true);
+      setIsTripDetailClosing(false);
+      return;
+    }
+
+    if (shouldRenderTripDetail) {
+      setIsTripDetailClosing(true);
+      tripDetailExitTimer.current = window.setTimeout(() => {
+        setShouldRenderTripDetail(false);
+        setIsTripDetailClosing(false);
+      }, tripDetailExitDuration);
+    }
+
+    return () => window.clearTimeout(tripDetailExitTimer.current);
+  }, [activePanel, shouldRenderTripDetail]);
+
   return (
     <MainLayout>
       <EarthStage />
       <TimelineDock />
       {shouldRenderArchive ? <ArchiveDrawer isClosing={isArchiveClosing} /> : null}
-      {!isArchiveExitBlocking && activePanel === "tripDetail" ? <TripDetailPanel /> : null}
-      {!isArchiveExitBlocking && activePanel === "import" ? <ImportPanel /> : null}
-      {!isArchiveExitBlocking && activePanel === "upload" ? <UploadPhotosPanel /> : null}
-      {!isArchiveExitBlocking && activePanel === "search" ? <SearchPanel /> : null}
-      {!isArchiveExitBlocking && activePanel === "settings" ? <SettingsPanel /> : null}
-      {!isArchiveExitBlocking && activePanel === "manual" ? <ManualEditorPanel /> : null}
+      {shouldRenderTripDetail ? <TripDetailPanel isClosing={isTripDetailClosing} /> : null}
+      {activePanel === "import" ? <ImportPanel /> : null}
+      {activePanel === "upload" ? <UploadPhotosPanel /> : null}
+      {activePanel === "search" ? <SearchPanel /> : null}
+      {shouldRenderSettings ? <SettingsPanel isClosing={isSettingsClosing} /> : null}
+      {activePanel === "manual" ? <ManualEditorPanel /> : null}
     </MainLayout>
   );
 }

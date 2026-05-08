@@ -1,79 +1,161 @@
-import { Check, Database, Globe2, Palette, Shield, X } from "lucide-react";
-import { useState } from "react";
-import { useAppStore } from "@/store/appStore";
+import { Check, KeyRound, LoaderCircle, Trash2 } from "lucide-react";
+import type { CSSProperties } from "react";
+import { useEffect, useState } from "react";
+import { apiClient, type LocalAiCredential, type LocalAiSettings } from "@/services/apiClient";
 
-const preferences = [
-  { icon: Database, title: "本地优先", text: "照片、旅行档案与向量索引已经写入本地应用管理目录，UI 只通过服务层访问。" },
-  { icon: Globe2, title: "地球视图", text: "启动后回到上次查看的旅行位置与时间轴段落。" },
-  { icon: Palette, title: "温暖纸面", text: "使用低对比度纸张背景和柔和浮层，减少长时间浏览疲劳。" },
+type SecretField = keyof LocalAiSettings;
+type FieldStatus = "idle" | "loading" | "saving" | "saved" | "cleared" | "unchanged" | "error";
+
+const fields: Array<{
+  key: SecretField;
+  title: string;
+  model: string;
+}> = [
+  { key: "qwenChatApiKey", title: "Qwen 3.5 Flash", model: "LLM" },
+  { key: "qwenEmbeddingApiKey", title: "Qwen Vision Embedding", model: "Embedding" },
 ];
 
-export function SettingsPanel() {
-  const setActivePanel = useAppStore((state) => state.setActivePanel);
-  const aiCloudEnabled = useAppStore((state) => state.aiCloudEnabled);
-  const setAiCloudEnabled = useAppStore((state) => state.setAiCloudEnabled);
-  const [restoreView, setRestoreView] = useState(true);
+const emptyCredential: LocalAiCredential = { isSet: false, preview: "", source: "none" };
+
+const sourceLabel: Record<LocalAiCredential["source"], string> = {
+  env: "来自 .env",
+  local: "已保存在本机",
+  none: "未设置",
+};
+
+const statusText: Record<FieldStatus, string> = {
+  cleared: "已清除",
+  error: "保存失败",
+  idle: "",
+  loading: "读取中",
+  saved: "已保存",
+  saving: "保存中",
+  unchanged: "未修改",
+};
+
+export function SettingsPanel({ isClosing = false }: { isClosing?: boolean }) {
+  const [settings, setSettings] = useState<LocalAiSettings>();
+  const [values, setValues] = useState<Record<SecretField, string>>({
+    qwenChatApiKey: "",
+    qwenEmbeddingApiKey: "",
+  });
+  const [statuses, setStatuses] = useState<Record<SecretField, FieldStatus>>({
+    qwenChatApiKey: "loading",
+    qwenEmbeddingApiKey: "loading",
+  });
+
+  useEffect(() => {
+    let alive = true;
+
+    apiClient
+      .getLocalAiSettings()
+      .then((nextSettings) => {
+        if (!alive) return;
+        setSettings(nextSettings);
+        setStatuses({ qwenChatApiKey: "idle", qwenEmbeddingApiKey: "idle" });
+      })
+      .catch(() => {
+        if (!alive) return;
+        setStatuses({ qwenChatApiKey: "error", qwenEmbeddingApiKey: "error" });
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const updateValue = (key: SecretField, value: string) => {
+    setValues((current) => ({ ...current, [key]: value }));
+    setStatuses((current) => ({ ...current, [key]: "idle" }));
+  };
+
+  const saveField = async (key: SecretField) => {
+    const nextValue = values[key].trim();
+    if (!nextValue) {
+      setStatuses((current) => ({ ...current, [key]: "unchanged" }));
+      return;
+    }
+
+    setStatuses((current) => ({ ...current, [key]: "saving" }));
+    try {
+      const nextSettings = await apiClient.updateLocalAiSettings({ [key]: nextValue });
+      setSettings(nextSettings);
+      setValues((current) => ({ ...current, [key]: "" }));
+      setStatuses((current) => ({ ...current, [key]: "saved" }));
+    } catch {
+      setStatuses((current) => ({ ...current, [key]: "error" }));
+    }
+  };
+
+  const clearField = async (key: SecretField) => {
+    setStatuses((current) => ({ ...current, [key]: "saving" }));
+    try {
+      const nextSettings = await apiClient.updateLocalAiSettings({ [key]: "" });
+      setSettings(nextSettings);
+      setValues((current) => ({ ...current, [key]: "" }));
+      setStatuses((current) => ({ ...current, [key]: "cleared" }));
+    } catch {
+      setStatuses((current) => ({ ...current, [key]: "error" }));
+    }
+  };
 
   return (
-    <section className="fixed inset-0 z-[70] overflow-y-auto bg-background/94 px-5 py-8 backdrop-blur-2xl md:px-24 md:py-12">
+    <section
+      className="settings-panel fixed inset-0 z-[70] overflow-y-auto bg-background/94 px-5 py-8 backdrop-blur-2xl md:px-24 md:py-12"
+      data-state={isClosing ? "closing" : "open"}
+    >
       <div className="mx-auto max-w-5xl">
-        <div className="mb-10 flex items-start justify-between gap-6">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.34em] text-outline">Local Preferences</p>
-            <h2 className="mt-2 font-serif text-4xl font-semibold text-primary md:text-5xl">本地设置</h2>
-          </div>
-          <button
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white/70 text-primary shadow-soft transition hover:bg-primary-fixed"
-            aria-label="关闭设置"
-            onClick={() => setActivePanel("globe")}
-            type="button"
-          >
-            <X size={18} />
-          </button>
+        <div className="settings-heading mb-10 flex items-start justify-between gap-6">
+          <h2 className="font-serif text-4xl font-semibold leading-tight text-primary md:text-6xl">本地设置</h2>
         </div>
 
-        <div className="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
-          <div className="safe-panel rounded-[28px] p-6 md:p-8">
-            <h3 className="font-serif text-2xl font-semibold text-on-surface">偏好</h3>
-            <div className="mt-6 space-y-4">
-              <label className="flex items-center justify-between gap-4 rounded-[20px] bg-white/48 p-4">
-                <span>
-                  <span className="block text-sm font-semibold text-on-surface">云端 AI 分析</span>
-                  <span className="mt-1 block text-xs leading-5 text-on-surface-variant">当前 Provider 为 Qwen。关闭时使用本地 Mock，不上传真实照片。</span>
-                </span>
-                <input className="h-5 w-5 accent-primary" checked={aiCloudEnabled} onChange={(event) => setAiCloudEnabled(event.target.checked)} type="checkbox" />
-              </label>
-              <label className="flex items-center justify-between gap-4 rounded-[20px] bg-white/48 p-4">
-                <span>
-                  <span className="block text-sm font-semibold text-on-surface">恢复上次视图</span>
-                  <span className="mt-1 block text-xs leading-5 text-on-surface-variant">打开应用时回到最近一次时间轴位置。</span>
-                </span>
-                <input className="h-5 w-5 accent-primary" checked={restoreView} onChange={(event) => setRestoreView(event.target.checked)} type="checkbox" />
-              </label>
-            </div>
-            <div className="mt-5 inline-flex items-center gap-2 rounded-full bg-secondary-container/70 px-4 py-2 text-sm font-semibold text-secondary">
-              <Shield size={16} /> 本地单用户 MVP
-            </div>
-          </div>
+        <div className="local-settings-form">
+          {fields.map((field, index) => {
+            const credential = settings?.[field.key] ?? emptyCredential;
+            const status = statuses[field.key];
+            const isSaving = status === "saving";
+            const canClearLocal = credential.source === "local" && !isSaving;
+            const canSave = Boolean(values[field.key].trim()) && !isSaving;
 
-          <div className="grid gap-4 md:grid-cols-3">
-            {preferences.map((item) => {
-              const Icon = item.icon;
-              return (
-                <article key={item.title} className="rounded-[24px] bg-white/62 p-5 shadow-soft">
-                  <div className="grid h-10 w-10 place-items-center rounded-full bg-primary-fixed text-primary">
-                    <Icon size={18} />
+            return (
+              <article className="local-secret-row" key={field.key} style={{ "--local-secret-delay": `${index * 90}ms` } as CSSProperties}>
+                <div className="local-secret-index">0{index + 1}</div>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                    <h3 className="font-serif text-2xl font-semibold leading-tight text-on-surface md:text-3xl">{field.title}</h3>
+                    <span className="local-secret-model">{field.model}</span>
                   </div>
-                  <h3 className="mt-5 font-serif text-xl font-semibold text-on-surface">{item.title}</h3>
-                  <p className="mt-3 text-sm leading-6 text-on-surface-variant">{item.text}</p>
-                </article>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="mt-5 inline-flex items-center gap-2 rounded-full bg-secondary-container/70 px-4 py-2 text-sm font-semibold text-secondary">
-          <Check size={16} /> 当前 AI Provider：Qwen Adapter（Mock 可降级）
+                  <div className="mt-5 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto] md:items-center">
+                    <label className="local-secret-input-shell">
+                      <KeyRound size={18} />
+                      <input
+                        className="local-secret-input"
+                        value={values[field.key]}
+                        onChange={(event) => updateValue(field.key, event.target.value)}
+                        placeholder={credential.isSet ? `已保存：${credential.preview}` : "粘贴 API Key"}
+                        aria-label={field.title}
+                        type="password"
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                    </label>
+                    <button className="local-secret-action" disabled={!canSave} onClick={() => void saveField(field.key)} type="button">
+                      {isSaving ? <LoaderCircle className="animate-spin" size={16} /> : <Check size={16} />}
+                      保存
+                    </button>
+                    <button className="local-secret-action local-secret-action-subtle" disabled={!canClearLocal} onClick={() => void clearField(field.key)} type="button">
+                      <Trash2 size={16} />
+                      清除
+                    </button>
+                  </div>
+                  <div className="local-secret-state">
+                    <span>{sourceLabel[credential.source]}</span>
+                    {statusText[status] ? <span>{statusText[status]}</span> : null}
+                  </div>
+                </div>
+              </article>
+            );
+          })}
         </div>
       </div>
     </section>

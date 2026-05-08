@@ -922,6 +922,7 @@ function PhotoLightbox({ photo, placeName, onClose }: { photo?: Photo; placeName
 }
 
 export function EarthStage() {
+  const activePanel = useAppStore((state) => state.activePanel);
   const selectedTripId = useAppStore((state) => state.selectedTripId);
   const selectedPlaceId = useAppStore((state) => state.selectedPlaceId);
   const trips = useAppStore((state) => state.trips);
@@ -953,6 +954,7 @@ export function EarthStage() {
   const focusPoint = "point" in globeViewIntent ? globeViewIntent.point : activeMarker?.center ?? tripFocusPoint ?? placeMarkers[0]?.center;
   const paths = useMemo(() => routePaths(placeMarkers, activeMarker), [activeMarker, placeMarkers]);
   const previewPlace = previewPhoto?.placeNodeId ? places.find((place) => place.id === previewPhoto.placeNodeId) : undefined;
+  const homeState = activePanel === "globe" ? "active" : "covered";
 
   const transitionToMapItem = (item: Exclude<SelectedMapItem, undefined>) => {
     window.clearTimeout(infoPanelCloseTimer.current);
@@ -1002,7 +1004,7 @@ export function EarthStage() {
   };
 
   return (
-    <section className="relative min-h-screen overflow-hidden">
+    <section className="home-earth-layer relative min-h-screen overflow-hidden" data-home-state={homeState}>
       <div className="pointer-events-none fixed left-1/2 top-1/2 h-[76vmin] w-[76vmin] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary-fixed/20 blur-3xl" />
       <div className="three-globe-stage fixed inset-0 z-10 h-screen w-screen">
         <Canvas camera={{ position: [0, 0, 5.25], fov: 42, near: 0.1, far: 1000 }} dpr={[1, 2]} gl={{ antialias: true, alpha: true }} onPointerMissed={closeSelectedMapItem}>

@@ -13,6 +13,17 @@ export interface AppSnapshot {
   searchDocuments?: SearchDocument[];
 }
 
+export interface LocalAiCredential {
+  isSet: boolean;
+  preview: string;
+  source: "local" | "env" | "none";
+}
+
+export interface LocalAiSettings {
+  qwenChatApiKey: LocalAiCredential;
+  qwenEmbeddingApiKey: LocalAiCredential;
+}
+
 interface ImportFilePayload {
   name: string;
   type: string;
@@ -88,6 +99,9 @@ async function toImportPayload(filesLike: FileList | File[], onProgress?: (done:
 
 export const apiClient = {
   getState: () => request<AppSnapshot>("/api/state"),
+  getLocalAiSettings: () => request<LocalAiSettings>("/api/settings/local-ai"),
+  updateLocalAiSettings: (body: Partial<Record<keyof LocalAiSettings, string>>) =>
+    request<LocalAiSettings>("/api/settings/local-ai", { method: "PATCH", body: JSON.stringify(body) }),
   importFiles: async (files: FileList | File[], allowCloudAi: boolean, onProgress?: (done: number, total: number) => void) =>
     request<AppSnapshot>("/api/import", { method: "POST", body: JSON.stringify({ files: await toImportPayload(files, onProgress), allowCloudAi }) }),
   importAppleTestPhotos: (allowCloudAi: boolean, limit?: number) =>

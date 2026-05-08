@@ -15,6 +15,8 @@ export function createRouter(handlers, paths) {
         return handlers.servePhoto(res, pathname, { photoDir: paths.photoDir, thumbDir: paths.thumbDir });
       }
       if (req.method === "GET" && pathname === "/api/state") return send(res, 200, await handlers.responseState());
+      if (req.method === "GET" && pathname === "/api/settings/local-ai") return send(res, 200, handlers.localAiSettings());
+      if (req.method === "PATCH" && pathname === "/api/settings/local-ai") return send(res, 200, handlers.updateLocalAiSettings(await readBody(req)));
       if (req.method === "GET" && pathname === "/api/search") return send(res, 200, await handlers.search(url.searchParams));
       if (req.method === "POST" && pathname === "/api/import") return send(res, 200, await handlers.importPhotos(await readBody(req)));
       if (req.method === "POST" && pathname === "/api/import/jobs") return send(res, 202, handlers.startImportJob(await readBody(req)));
