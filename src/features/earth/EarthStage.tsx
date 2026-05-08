@@ -1,7 +1,7 @@
 import { Html, Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Archive, X } from "lucide-react";
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState, type PointerEvent, type WheelEvent } from "react";
 import * as THREE from "three";
 import ThreeGlobe from "three-globe";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
@@ -55,7 +55,6 @@ const GLOBE_SHELL = "#efe1cf";
 const LAND_PARTICLE_SIZE = 3.05;
 const MEDIUM_LAND_PARTICLE_SIZE = 2.85;
 const NEAR_LAND_PARTICLE_SIZE = 2.35;
-const AI_PLACEHOLDER = "这里将由 AI 根据地点和照片内容生成一段简短回忆。";
 const SCENE_SUFFIXES = ["街景", "山景", "夜景", "风景", "湖景", "河景", "随拍", "路边", "附近"];
 const COUNTRY_CENTERS: Record<string, GeoPoint> = {
   中国: { lat: 35.8617, lng: 104.1954 },
@@ -840,16 +839,28 @@ function BillboardMarker({
 function GlobeScene({
   markers,
   paths,
+  selectedMarker,
+  trip,
+  photos,
+  isAnnotationClosing,
   focusPoint,
   viewIntent,
   onManualView,
+  onOpenArchive,
+  onOpenPhoto,
   onSelect,
 }: {
   markers: TravelMarker[];
   paths: GlobePath[];
+  selectedMarker?: TravelMarker;
+  trip?: Trip;
+  photos: Photo[];
+  isAnnotationClosing: boolean;
   focusPoint?: GeoPoint;
   viewIntent: GlobeViewIntent;
   onManualView: () => void;
+  onOpenArchive: () => void;
+  onOpenPhoto: (photo: Photo) => void;
   onSelect: (marker: TravelMarker) => void;
 }) {
   const groupRef = useRef<THREE.Group>(null);
@@ -914,6 +925,14 @@ function GlobeScene({
         {markers.map((marker) => (
           <BillboardMarker key={marker.id} marker={marker} onSelect={onSelect} />
         ))}
+        <TravelMapAnnotation
+          selected={selectedMarker}
+          trip={trip}
+          photos={photos}
+          isClosing={isAnnotationClosing}
+          onOpenArchive={onOpenArchive}
+          onOpenPhoto={onOpenPhoto}
+        />
       </group>
       <OrbitControls
         ref={controlsRef}
@@ -931,47 +950,169 @@ function GlobeScene({
   );
 }
 
-function TravelInfoPanel({
+function TravelMapAnnotation({
   selected,
   trip,
   photos,
+  isClosing,
   onOpenArchive,
   onOpenPhoto,
-  onClose,
 }: {
   selected?: TravelMarker;
   trip?: Trip;
   photos: Photo[];
+  isClosing: boolean;
   onOpenArchive: () => void;
   onOpenPhoto: (photo: Photo) => void;
-  onClose: () => void;
 }) {
-  if (!selected || !trip) return null;
+  const photoStripRef = useRef<HTMLDivElement | null>(null);
+  const photoDragRef = useRef({ isDragging: false, lastX: 0, moved: false, pointerId: -1, startX: 0 });
+  const position = useMemo(() => (selected ? threeGlobeVector(selected.center, GLOBE_RADIUS, MARKER_ALTITUDE).toArray() : undefined), [selected]);
+
+  if (!selected || !trip || !position) return null;
 
   const relatedPhotos = photos.filter((photo) => selected.photoIds.includes(photo.id));
 
+  const handlePhotoStripWheel = (event: WheelEvent<HTMLDivElement>) => {
+    event.stopPropagation();
+    const strip = photoStripRef.current;
+    if (!strip) return;
+
+    const canScroll = strip.scrollWidth > strip.clientWidth;
+    if (!canScroll) return;
+
+    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+    if (delta === 0) return;
+
+    event.preventDefault();
+    strip.scrollLeft += delta;
+  };
+
+  const handlePhotoStripPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    event.stopPropagation();
+    const strip = photoStripRef.current;
+    if (!strip || strip.scrollWidth <= strip.clientWidth) return;
+
+    photoDragRef.current = {
+      isDragging: true,
+      lastX: event.clientX,
+      moved: false,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+    };
+    strip.setPointerCapture(event.pointerId);
+  };
+
+  const handlePhotoStripPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    event.stopPropagation();
+    const strip = photoStripRef.current;
+    const drag = photoDragRef.current;
+    if (!strip || !drag.isDragging) return;
+
+    const movement = event.clientX - drag.lastX;
+    const distance = Math.abs(event.clientX - drag.startX);
+    if (distance > 5) drag.moved = true;
+    drag.lastX = event.clientX;
+    strip.scrollLeft -= movement;
+  };
+
+  const finishPhotoStripDrag = (event: PointerEvent<HTMLDivElement>) => {
+    event.stopPropagation();
+    const strip = photoStripRef.current;
+    const drag = photoDragRef.current;
+    if (strip && drag.pointerId === event.pointerId && strip.hasPointerCapture(event.pointerId)) {
+      strip.releasePointerCapture(event.pointerId);
+    }
+    drag.isDragging = false;
+  };
+
+  const openPhotoFromStrip = (photo: Photo) => {
+    if (photoDragRef.current.moved) {
+      photoDragRef.current.moved = false;
+      return;
+    }
+
+    onOpenPhoto(photo);
+  };
+
   return (
-    <aside className="travel-info-panel">
-      <button className="travel-panel-close" type="button" aria-label="关闭信息面板" onClick={onClose}>
-        <X size={16} />
-      </button>
-      <p className="travel-panel-kicker">{selected.kind === "country" ? trip.title : "地点回忆"}</p>
-      <h2>{selected.kind === "country" ? selected.countryName : selected.label}</h2>
-      {selected.kind === "place" ? <p className="travel-panel-copy">{AI_PLACEHOLDER}</p> : <p className="travel-panel-copy">{trip.title}</p>}
-      {selected.kind === "place" && relatedPhotos.length > 0 ? (
-        <div className="travel-photo-strip" aria-label="相关照片">
-          {relatedPhotos.map((photo) => (
-            <button key={photo.id} type="button" className="travel-photo-thumb" onClick={() => onOpenPhoto(photo)} aria-label={photo.title ?? photo.fileName}>
-              <img src={photo.thumbnailUrl} alt={photo.title ?? photo.fileName} />
-            </button>
-          ))}
+    <Html center position={position} zIndexRange={[72, 44]} transform={false}>
+      <aside
+        className="travel-map-note"
+        data-kind={selected.kind}
+        data-state={isClosing ? "closing" : "open"}
+        aria-label={selected.kind === "country" ? selected.countryName : selected.label}
+      >
+        <span className="travel-map-note-line travel-map-note-line-diagonal" aria-hidden="true" />
+        <span className="travel-map-note-line travel-map-note-line-horizontal" aria-hidden="true" />
+        <span className="travel-map-note-terminal" aria-hidden="true" />
+        <div className="travel-map-note-body">
+          {selected.kind === "country" ? (
+            <div className="travel-map-note-country-row">
+              <h2>{selected.countryName}</h2>
+              <button
+                className="travel-map-note-action"
+                type="button"
+                aria-label="进入档案"
+                title="进入档案"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onOpenArchive();
+                }}
+              >
+                <Archive size={16} />
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="travel-map-note-title-row">
+                <h2>{selected.label}</h2>
+                <button
+                  className="travel-map-note-action"
+                  type="button"
+                  aria-label="进入档案"
+                  title="进入档案"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onOpenArchive();
+                  }}
+                >
+                  <Archive size={16} />
+                </button>
+              </div>
+              {relatedPhotos.length > 0 ? (
+                <div
+                  ref={photoStripRef}
+                  className="travel-photo-strip"
+                  aria-label="相关照片"
+                  onWheel={handlePhotoStripWheel}
+                  onPointerDown={handlePhotoStripPointerDown}
+                  onPointerMove={handlePhotoStripPointerMove}
+                  onPointerUp={finishPhotoStripDrag}
+                  onPointerCancel={finishPhotoStripDrag}
+                  onPointerLeave={finishPhotoStripDrag}
+                >
+                  {relatedPhotos.map((photo) => (
+                    <button
+                      key={photo.id}
+                      type="button"
+                      className="travel-photo-thumb"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openPhotoFromStrip(photo);
+                      }}
+                      aria-label={photo.title ?? photo.fileName}
+                    >
+                      <img src={photo.thumbnailUrl} alt={photo.title ?? photo.fileName} />
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </>
+          )}
         </div>
-      ) : null}
-      <button className="travel-archive-button" type="button" onClick={onOpenArchive}>
-        <Archive size={16} />
-        进入档案
-      </button>
-    </aside>
+      </aside>
+    </Html>
   );
 }
 
@@ -1006,7 +1147,9 @@ export function EarthStage() {
   const globeViewIntent = useAppStore((state) => state.globeViewIntent);
   const setGlobeViewIntent = useAppStore((state) => state.setGlobeViewIntent);
   const [selectedMapItem, setSelectedMapItem] = useState<SelectedMapItem>();
+  const [infoPanelClosing, setInfoPanelClosing] = useState(false);
   const [previewPhoto, setPreviewPhoto] = useState<Photo>();
+  const infoPanelCloseTimer = useRef<number | undefined>(undefined);
 
   const trip = trips.find((item) => item.id === selectedTripId);
   const places = useMemo(() => placeNodes.filter((place) => place.tripId === selectedTripId), [placeNodes, selectedTripId]);
@@ -1024,22 +1167,50 @@ export function EarthStage() {
   const paths = useMemo(() => routePaths(placeMarkers, activeMarker), [activeMarker, placeMarkers]);
   const previewPlace = previewPhoto?.placeNodeId ? places.find((place) => place.id === previewPhoto.placeNodeId) : undefined;
 
+  const transitionToMapItem = (item: Exclude<SelectedMapItem, undefined>) => {
+    window.clearTimeout(infoPanelCloseTimer.current);
+
+    if (!selectedMapItem || selectedMapItem.id === item.id) {
+      setInfoPanelClosing(false);
+      setSelectedMapItem(item);
+      return;
+    }
+
+    setInfoPanelClosing(true);
+    infoPanelCloseTimer.current = window.setTimeout(() => {
+      setSelectedMapItem(item);
+      setInfoPanelClosing(false);
+    }, 240);
+  };
+
+  const closeSelectedMapItem = () => {
+    if (!selectedMapItem) return;
+    window.clearTimeout(infoPanelCloseTimer.current);
+    setInfoPanelClosing(true);
+    infoPanelCloseTimer.current = window.setTimeout(() => {
+      setSelectedMapItem(undefined);
+      setInfoPanelClosing(false);
+    }, 260);
+  };
+
+  useEffect(() => () => window.clearTimeout(infoPanelCloseTimer.current), []);
+
   useEffect(() => {
     if (!selectedPlaceId) return;
     const marker = placeMarkers.find((item) => item.placeIds?.includes(selectedPlaceId));
-    if (marker) setSelectedMapItem({ kind: "place", id: marker.id });
+    if (marker) transitionToMapItem({ kind: "place", id: marker.id });
   }, [placeMarkers, selectedPlaceId]);
 
   useEffect(() => {
-    if (!selectedPlaceId && selectedMapItem?.kind === "place") setSelectedMapItem(undefined);
+    if (!selectedPlaceId && selectedMapItem?.kind === "place") closeSelectedMapItem();
   }, [selectedMapItem?.kind, selectedPlaceId]);
 
   const handleSelect = (marker: TravelMarker) => {
     if (selectedMapItem?.id === marker.id) {
-      setSelectedMapItem(undefined);
+      closeSelectedMapItem();
       return;
     }
-    setSelectedMapItem({ kind: marker.kind, id: marker.id });
+    transitionToMapItem({ kind: marker.kind, id: marker.id });
     if (marker.kind === "place" && marker.placeIds?.[0]) selectPlace(marker.placeIds[0]);
   };
 
@@ -1047,27 +1218,25 @@ export function EarthStage() {
     <section className="relative min-h-screen overflow-hidden">
       <div className="pointer-events-none fixed left-1/2 top-1/2 h-[76vmin] w-[76vmin] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary-fixed/20 blur-3xl" />
       <div className="three-globe-stage fixed inset-0 z-10 h-screen w-screen">
-        <Canvas camera={{ position: [0, 0, 5.25], fov: 42, near: 0.1, far: 1000 }} dpr={[1, 2]} gl={{ antialias: true, alpha: true }}>
+        <Canvas camera={{ position: [0, 0, 5.25], fov: 42, near: 0.1, far: 1000 }} dpr={[1, 2]} gl={{ antialias: true, alpha: true }} onPointerMissed={closeSelectedMapItem}>
           <Suspense fallback={null}>
             <GlobeScene
               markers={markers}
               paths={paths}
+              selectedMarker={selectedMarker}
+              trip={trip}
+              photos={tripPhotos}
+              isAnnotationClosing={infoPanelClosing}
               focusPoint={focusPoint}
               viewIntent={globeViewIntent}
               onManualView={() => setGlobeViewIntent({ source: "manual" })}
+              onOpenArchive={() => setActivePanel("tripDetail")}
+              onOpenPhoto={setPreviewPhoto}
               onSelect={handleSelect}
             />
           </Suspense>
         </Canvas>
       </div>
-      <TravelInfoPanel
-        selected={selectedMarker}
-        trip={trip}
-        photos={tripPhotos}
-        onOpenArchive={() => setActivePanel("tripDetail")}
-        onOpenPhoto={setPreviewPhoto}
-        onClose={() => setSelectedMapItem(undefined)}
-      />
       <PhotoLightbox photo={previewPhoto} placeName={previewPlace?.name} onClose={() => setPreviewPhoto(undefined)} />
     </section>
   );
