@@ -635,7 +635,14 @@ function BillboardMarker({
   });
 
   return (
-    <Html center position={position} zIndexRange={marker.kind === "country" ? [90, 70] : [40, 20]} transform={false} pointerEvents="auto">
+    <Html
+      center
+      className="travel-marker-anchor"
+      position={position}
+      zIndexRange={marker.kind === "country" ? [90, 70] : [40, 20]}
+      transform={false}
+      style={{ pointerEvents: "none" }}
+    >
       <button
         ref={markerRef}
         className={`travel-marker travel-marker--${marker.kind}${marker.active ? " is-selected" : ""}${marker.routeRole ? ` is-${marker.routeRole}` : ""}`}

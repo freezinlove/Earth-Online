@@ -35,6 +35,11 @@ function getHighResolutionSource(source: string, width = 1800) {
     .replace(/([?&]q=)\d+/g, (_match, prefix: string) => `${prefix}90`);
 }
 
+function placeKey(group?: Pick<DayGroup, "places">) {
+  const ids = group?.places.map((place) => place.id).sort() ?? [];
+  return ids.length ? ids.join("|") : undefined;
+}
+
 export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) {
   const selectedTripId = useAppStore((state) => state.selectedTripId);
   const trips = useAppStore((state) => state.trips);
@@ -136,51 +141,60 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
               </div>
 
               <div className="trip-country-days">
-                {countryGroup.days.map((group, groupIndex) => (
-                  <section
-                    key={`${group.day}-${group.places.map((place) => place.id).join("-") || group.photos.map((photo) => photo.id).join("-")}`}
-                    className="trip-day-section"
-                    style={{ "--trip-day-delay": `${(countryIndex + groupIndex) * 90}ms` } as CSSProperties}
-                  >
-                    <div className="trip-route-column">
-                      <span className="trip-route-dot" />
-                      {group.places.length ? (
-                        <div className="trip-route-labels">
-                          {group.places.map((place) => (
-                            <button className="trip-route-label" key={place.id} onClick={() => focusPlaceOnGlobe(place)} title={placeLabel(place)} type="button">
-                              {placeLabel(place)}
-                            </button>
-                          ))}
+                {countryGroup.days.map((group, groupIndex) => {
+                  const repeatsPreviousPlace = Boolean(placeKey(group) && placeKey(group) === placeKey(countryGroup.days[groupIndex - 1]));
+                  return (
+                    <section
+                      key={`${group.day}-${group.places.map((place) => place.id).join("-") || group.photos.map((photo) => photo.id).join("-")}`}
+                      className={`trip-day-section${repeatsPreviousPlace ? " trip-day-section-continuation" : ""}`}
+                      style={{ "--trip-day-delay": `${(countryIndex + groupIndex) * 90}ms` } as CSSProperties}
+                    >
+                      <div className="trip-route-column">
+                        {repeatsPreviousPlace ? (
+                          <span className="trip-route-continuation" aria-hidden="true" />
+                        ) : (
+                          <>
+                            <span className="trip-route-dot" />
+                            {group.places.length ? (
+                              <div className="trip-route-labels">
+                                {group.places.map((place) => (
+                                  <button className="trip-route-label" key={place.id} onClick={() => focusPlaceOnGlobe(place)} title={placeLabel(place)} type="button">
+                                    {placeLabel(place)}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="trip-route-label">未标地点</span>
+                            )}
+                          </>
+                        )}
+                      </div>
+
+                      <div className="trip-day-content">
+                        <div className="trip-day-marker">
+                          <h3>{formatDay(group.day)}</h3>
+                          <div className="h-px flex-1 bg-outline-variant/70" />
                         </div>
-                      ) : (
-                        <span className="trip-route-label">未标地点</span>
-                      )}
-                    </div>
 
-                    <div className="trip-day-content">
-                      <div className="trip-day-marker">
-                        <h3>{formatDay(group.day)}</h3>
-                        <div className="h-px flex-1 bg-outline-variant/70" />
+                        <div className="trip-photo-flow">
+                          {group.photos.map((photo, index) => {
+                            return (
+                              <article key={photo.id} className={index === 0 ? "trip-photo-piece trip-photo-piece-featured" : "trip-photo-piece"}>
+                                <button className="block w-full text-left" onClick={() => setOpenPhotoId(photo.id)} type="button">
+                                  <img src={getPhotoSource(photo)} alt={photoAltText(photo)} />
+                                  <span className="trip-photo-caption">
+                                    <strong>{photoLabel(photo)}</strong>
+                                    <em>{capturedTimeLabel(photo.capturedAt) || photo.fileName}</em>
+                                  </span>
+                                </button>
+                              </article>
+                            );
+                          })}
+                        </div>
                       </div>
-
-                      <div className="trip-photo-flow">
-                        {group.photos.map((photo, index) => {
-                          return (
-                            <article key={photo.id} className={index === 0 ? "trip-photo-piece trip-photo-piece-featured" : "trip-photo-piece"}>
-                              <button className="block w-full text-left" onClick={() => setOpenPhotoId(photo.id)} type="button">
-                                <img src={getPhotoSource(photo)} alt={photoAltText(photo)} />
-                                <span className="trip-photo-caption">
-                                  <strong>{photoLabel(photo)}</strong>
-                                  <em>{capturedTimeLabel(photo.capturedAt) || photo.fileName}</em>
-                                </span>
-                              </button>
-                            </article>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </section>
-                ))}
+                    </section>
+                  );
+                })}
               </div>
             </section>
           ))}
