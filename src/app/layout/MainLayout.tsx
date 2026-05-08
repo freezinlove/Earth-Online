@@ -51,6 +51,8 @@ export function MainLayout({ children }: { children: ReactNode }) {
     return () => window.clearTimeout(motionTimer.current);
   }, [indicatorMotion]);
 
+  const showPrimaryNav = activePanel !== "tripDetail";
+
   return (
     <div className="relative min-h-screen overflow-hidden bg-background text-on-surface">
       <div className="paper-grain" />
@@ -90,6 +92,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
         </header>
       ) : null}
 
+      {showPrimaryNav ? (
       <nav className="fixed bottom-5 left-1/2 z-[60] flex -translate-x-1/2 items-center gap-1.5 md:bottom-auto md:left-8 md:top-1/2 md:-translate-x-0 md:-translate-y-1/2 md:flex-col">
         <button
           className={clsx(
@@ -163,6 +166,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
           );
         })}
       </nav>
+      ) : null}
 
       <main className="relative z-10 min-h-screen">{children}</main>
     </div>
