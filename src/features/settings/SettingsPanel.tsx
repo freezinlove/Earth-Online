@@ -104,8 +104,8 @@ export function SettingsPanel({ isClosing = false }: { isClosing?: boolean }) {
       className="settings-panel fixed inset-0 z-[70] overflow-y-auto bg-background/94 px-5 py-8 backdrop-blur-2xl md:px-24 md:py-12"
       data-state={isClosing ? "closing" : "open"}
     >
-      <div className="mx-auto max-w-5xl">
-        <div className="settings-heading mb-10 flex items-start justify-between gap-6">
+      <div className="mx-auto max-w-6xl">
+        <div className="settings-heading mb-8 md:mb-12">
           <h2 className="font-serif text-4xl font-semibold leading-tight text-primary md:text-6xl">本地设置</h2>
         </div>
 

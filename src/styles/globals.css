@@ -961,6 +961,9 @@ input {
 }
 
 .settings-heading {
+  position: relative;
+  z-index: 1;
+  padding-top: 1.45rem;
   animation: archive-heading-in 720ms cubic-bezier(0.18, 0.88, 0.2, 1) 80ms both;
 }
 
@@ -969,6 +972,8 @@ input {
 }
 
 .local-settings-form {
+  position: relative;
+  z-index: 1;
   display: grid;
   gap: 0;
   border-top: 1px solid rgba(219, 193, 184, 0.62);
@@ -977,10 +982,10 @@ input {
 .local-secret-row {
   position: relative;
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
+  grid-template-columns: 54px minmax(0, 1fr);
   gap: 22px;
   border-bottom: 1px solid rgba(219, 193, 184, 0.62);
-  padding: 28px 0;
+  padding: 24px 0;
   animation: archive-entry-in 680ms cubic-bezier(0.18, 0.88, 0.2, 1) calc(170ms + var(--local-secret-delay, 0ms)) both;
 }
 
@@ -1013,7 +1018,8 @@ input {
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.18em;
-  line-height: 2.2;
+  line-height: 1;
+  padding-top: 8px;
 }
 
 .local-secret-model {
