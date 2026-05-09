@@ -282,7 +282,8 @@ function cameraTargetForIntent(intent: GlobeViewIntent, fallbackPoint?: GeoPoint
   const distance = intent.source === "timeline-place" ? 2.18 : intent.source === "timeline-trip-entry" ? 3.85 : intent.source === "timeline-trip" ? 5.85 : 5.25;
   const latitude = point?.lat ?? 18;
   const latitudeStrength = intent.source === "timeline-place" ? 1 : intent.source === "timeline-trip-entry" ? 0.82 : 0.58;
-  const y = THREE.MathUtils.clamp(Math.sin(THREE.MathUtils.degToRad(latitude)) * distance * latitudeStrength, -distance * 0.78, distance * 0.78);
+  const latitudeClamp = intent.source === "timeline-place" ? 0.96 : 0.78;
+  const y = THREE.MathUtils.clamp(Math.sin(THREE.MathUtils.degToRad(latitude)) * distance * latitudeStrength, -distance * latitudeClamp, distance * latitudeClamp);
   const z = Math.sqrt(Math.max(distance * distance - y * y, 0.4));
   return new THREE.Vector3(0, y, z);
 }

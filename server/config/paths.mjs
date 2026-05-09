@@ -6,6 +6,7 @@ export const rootDir = path.resolve(__dirname, "..", "..");
 export const dataDir = process.env.EARTH_ONLINE_DATA_DIR ? path.resolve(process.env.EARTH_ONLINE_DATA_DIR) : path.join(rootDir, "data");
 export const photoDir = path.join(dataDir, "photos");
 export const thumbDir = path.join(dataDir, "thumbnails");
+export const importJobDir = path.join(dataDir, "import-jobs");
 export const dbPath = path.join(dataDir, "db.json");
 export const vectorPath = path.join(dataDir, "vector-index.json");
 export const distDir = path.join(rootDir, "dist");

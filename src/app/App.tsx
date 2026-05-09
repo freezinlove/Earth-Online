@@ -13,6 +13,8 @@ import { useEffect, useRef, useState } from "react";
 const archiveExitDuration = 520;
 const tripDetailExitDuration = 420;
 const settingsExitDuration = 420;
+const searchExitDuration = 420;
+const uploadExitDuration = 520;
 
 export function App() {
   const activePanel = useAppStore((state) => state.activePanel);
@@ -23,9 +25,15 @@ export function App() {
   const [isTripDetailClosing, setIsTripDetailClosing] = useState(false);
   const [shouldRenderSettings, setShouldRenderSettings] = useState(activePanel === "settings");
   const [isSettingsClosing, setIsSettingsClosing] = useState(false);
+  const [shouldRenderSearch, setShouldRenderSearch] = useState(activePanel === "search");
+  const [isSearchClosing, setIsSearchClosing] = useState(false);
+  const [shouldRenderUpload, setShouldRenderUpload] = useState(activePanel === "upload");
+  const [isUploadClosing, setIsUploadClosing] = useState(false);
   const archiveExitTimer = useRef<number | undefined>(undefined);
   const tripDetailExitTimer = useRef<number | undefined>(undefined);
   const settingsExitTimer = useRef<number | undefined>(undefined);
+  const searchExitTimer = useRef<number | undefined>(undefined);
+  const uploadExitTimer = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     void loadState();
@@ -72,6 +80,26 @@ export function App() {
   }, [activePanel, shouldRenderSettings]);
 
   useEffect(() => {
+    window.clearTimeout(searchExitTimer.current);
+
+    if (activePanel === "search") {
+      setShouldRenderSearch(true);
+      setIsSearchClosing(false);
+      return;
+    }
+
+    if (shouldRenderSearch) {
+      setIsSearchClosing(true);
+      searchExitTimer.current = window.setTimeout(() => {
+        setShouldRenderSearch(false);
+        setIsSearchClosing(false);
+      }, searchExitDuration);
+    }
+
+    return () => window.clearTimeout(searchExitTimer.current);
+  }, [activePanel, shouldRenderSearch]);
+
+  useEffect(() => {
     window.clearTimeout(tripDetailExitTimer.current);
 
     if (activePanel === "tripDetail") {
@@ -91,14 +119,34 @@ export function App() {
     return () => window.clearTimeout(tripDetailExitTimer.current);
   }, [activePanel, shouldRenderTripDetail]);
 
+  useEffect(() => {
+    window.clearTimeout(uploadExitTimer.current);
+
+    if (activePanel === "upload") {
+      setShouldRenderUpload(true);
+      setIsUploadClosing(false);
+      return;
+    }
+
+    if (shouldRenderUpload) {
+      setIsUploadClosing(true);
+      uploadExitTimer.current = window.setTimeout(() => {
+        setShouldRenderUpload(false);
+        setIsUploadClosing(false);
+      }, uploadExitDuration);
+    }
+
+    return () => window.clearTimeout(uploadExitTimer.current);
+  }, [activePanel, shouldRenderUpload]);
+
   return (
     <MainLayout>
       <EarthStage />
       <TimelineDock />
       {shouldRenderArchive ? <ArchiveDrawer isClosing={isArchiveClosing} /> : null}
       {shouldRenderTripDetail ? <TripDetailPanel isClosing={isTripDetailClosing} /> : null}
-      {activePanel === "upload" ? <UploadPhotosPanel /> : null}
-      {activePanel === "search" ? <SearchPanel /> : null}
+      {shouldRenderUpload ? <UploadPhotosPanel isClosing={isUploadClosing} /> : null}
+      {shouldRenderSearch ? <SearchPanel isClosing={isSearchClosing} /> : null}
       {shouldRenderSettings ? <SettingsPanel isClosing={isSettingsClosing} /> : null}
       {activePanel === "manual" ? <ManualEditorPanel /> : null}
     </MainLayout>

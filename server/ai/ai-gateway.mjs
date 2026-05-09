@@ -37,13 +37,46 @@ function fallbackPhotoAnalysis({ fileName, preset }) {
   };
 }
 
+function mergeVisionWithFallback(vision, fallback, providerId) {
+  return {
+    provider: vision.provider ?? providerId,
+    promptId: vision.promptId,
+    promptVersion: vision.promptVersion,
+    title: vision.title || fallback.title,
+    tags: vision.tags,
+    caption: vision.caption,
+    visiblePlaceNames: vision.visiblePlaceNames,
+    locationCandidates: vision.locationCandidates,
+    uncertainties: vision.uncertainties,
+    fallbackReason: undefined,
+  };
+}
+
+function embeddingText({ fileName, title, caption, tags = [], visiblePlaceNames = [] }) {
+  return [fileName, title, caption, ...tags, ...visiblePlaceNames].filter(Boolean).join(" ");
+}
+
+function withoutEmbeddingFields(analysis) {
+  const result = { ...analysis };
+  delete result.embedding;
+  delete result.embeddingProvider;
+  delete result.embeddingDimension;
+  return result;
+}
+
+function friendlyAiError(error, fallback = "AI provider failed") {
+  const message = error instanceof Error ? error.message : String(error || fallback);
+  const name = error instanceof Error ? error.name : "";
+  if (/abort|timeout/i.test(`${name} ${message}`)) return "AI 请求超时，稍后重试通常可恢复。";
+  return message || fallback;
+}
+
 export { listAiProviders };
 
-export async function analyzeTravelImage({
+export async function analyzeTravelImageVision({
   rootDir = process.cwd(),
   secretProvider,
   imageAnalysisProviderId,
-  embeddingProviderId,
   fileName,
   mime,
   dataUrl,
@@ -53,53 +86,99 @@ export async function analyzeTravelImage({
 }) {
   const fallback = fallbackPhotoAnalysis({ fileName, preset });
 
-  if (!allowCloud) return fallback;
+  if (!allowCloud) {
+    return withoutEmbeddingFields(fallback);
+  }
   try {
     const imageProvider = getAiProvider("imageAnalysis", imageAnalysisProviderId);
-    const embeddingProvider = getAiProvider("embedding", embeddingProviderId);
     if (!imageProvider) throw new Error("no image analysis provider configured");
-    if (!embeddingProvider) throw new Error("no embedding provider configured");
 
-    const visionPromise = imageProvider.analyzeImage({ rootDir, secretProvider, fileName, mime, dataUrl, preset, geoContext });
-    const embeddingPromise = embeddingProvider.embed({ rootDir, secretProvider, fileName, dataUrl }).catch((error) => ({
-      error,
-      embedding: undefined,
-      embeddingProvider: "deterministic",
-    }));
-    const vision = await visionPromise;
-    const text = [vision.caption, ...vision.tags].join(" ");
-    let embeddingResult;
-    try {
-      embeddingResult = await embeddingPromise;
-      if (!Array.isArray(embeddingResult.embedding)) throw embeddingResult.error ?? new Error("embedding unavailable");
-    } catch {
-      embeddingResult = {
-        embedding: deterministicVector([fileName, text].filter(Boolean).join(" ")),
-        embeddingProvider: "deterministic",
-      };
-    }
-
-    return {
-      provider: vision.provider ?? imageProvider.id,
-      promptId: vision.promptId,
-      promptVersion: vision.promptVersion,
-      title: vision.title || fallback.title,
-      tags: vision.tags,
-      caption: vision.caption,
-      visiblePlaceNames: vision.visiblePlaceNames,
-      locationCandidates: vision.locationCandidates,
-      uncertainties: vision.uncertainties,
-      embedding: embeddingResult.embedding,
-      embeddingProvider: embeddingResult.embeddingProvider,
-      embeddingDimension: embeddingResult.embedding.length,
-      fallbackReason: undefined,
-    };
+    const vision = await imageProvider.analyzeImage({ rootDir, secretProvider, fileName, mime, dataUrl, preset, geoContext });
+    return mergeVisionWithFallback(vision, fallback, imageProvider.id);
   } catch (error) {
+    const visionFallback = withoutEmbeddingFields(fallback);
     return {
-      ...fallback,
-      fallbackReason: error instanceof Error ? error.message : "AI provider failed",
+      ...visionFallback,
+      fallbackReason: friendlyAiError(error),
     };
   }
+}
+
+export async function embedTravelImageAnalysis({
+  rootDir = process.cwd(),
+  secretProvider,
+  embeddingProviderId,
+  fileName,
+  analysis,
+  allowCloud = true,
+}) {
+  const text = embeddingText({ fileName, ...analysis });
+  if (allowCloud) {
+    try {
+      const embeddingProvider = getAiProvider("embedding", embeddingProviderId);
+      if (!embeddingProvider) throw new Error("no embedding provider configured");
+      const result = await embeddingProvider.embed({ rootDir, secretProvider, fileName, text });
+      if (!Array.isArray(result.embedding)) throw new Error("embedding unavailable");
+
+      return {
+        embedding: result.embedding,
+        embeddingProvider: result.embeddingProvider,
+        embeddingDimension: result.embedding.length,
+        embeddingFallbackReason: undefined,
+      };
+    } catch {
+      // fall back below
+    }
+  }
+  const embedding = deterministicVector(text);
+  return {
+    embedding,
+    embeddingProvider: "deterministic",
+    embeddingDimension: embedding.length,
+    embeddingFallbackReason: allowCloud ? "embedding provider failed" : undefined,
+  };
+}
+
+export async function embedTravelImageImage({
+  rootDir = process.cwd(),
+  secretProvider,
+  embeddingProviderId,
+  fileName,
+  mime,
+  dataUrl,
+  allowCloud = true,
+}) {
+  const fallbackText = [fileName, mime].filter(Boolean).join(" ");
+  if (allowCloud) {
+    try {
+      const embeddingProvider = getAiProvider("embedding", embeddingProviderId);
+      if (!embeddingProvider) throw new Error("no embedding provider configured");
+      const result = await embeddingProvider.embed({ rootDir, secretProvider, fileName, dataUrl });
+      if (!Array.isArray(result.embedding)) throw new Error("embedding unavailable");
+
+      return {
+        embedding: result.embedding,
+        embeddingProvider: result.embeddingProvider,
+        embeddingDimension: result.embedding.length,
+        embeddingFallbackReason: undefined,
+      };
+    } catch {
+      // fall back below
+    }
+  }
+  const embedding = deterministicVector(fallbackText);
+  return {
+    embedding,
+    embeddingProvider: "deterministic",
+    embeddingDimension: embedding.length,
+    embeddingFallbackReason: allowCloud ? "image embedding provider failed" : undefined,
+  };
+}
+
+export async function analyzeTravelImage(input) {
+  const analysis = await analyzeTravelImageVision(input);
+  const embedding = await embedTravelImageImage(input);
+  return { ...analysis, ...embedding };
 }
 
 export async function inferMissingInfoWithImage({
@@ -129,7 +208,7 @@ export async function inferMissingInfoWithImage({
     return {
       action: "keep_pending",
       confidence: 0,
-      reason: error instanceof Error ? error.message : "AI 二次推断失败。",
+      reason: friendlyAiError(error, "AI 二次推断失败。"),
       provider: "mock",
       promptId: "missing-info-inference",
       promptVersion: "fallback",

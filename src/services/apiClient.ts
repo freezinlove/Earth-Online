@@ -24,7 +24,7 @@ export interface LocalAiSettings {
   qwenEmbeddingApiKey: LocalAiCredential;
 }
 
-export type ImportJobPhase = "queued" | "reading" | "exif" | "ai" | "grouping" | "completed" | "failed";
+export type ImportJobPhase = "queued" | "reading" | "uploading" | "exif" | "thumbnails" | "ai" | "embedding" | "grouping" | "completed" | "failed";
 
 export interface ImportJobStepProgress {
   done: number;
@@ -37,7 +37,7 @@ export interface ImportJobProgress {
   done: number;
   total: number;
   currentFileName?: string;
-  steps?: Partial<Record<"reading" | "exif" | "ai", ImportJobStepProgress>>;
+  steps?: Partial<Record<"reading" | "upload" | "exif" | "thumbnails" | "ai" | "embedding", ImportJobStepProgress>>;
 }
 
 export interface ImportJobProgressEvent extends ImportJobProgress {
@@ -56,15 +56,6 @@ export interface ImportJob {
   error?: string;
 }
 
-interface ImportFilePayload {
-  name: string;
-  type: string;
-  size: number;
-  lastModified: number;
-  dataUrl: string;
-  thumbnailDataUrl?: string;
-}
-
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
@@ -78,55 +69,6 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(error.error ?? "Earth_Online API request failed");
   }
   return response.json() as Promise<T>;
-}
-
-function fileToDataUrl(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error("读取图片失败"));
-    reader.onload = () => resolve(String(reader.result));
-    reader.readAsDataURL(file);
-  });
-}
-
-async function fileToThumbnailDataUrl(source: string) {
-  return new Promise<string>((resolve) => {
-    const image = new Image();
-    image.onload = () => {
-      const maxSize = 720;
-      const ratio = Math.min(1, maxSize / Math.max(image.width, image.height));
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.round(image.width * ratio));
-      canvas.height = Math.max(1, Math.round(image.height * ratio));
-      const context = canvas.getContext("2d");
-      if (!context) {
-        resolve(source);
-        return;
-      }
-      context.drawImage(image, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL("image/jpeg", 0.78));
-    };
-    image.onerror = () => resolve(source);
-    image.src = source;
-  });
-}
-
-async function toImportPayload(filesLike: FileList | File[], onProgress?: (done: number, total: number) => void): Promise<ImportFilePayload[]> {
-  const files = Array.from(filesLike);
-  const payload: ImportFilePayload[] = [];
-  for (const file of files) {
-    const dataUrl = await fileToDataUrl(file);
-    payload.push({
-      name: file.name,
-      type: file.type,
-      size: file.size,
-      lastModified: file.lastModified,
-      dataUrl,
-      thumbnailDataUrl: await fileToThumbnailDataUrl(dataUrl),
-    });
-    onProgress?.(payload.length, files.length);
-  }
-  return payload;
 }
 
 function wait(ms: number) {
@@ -193,8 +135,22 @@ export const apiClient = {
     onProgress?: (done: number, total: number) => void,
     onJobProgress?: (progress: ImportJobProgress) => void,
   ) => {
-    const payload = await toImportPayload(files, onProgress);
-    const job = await request<ImportJob>("/api/import/jobs", { method: "POST", body: JSON.stringify({ files: payload, allowCloudAi }) });
+    const uploadFiles = Array.from(files);
+    const form = new FormData();
+    for (const file of uploadFiles) form.append("files", file, file.name);
+    form.append("allowCloudAi", String(allowCloudAi));
+    form.append(
+      "fileMeta",
+      JSON.stringify(uploadFiles.map((file) => ({ name: file.name, type: file.type, size: file.size, lastModified: file.lastModified }))),
+    );
+    onProgress?.(0, uploadFiles.length);
+    const response = await fetch("/api/import/jobs", { method: "POST", body: form });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: response.statusText }));
+      throw new Error(error.error ?? "Earth_Online API request failed");
+    }
+    onProgress?.(uploadFiles.length, uploadFiles.length);
+    const job = (await response.json()) as ImportJob;
     if (job.progress) onJobProgress?.(job.progress);
     return pollImportJob(job.id, onJobProgress);
   },

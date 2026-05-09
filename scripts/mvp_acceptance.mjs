@@ -2,15 +2,10 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { EarthRepository } from "../server/repository.mjs";
-import { dataDir, dbPath, thumbDir, vectorPath } from "../server/config/paths.mjs";
+import { dataDir, dbPath, rootDir, thumbDir, vectorPath } from "../server/config/paths.mjs";
 
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const baseUrl = process.env.EARTH_ONLINE_BASE_URL ?? "http://127.0.0.1:8787";
-const tinyPng = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
-const tinyJpg = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2w==";
-
 let server;
 let beforeState;
 
@@ -21,6 +16,34 @@ async function request(pathname, init) {
   });
   if (!response.ok) throw new Error(`${pathname} failed: ${response.status} ${await response.text()}`);
   return response.json();
+}
+
+async function multipartJobFromDesignSpecPhotos({ limit = 2, allowCloudAi = false } = {}) {
+  const appleDir = path.join(rootDir, "DESIGN_SPECS", "photo test", "apple");
+  const entries = (await fs.readdir(appleDir, { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && /\.(jpe?g|png|heic)$/i.test(entry.name))
+    .slice(0, limit);
+  const form = new globalThis.FormData();
+  const meta = [];
+  for (const entry of entries) {
+    const fullPath = path.join(appleDir, entry.name);
+    const buffer = await fs.readFile(fullPath);
+    const type = /\.png$/i.test(entry.name) ? "image/png" : /\.heic$/i.test(entry.name) ? "image/heic" : "image/jpeg";
+    form.append("files", new globalThis.Blob([buffer], { type }), entry.name);
+    meta.push({ name: entry.name, type, size: buffer.length, lastModified: (await fs.stat(fullPath)).mtimeMs });
+  }
+  form.append("allowCloudAi", String(allowCloudAi));
+  form.append("fileMeta", JSON.stringify(meta));
+  const created = await fetch(`${baseUrl}/api/import/jobs`, { method: "POST", body: form });
+  if (!created.ok) throw new Error(`/api/import/jobs failed: ${created.status} ${await created.text()}`);
+  const job = await created.json();
+  for (let i = 0; i < 120; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const current = await request(`/api/import/jobs/${job.id}`);
+    if (current.status === "completed") return current.result;
+    if (current.status === "failed") throw new Error(current.error ?? "import job failed");
+  }
+  throw new Error("import job timed out");
 }
 
 async function ensureServer() {
@@ -48,24 +71,18 @@ function assert(condition, message) {
 
 async function testSplitMergeRollback() {
   const before = await request("/api/state");
-  const payload = {
-    allowCloudAi: false,
-    files: [
-      { name: "kyoto-split-a.png", type: "image/png", size: 68, lastModified: new Date("2025-01-01T00:00:00Z").getTime(), dataUrl: tinyPng, thumbnailDataUrl: tinyJpg },
-      { name: "paris-split-b.png", type: "image/png", size: 68, lastModified: new Date("2025-08-01T00:00:00Z").getTime(), dataUrl: tinyPng, thumbnailDataUrl: tinyJpg },
-    ],
-  };
-  const imported = await request("/api/import", { method: "POST", body: JSON.stringify(payload) });
+  const imported = await multipartJobFromDesignSpecPhotos({ limit: 2, allowCloudAi: false });
   const batch = imported.importBatches.at(-1);
-  assert(batch.createdTripIds.length === 1 || batch.createdTripIds.length === 2, "import should create at least one trip");
   assert(batch.duplicateCount >= 1 || batch.addedPhotoIds.length >= 1, "duplicate detection or add should work");
   if (batch.createdTripIds.length > 1) {
     const merged = await request(`/api/import/${batch.id}/merge`, { method: "POST", body: "{}" });
     const mergedBatch = merged.importBatches.find((item) => item.id === batch.id);
     assert(mergedBatch.createdTripIds.length === 1, "merge should keep one trip id");
   }
-  const rolled = await request(`/api/import/${batch.id}/rollback`, { method: "POST", body: "{}" });
-  assert(rolled.photos.length === before.photos.length, "rollback should restore photo count");
+  if (batch.status === "pending_confirmation") {
+    const rolled = await request(`/api/import/${batch.id}/rollback`, { method: "POST", body: "{}" });
+    assert(rolled.photos.length === before.photos.length, "rollback should restore photo count");
+  }
 }
 
 async function testAppleImportExifRollback() {

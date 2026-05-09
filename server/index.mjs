@@ -1,12 +1,12 @@
 import http from "node:http";
 import { randomUUID } from "node:crypto";
-import { analyzeTravelImage, embedSearchQuery, inferMissingInfoWithImage } from "./ai-provider.mjs";
+import { analyzeTravelImage, analyzeTravelImageVision, embedSearchQuery, embedTravelImageAnalysis, embedTravelImageImage, inferMissingInfoWithImage } from "./ai-provider.mjs";
 import { createEditServices } from "./application/edit-services.mjs";
 import { createImportServices } from "./application/import-service.mjs";
 import { createSearchService } from "./application/search-service.mjs";
 import { createSettingsService } from "./application/settings-service.mjs";
 import { createStateService } from "./application/state-service.mjs";
-import { dataDir, dbPath, distDir, photoDir, port, rootDir, thumbDir, vectorPath } from "./config/paths.mjs";
+import { dataDir, dbPath, distDir, importJobDir, photoDir, port, rootDir, thumbDir, vectorPath } from "./config/paths.mjs";
 import { createSecretProvider } from "./config/secrets.mjs";
 import { createRouter } from "./http/router.mjs";
 import { EarthRepository } from "./repository.mjs";
@@ -20,7 +20,7 @@ function makeId(prefix) {
 }
 
 const stateServices = createStateService({
-  paths: { photoDir, thumbDir, vectorPath },
+  paths: { photoDir, thumbDir, importJobDir, vectorPath },
   repository,
 });
 const { ensureStorage, readState, readVectorIndex, responseState, writeState, writeVectorIndex } = stateServices;
@@ -35,10 +35,13 @@ const editServices = createEditServices({
 });
 const importServices = createImportServices({
   analyzeTravelImage,
+  analyzeTravelImageVision,
+  embedTravelImageAnalysis,
+  embedTravelImageImage,
   inferMissingInfoWithImage,
   importJobs,
   makeId,
-  paths: { rootDir, photoDir, thumbDir },
+  paths: { rootDir, photoDir, thumbDir, importJobDir },
   readState,
   readVectorIndex,
   repository,

@@ -1,0 +1,22 @@
+- generic [ref=e3]:
+  - banner:
+    - button "Earth_Online" [ref=e4] [cursor=pointer]
+    - button "记忆搜索" [ref=e6] [cursor=pointer]:
+      - img [ref=e7]
+  - navigation [ref=e10]:
+    - button "导入图片" [ref=e11] [cursor=pointer]:
+      - img [ref=e12]
+    - button "时空主界面" [ref=e13] [cursor=pointer]:
+      - img [ref=e14]
+    - button "旅行档案" [ref=e20] [cursor=pointer]:
+      - img [ref=e21]
+      - generic: 旅行档案
+    - button "手动整理" [ref=e24] [cursor=pointer]:
+      - img [ref=e25]
+      - generic: 手动整理
+    - button "本地设置" [ref=e29] [cursor=pointer]:
+      - img [ref=e30]
+      - generic: 本地设置
+  - main [ref=e33]:
+    - region "旅行时间刻痕" [ref=e39]:
+      - generic [ref=e43]: "2026"

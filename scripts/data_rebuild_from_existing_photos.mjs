@@ -1,10 +1,10 @@
-import fs from "node:fs/promises";
 import { existsSync } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
-import { analyzeTravelImage } from "../server/ai-provider.mjs";
+import { analyzeTravelImage, analyzeTravelImageVision, embedTravelImageAnalysis, embedTravelImageImage } from "../server/ai-provider.mjs";
 import { createImportServices } from "../server/application/import-service.mjs";
 import { createStateService } from "../server/application/state-service.mjs";
-import { dataDir, dbPath, photoDir, rootDir, thumbDir, vectorPath } from "../server/config/paths.mjs";
+import { dataDir, dbPath, importJobDir, photoDir, rootDir, thumbDir, vectorPath } from "../server/config/paths.mjs";
 import { EarthRepository } from "../server/repository.mjs";
 import { makeId, mimeFromName, resetDataDir, saveEmptyState } from "./data_utils.mjs";
 
@@ -38,14 +38,13 @@ async function collectSourceFiles() {
     if (!photo.storageUrl?.startsWith("/data/photos/")) continue;
     const sourcePath = path.join(sourcePhotoDir, path.basename(photo.storageUrl));
     if (!existsSync(sourcePath)) continue;
-    const buffer = await fs.readFile(sourcePath);
     const stat = await fs.stat(sourcePath);
     files.push({
       name: photo.fileName || path.basename(sourcePath),
       type: photo.mime || mimeFromName(photo.fileName || sourcePath),
-      size: buffer.length,
+      size: stat.size,
       lastModified: photo.capturedAt ? new Date(String(photo.capturedAt).replace(/Z$/i, "")).getTime() : stat.mtimeMs,
-      buffer,
+      sourcePath,
     });
   }
 
@@ -64,7 +63,7 @@ async function main() {
   const repository = new EarthRepository({ dataDir, dbJsonPath: dbPath });
   const importJobs = new Map();
   const stateServices = createStateService({
-    paths: { photoDir, thumbDir, vectorPath },
+    paths: { photoDir, thumbDir, importJobDir, vectorPath },
     repository,
   });
   const { ensureStorage, readState, readVectorIndex, responseState, writeState, writeVectorIndex } = stateServices;
@@ -72,9 +71,12 @@ async function main() {
 
   const importServices = createImportServices({
     analyzeTravelImage,
+    analyzeTravelImageVision,
+    embedTravelImageAnalysis,
+    embedTravelImageImage,
     importJobs,
     makeId,
-    paths: { rootDir, photoDir, thumbDir },
+    paths: { rootDir, photoDir, thumbDir, importJobDir },
     readState,
     readVectorIndex,
     repository,

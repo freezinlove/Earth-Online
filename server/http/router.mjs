@@ -18,8 +18,11 @@ export function createRouter(handlers, paths) {
       if (req.method === "GET" && pathname === "/api/settings/local-ai") return send(res, 200, handlers.localAiSettings());
       if (req.method === "PATCH" && pathname === "/api/settings/local-ai") return send(res, 200, handlers.updateLocalAiSettings(await readBody(req)));
       if (req.method === "GET" && pathname === "/api/search") return send(res, 200, await handlers.search(url.searchParams));
-      if (req.method === "POST" && pathname === "/api/import") return send(res, 200, await handlers.importPhotos(await readBody(req)));
-      if (req.method === "POST" && pathname === "/api/import/jobs") return send(res, 202, handlers.startImportJob(await readBody(req)));
+      if (req.method === "POST" && pathname === "/api/import/jobs") {
+        const contentType = req.headers["content-type"] ?? "";
+        if (String(contentType).includes("multipart/form-data")) return send(res, 202, await handlers.startMultipartImportJob(req));
+        return send(res, 202, await handlers.startImportJob(await readBody(req)));
+      }
       const importJobEvents = pathname.match(/^\/api\/import\/jobs\/([^/]+)\/events$/);
       if (req.method === "GET" && importJobEvents) {
         return handlers.subscribeImportJob(importJobEvents[1], req, res) ? undefined : sendError(res, 404, "Import job not found");

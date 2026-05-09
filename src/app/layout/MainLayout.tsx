@@ -21,7 +21,8 @@ export function MainLayout({ children }: { children: ReactNode }) {
     id: number;
     to: AppPanel;
   } | null>(null);
-  const [shouldRenderPrimaryNav, setShouldRenderPrimaryNav] = useState(activePanel !== "tripDetail");
+  const shouldHidePrimaryNav = activePanel === "tripDetail" || activePanel === "search";
+  const [shouldRenderPrimaryNav, setShouldRenderPrimaryNav] = useState(!shouldHidePrimaryNav);
   const [isPrimaryNavClosing, setIsPrimaryNavClosing] = useState(false);
   const motionTimer = useRef<number | undefined>(undefined);
   const primaryNavTimer = useRef<number | undefined>(undefined);
@@ -56,7 +57,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
   useEffect(() => {
     window.clearTimeout(primaryNavTimer.current);
 
-    if (activePanel !== "tripDetail") {
+    if (!shouldHidePrimaryNav) {
       setShouldRenderPrimaryNav(true);
       setIsPrimaryNavClosing(false);
       return;
@@ -71,7 +72,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
     }
 
     return () => window.clearTimeout(primaryNavTimer.current);
-  }, [activePanel, shouldRenderPrimaryNav]);
+  }, [shouldHidePrimaryNav, shouldRenderPrimaryNav]);
 
   return (
     <div className="app-shell relative min-h-screen overflow-hidden bg-background text-on-surface" data-home-state={homeState}>
@@ -100,7 +101,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
 
       {shouldRenderPrimaryNav ? (
       <nav
-        className="primary-nav fixed bottom-5 left-1/2 z-[60] flex -translate-x-1/2 items-center gap-1.5 md:bottom-auto md:left-8 md:top-1/2 md:-translate-x-0 md:-translate-y-1/2 md:flex-col"
+        className="primary-nav fixed bottom-5 left-1/2 z-[100] flex -translate-x-1/2 items-center gap-1.5 md:bottom-auto md:left-8 md:top-1/2 md:-translate-x-0 md:-translate-y-1/2 md:flex-col"
         data-active-panel={activePanel}
         data-state={isPrimaryNavClosing ? "closing" : "open"}
       >

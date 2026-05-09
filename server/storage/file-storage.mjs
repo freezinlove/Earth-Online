@@ -4,14 +4,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { corsHeaders } from "../http/responses.mjs";
 
-export function dataUrlToBuffer(dataUrl = "") {
-  const match = dataUrl.match(/^data:([^;,]+)?(?:;base64)?,(.*)$/);
-  if (!match) return { mime: "application/octet-stream", buffer: Buffer.alloc(0) };
-  const mime = match[1] || "application/octet-stream";
-  const body = match[2] || "";
-  return { mime, buffer: Buffer.from(body, dataUrl.includes(";base64,") ? "base64" : "utf8") };
-}
-
 export function extFromName(name, mime) {
   const ext = path.extname(name || "").toLowerCase();
   if (ext) return ext;
@@ -36,7 +28,7 @@ export async function servePhoto(res, pathname, { photoDir, thumbDir }) {
     return;
   }
   const ext = path.extname(fullPath).toLowerCase();
-  const mime = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
+  const mime = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : ext === ".heic" ? "image/heic" : "image/jpeg";
   res.writeHead(200, { ...corsHeaders, "content-type": mime, "cache-control": "public, max-age=31536000" });
   res.end(await fs.readFile(fullPath));
 }

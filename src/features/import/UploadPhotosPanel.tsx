@@ -1,6 +1,7 @@
 import { Check, Circle, Clock3, FileImage, FolderOpen, ImagePlus, LoaderCircle, MapPin, RotateCcw, Sparkles, X } from "lucide-react";
 import type { ChangeEvent, DragEvent } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { capturedDateLabel } from "@/domain/datetime";
 import { photoAltText, placeLabel, tripLabel } from "@/domain/labels";
 import type { ImportBatch, PendingItem, Photo, PlaceNode, Trip } from "@/domain/models";
@@ -45,11 +46,11 @@ type MissingTargetDisplay = {
 };
 
 type InferFeedback = {
-  status: "running" | "done" | "error";
+  status: "running" | "error";
   message: string;
 };
 
-const thumbnailLimit = 9;
+const previewExitMs = 180;
 
 function isPendingBatch(batch?: ImportBatch) {
   return batch?.status === "pending_confirmation";
@@ -123,8 +124,11 @@ function buildProgressSteps({
   const liveTotal = Math.max(
     importProgress?.total ?? 0,
     importProgress?.steps?.reading?.total ?? 0,
+    importProgress?.steps?.upload?.total ?? 0,
     importProgress?.steps?.exif?.total ?? 0,
+    importProgress?.steps?.thumbnails?.total ?? 0,
     importProgress?.steps?.ai?.total ?? 0,
+    importProgress?.steps?.embedding?.total ?? 0,
   );
   const completed = Boolean(latestBatch && !isImporting);
 
@@ -132,18 +136,26 @@ function buildProgressSteps({
     const progressTotal = isImporting ? liveTotal : latestTotal;
     const total = Math.max(progressTotal, 1);
     const phase = completed ? "completed" : importProgress?.phase;
-    const readingDone = importProgress?.steps?.reading?.done ?? (phase === "reading" ? importProgress?.done ?? 0 : total);
+    const uploadDone = importProgress?.steps?.upload?.done ?? importProgress?.steps?.reading?.done ?? (phase === "reading" || phase === "uploading" ? importProgress?.done ?? 0 : total);
     const exifDone =
       importProgress?.steps?.exif?.done ??
-      (phase === "exif" ? importProgress?.done ?? 0 : phase === "ai" || phase === "grouping" || phase === "completed" ? total : 0);
+      (phase === "exif" ? importProgress?.done ?? 0 : phase === "thumbnails" || phase === "ai" || phase === "embedding" || phase === "grouping" || phase === "completed" ? total : 0);
+    const thumbnailDone =
+      importProgress?.steps?.thumbnails?.done ??
+      (phase === "thumbnails" ? importProgress?.done ?? 0 : phase === "ai" || phase === "embedding" || phase === "grouping" || phase === "completed" ? total : 0);
     const aiDone =
       importProgress?.steps?.ai?.done ??
-      (phase === "ai" ? importProgress?.done ?? 0 : phase === "grouping" || phase === "completed" ? total : 0);
+      (phase === "ai" ? importProgress?.done ?? 0 : phase === "embedding" || phase === "grouping" || phase === "completed" ? total : 0);
+    const embeddingDone =
+      importProgress?.steps?.embedding?.done ??
+      (phase === "embedding" ? importProgress?.done ?? 0 : phase === "grouping" || phase === "completed" ? total : 0);
 
     return [
-      { icon: FileImage, label: "读取照片", done: Math.min(readingDone, total), total, active: phase === "reading" },
+      { icon: FileImage, label: "上传照片", done: Math.min(uploadDone, total), total, active: phase === "reading" || phase === "uploading" },
       { icon: Clock3, label: "解析 EXIF", done: Math.min(exifDone, total), total, active: phase === "exif" },
+      { icon: ImagePlus, label: "生成缩略图", done: Math.min(thumbnailDone, total), total, active: phase === "thumbnails" },
       { icon: Sparkles, label: "AI 图片理解", done: Math.min(aiDone, total), total, active: phase === "ai" },
+      { icon: Circle, label: "生成向量", done: Math.min(embeddingDone, total), total, active: phase === "embedding" },
     ];
   }
 
@@ -241,7 +253,7 @@ function groupMissingPreviews(batch: ImportBatch | undefined, photos: Photo[], p
       groups.set(key, {
         id: key,
         icon,
-        label: gps && time ? "GPS / TIME" : gps ? "GPS" : "TIME",
+        label: gps && time ? "缺少GPS / 时间" : gps ? "缺少GPS" : "缺少时间",
         target,
         photos: [photo],
         confidence: candidate?.confidence ?? photo.locationResolution?.confidence,
@@ -253,25 +265,50 @@ function groupMissingPreviews(batch: ImportBatch | undefined, photos: Photo[], p
   return [...groups.values()];
 }
 
-function PhotoStrip({ photos, selectedPhotoId, onSelect }: { photos: Photo[]; selectedPhotoId?: string; onSelect: (photoId: string) => void }) {
-  const visible = photos.slice(0, thumbnailLimit);
-  const hidden = photos.length - visible.length;
-
+function PhotoStrip({
+  photos,
+  onRemovePhoto,
+  selectedPhotoId,
+  onOpenPreview,
+  onSelect,
+}: {
+  photos: Photo[];
+  onRemovePhoto?: (photoId: string) => void;
+  selectedPhotoId?: string;
+  onOpenPreview?: (photo: Photo) => void;
+  onSelect: (photoId: string) => void;
+}) {
   return (
     <div className="import-photo-strip">
-      {visible.map((photo) => (
-        <button
-          key={photo.id}
-          className="import-thumb"
-          data-active={selectedPhotoId === photo.id || undefined}
-          onClick={() => onSelect(photo.id)}
-          title={photo.fileName}
-          type="button"
-        >
-          <img src={photo.thumbnailUrl} alt={photoAltText(photo)} />
-        </button>
+      {photos.map((photo) => (
+        <span key={photo.id} className="import-thumb-shell" data-active={selectedPhotoId === photo.id || undefined}>
+          <button
+            className="import-thumb"
+            onClick={() => {
+              onSelect(photo.id);
+              onOpenPreview?.(photo);
+            }}
+            title={photo.fileName}
+            type="button"
+          >
+            <img src={photo.thumbnailUrl} alt={photoAltText(photo)} />
+          </button>
+          {onRemovePhoto ? (
+            <button
+              className="import-thumb-remove"
+              onClick={(event) => {
+                event.stopPropagation();
+                onRemovePhoto(photo.id);
+              }}
+              title="清除此张图片"
+              type="button"
+              aria-label={`清除 ${photo.title ?? photo.fileName}`}
+            >
+              <X size={12} />
+            </button>
+          ) : null}
+        </span>
       ))}
-      {hidden > 0 ? <span className="import-thumb-more">+{hidden}</span> : null}
     </div>
   );
 }
@@ -297,10 +334,14 @@ function ProgressLine({ step }: { step: ImportStep }) {
 function ReviewTree({
   previews,
   selectedPhotoId,
+  onOpenPreview,
+  onRemovePhoto,
   onSelectPhoto,
 }: {
   previews: TripPreview[];
   selectedPhotoId?: string;
+  onOpenPreview: (photo: Photo) => void;
+  onRemovePhoto: (photoId: string) => void;
   onSelectPhoto: (photoId: string) => void;
 }) {
   if (!previews.length) return null;
@@ -324,7 +365,7 @@ function ReviewTree({
                   <em>{placePreview.isNew ? "新地点" : "合并"}</em>
                   <time>{placePreview.timeLabel}</time>
                 </div>
-                <PhotoStrip photos={placePreview.photos} selectedPhotoId={selectedPhotoId} onSelect={onSelectPhoto} />
+                <PhotoStrip photos={placePreview.photos} selectedPhotoId={selectedPhotoId} onOpenPreview={onOpenPreview} onRemovePhoto={onRemovePhoto} onSelect={onSelectPhoto} />
               </div>
             ))}
           </div>
@@ -341,6 +382,7 @@ function MissingSuggestions({
   selectedPhotoId,
   onAccept,
   onInfer,
+  onOpenPreview,
   onReject,
   onSelectPhoto,
 }: {
@@ -350,6 +392,7 @@ function MissingSuggestions({
   selectedPhotoId?: string;
   onAccept: (item?: PendingItem) => void;
   onInfer: (item?: PendingItem) => void;
+  onOpenPreview: (photo: Photo) => void;
   onReject: (photoIds: string[]) => void;
   onSelectPhoto: (photoId: string) => void;
 }) {
@@ -370,34 +413,28 @@ function MissingSuggestions({
           const statusLabel =
             feedback?.status === "running"
               ? "推断中"
-              : feedback?.status === "done"
-                ? "已更新"
-                : feedback?.status === "error"
-                  ? "失败"
-                  : isInferring
-                    ? "推断中"
-                    : actionable
-                      ? "AI 建议"
-                      : group.pending?.inference?.status === "keep_pending"
-                        ? "仍待定"
-                        : "待推断";
-          const confidence = group.pending?.inference?.confidence ?? group.confidence;
+              : feedback?.status === "error"
+                ? "失败"
+                : isInferring
+                  ? "推断中"
+                  : actionable
+                    ? "AI 建议"
+                    : group.pending?.inference?.status === "keep_pending"
+                      ? "仍待定"
+                      : "待推断";
           return (
             <div key={group.id} className="import-missing-row" title={group.pending?.reason ?? group.label}>
-              <PhotoStrip photos={group.photos} selectedPhotoId={selectedPhotoId} onSelect={onSelectPhoto} />
+              <PhotoStrip photos={group.photos} selectedPhotoId={selectedPhotoId} onOpenPreview={onOpenPreview} onSelect={onSelectPhoto} />
               <span className="import-missing-field">{group.label}</span>
               <span className="import-ai-suggest" data-status={statusLabel}>{statusLabel}</span>
               <strong className="import-missing-target">
                 <span>{suggestedTarget.label}</span>
                 {suggestedTarget.badge ? <em>{suggestedTarget.badge}</em> : null}
               </strong>
-              <span className="import-confidence" aria-label="置信度">
-                <span style={{ width: `${Math.max(18, Math.min(100, Math.round((confidence ?? 0.35) * 100)))}%` }} />
-              </span>
               <button className="import-inline-cancel" onClick={() => onReject(group.photos.map((photo) => photo.id))} title="取消导入" type="button">
                 <X size={13} />
               </button>
-              <button className="import-inline-infer" onClick={() => onInfer(group.pending)} disabled={!group.pending || isInferring} title="AI 二次推断" type="button">
+              <button className="import-inline-infer" onClick={() => onInfer(group.pending)} disabled={!group.pending || isInferring} title="AI 二次推断" type="button" data-tooltip="AI深度识别">
                 {isInferring ? <LoaderCircle className="animate-spin" size={13} /> : <Sparkles size={13} />}
               </button>
               {actionable ? (
@@ -420,7 +457,7 @@ function MissingSuggestions({
   );
 }
 
-export function UploadPhotosPanel() {
+export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }) {
   const importFiles = useAppStore((state) => state.importFiles);
   const importBatches = useAppStore((state) => state.importBatches);
   const pendingItems = useAppStore((state) => state.pendingItems);
@@ -441,6 +478,8 @@ export function UploadPhotosPanel() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [inferringIds, setInferringIds] = useState<Set<string>>(() => new Set());
   const [inferFeedback, setInferFeedback] = useState<Record<string, InferFeedback>>({});
+  const [previewPhoto, setPreviewPhoto] = useState<Photo>();
+  const [isPreviewClosing, setIsPreviewClosing] = useState(false);
   const lastBatch = importBatches[importBatches.length - 1];
   const latestBatch = lastBatch?.status === "rolled_back" ? undefined : lastBatch;
   const importedIds = useMemo(() => new Set(latestBatch?.addedPhotoIds ?? []), [latestBatch?.addedPhotoIds]);
@@ -456,10 +495,52 @@ export function UploadPhotosPanel() {
   const canRollback = isPendingBatch(latestBatch) && !isSubmitting;
   const summaryTrips = tripPreviews.length;
   const summaryPlaces = tripPreviews.reduce((count, trip) => count + trip.places.length, 0);
+  const openPhotoPreview = useCallback((photo: Photo) => {
+    setIsPreviewClosing(false);
+    setPreviewPhoto(photo);
+  }, []);
+  const closePhotoPreview = useCallback(() => {
+    if (!previewPhoto || isPreviewClosing) return;
+    setIsPreviewClosing(true);
+    window.setTimeout(() => {
+      setPreviewPhoto(undefined);
+      setIsPreviewClosing(false);
+    }, previewExitMs);
+  }, [isPreviewClosing, previewPhoto]);
+  const photoPreview = previewPhoto ? (
+    <div
+      className="import-photo-preview"
+      data-state={isPreviewClosing ? "closing" : "open"}
+      role="dialog"
+      aria-modal="true"
+      aria-label={previewPhoto.title ?? previewPhoto.fileName}
+      onClick={closePhotoPreview}
+    >
+      <figure onClick={(event) => event.stopPropagation()}>
+        <button className="import-photo-preview-close" type="button" title="关闭预览" onClick={closePhotoPreview}>
+          <X size={26} />
+        </button>
+        <img src={previewPhoto.storageUrl ?? previewPhoto.thumbnailUrl} alt={photoAltText(previewPhoto)} />
+        <figcaption>
+          <strong>{previewPhoto.title ?? previewPhoto.fileName}</strong>
+          <span>{previewPhoto.fileName}</span>
+        </figcaption>
+      </figure>
+    </div>
+  ) : null;
 
   useEffect(() => {
     if (!selectedPhotoId && importedPhotos[0]) setSelectedPhotoId(importedPhotos[0].id);
   }, [importedPhotos, selectedPhotoId]);
+
+  useEffect(() => {
+    if (!previewPhoto) return;
+    const closePreview = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closePhotoPreview();
+    };
+    window.addEventListener("keydown", closePreview);
+    return () => window.removeEventListener("keydown", closePreview);
+  }, [closePhotoPreview, previewPhoto]);
 
   const startImport = (files: FileList | File[]) => {
     const nextFiles = Array.from(files).filter((file) => file.type.startsWith("image/"));
@@ -493,18 +574,11 @@ export function UploadPhotosPanel() {
     }));
     try {
       await inferPendingLocation(item.id);
-      setInferFeedback((feedback) => ({
-        ...feedback,
-        [item.id]: { status: "done", message: "二次推断已完成，结果已刷新" },
-      }));
-      window.setTimeout(() => {
-        setInferFeedback((feedback) => {
-          if (feedback[item.id]?.status !== "done") return feedback;
-          const next = { ...feedback };
-          delete next[item.id];
-          return next;
-        });
-      }, 3200);
+      setInferFeedback((feedback) => {
+        const next = { ...feedback };
+        delete next[item.id];
+        return next;
+      });
     } catch (error) {
       setInferFeedback((feedback) => ({
         ...feedback,
@@ -543,8 +617,10 @@ export function UploadPhotosPanel() {
   };
 
   return (
+    <>
     <section
       className="photo-import-panel fixed inset-0 z-[70] overflow-y-auto bg-background/94 px-5 py-8 backdrop-blur-2xl md:px-24 md:py-12"
+      data-state={isClosing ? "closing" : "open"}
       onDragEnter={(event) => {
         event.preventDefault();
         setIsDragging(true);
@@ -583,7 +659,13 @@ export function UploadPhotosPanel() {
 
         <div className="import-review-shell">
           {tripPreviews.length ? (
-            <ReviewTree previews={tripPreviews} selectedPhotoId={selectedPhotoId} onSelectPhoto={setSelectedPhotoId} />
+            <ReviewTree
+              previews={tripPreviews}
+              selectedPhotoId={selectedPhotoId}
+              onOpenPreview={openPhotoPreview}
+              onRemovePhoto={(photoId) => void cancelPendingImportPhotos([photoId])}
+              onSelectPhoto={setSelectedPhotoId}
+            />
           ) : (
             <div className="import-empty-stage">
               <ImagePlus size={26} />
@@ -598,6 +680,7 @@ export function UploadPhotosPanel() {
             selectedPhotoId={selectedPhotoId}
             onAccept={(item) => void acceptPending(item)}
             onInfer={(item) => void inferPending(item)}
+            onOpenPreview={openPhotoPreview}
             onReject={(photoIds) => void cancelPendingImportPhotos(photoIds)}
             onSelectPhoto={setSelectedPhotoId}
           />
@@ -625,5 +708,7 @@ export function UploadPhotosPanel() {
         </div>
       </div>
     </section>
+    {photoPreview ? createPortal(photoPreview, document.body) : null}
+    </>
   );
 }

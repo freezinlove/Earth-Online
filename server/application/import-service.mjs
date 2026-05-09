@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import sharp from "sharp";
 import { safeArray } from "../domain/arrays.mjs";
 import { toDateInput } from "../domain/dates.mjs";
 import { parseExif } from "../domain/exif-parser.mjs";
@@ -10,10 +11,14 @@ import { buildPhotoRoute, buildRoute } from "../domain/route-projector.mjs";
 import { makePhotoTitle } from "../domain/text-normalizer.mjs";
 import { rebuildTrips } from "../domain/trip-rebuilder.mjs";
 import { dominantPresetsForPhotos, findAdjacentTrip, groupImportedPhotos } from "../domain/trip-resolver.mjs";
-import { dataUrlToBuffer, extFromName, hashBuffer } from "../storage/file-storage.mjs";
+import { readMultipartFormDataToDir } from "../http/body.mjs";
+import { extFromName, hashBuffer } from "../storage/file-storage.mjs";
 
 export function createImportServices({
   analyzeTravelImage,
+  analyzeTravelImageVision = analyzeTravelImage,
+  embedTravelImageAnalysis,
+  embedTravelImageImage,
   inferMissingInfoWithImage,
   importJobs,
   makeId,
@@ -27,16 +32,92 @@ export function createImportServices({
   writeVectorIndex,
 }) {
   const jobSubscribers = new Map();
+  const metadataConcurrency = Number(process.env.EARTH_ONLINE_IMPORT_METADATA_CONCURRENCY ?? 16);
+  const storageWriteConcurrency = Number(process.env.EARTH_ONLINE_IMPORT_STORAGE_WRITE_CONCURRENCY ?? 16);
+  const aiConcurrency = Number(process.env.EARTH_ONLINE_IMPORT_AI_CONCURRENCY ?? 200);
+  const embeddingConcurrency = Number(process.env.EARTH_ONLINE_IMPORT_EMBEDDING_CONCURRENCY ?? 600);
+  const failedImportJobRetentionMs = Number(process.env.EARTH_ONLINE_FAILED_IMPORT_JOB_RETENTION_MS ?? 24 * 60 * 60 * 1000);
 
-  async function makeImportFilePayloadFromLocalFile(fullPath) {
-    const buffer = await fs.readFile(fullPath);
-    return {
-      name: path.basename(fullPath),
-      type: "image/jpeg",
-      size: buffer.length,
-      lastModified: (await fs.stat(fullPath)).mtimeMs,
-      buffer,
+  async function mapConcurrent(items, limit, worker) {
+    const results = new Array(items.length);
+    let nextIndex = 0;
+    const workerCount = Math.max(1, Math.min(Number(limit) || 1, items.length || 1));
+    await Promise.all(
+      Array.from({ length: workerCount }, async () => {
+        for (;;) {
+          const index = nextIndex;
+          nextIndex += 1;
+          if (index >= items.length) return;
+          results[index] = await worker(items[index], index);
+        }
+      }),
+    );
+    return results;
+  }
+
+  function createLimiter(limit) {
+    const max = Math.max(1, Number(limit) || 1);
+    let active = 0;
+    const queue = [];
+    const drain = () => {
+      if (active >= max) return;
+      const next = queue.shift();
+      if (!next) return;
+      active += 1;
+      Promise.resolve()
+        .then(next.task)
+        .then(next.resolve, next.reject)
+        .finally(() => {
+          active -= 1;
+          drain();
+        });
     };
+    return (task) =>
+      new Promise((resolve, reject) => {
+        queue.push({ task, resolve, reject });
+        drain();
+      });
+  }
+
+  async function readImportFile(file) {
+    const fullPath = file.tempPath || file.sourcePath;
+    if (fullPath) {
+      const buffer = await fs.readFile(fullPath);
+      return { fullPath, mime: file.type || "image/jpeg", buffer };
+    }
+    throw new Error(`Import file is missing a tempPath/sourcePath: ${file.name || "unnamed"}`);
+  }
+
+  async function createThumbnailFromFile(fullPath, ext) {
+    try {
+      return {
+        ext: ".jpg",
+        buffer: await sharp(fullPath, { failOn: "none" }).rotate().resize({ width: 720, height: 720, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 78 }).toBuffer(),
+      };
+    } catch {
+      return { ext, buffer: await fs.readFile(fullPath) };
+    }
+  }
+
+  async function readImageDataUrl(fullPath, mime) {
+    const buffer = await fs.readFile(fullPath);
+    return `data:${mime};base64,${buffer.toString("base64")}`;
+  }
+
+  async function cleanupStaleImportJobDirs() {
+    if (!paths.importJobDir) return;
+    const retentionMs = Number.isFinite(failedImportJobRetentionMs) && failedImportJobRetentionMs > 0 ? failedImportJobRetentionMs : 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - retentionMs;
+    const entries = await fs.readdir(paths.importJobDir, { withFileTypes: true }).catch(() => []);
+    await Promise.all(
+      entries
+        .filter((entry) => entry.isDirectory())
+        .map(async (entry) => {
+          const fullPath = path.join(paths.importJobDir, entry.name);
+          const stat = await fs.stat(fullPath).catch(() => undefined);
+          if (stat && stat.mtimeMs < cutoff) await fs.rm(fullPath, { recursive: true, force: true });
+        }),
+    );
   }
 
   async function importPhotos(payload, progress = {}) {
@@ -59,104 +140,202 @@ export function createImportServices({
     const knownHashToPhoto = new Map(state.photos.filter((photo) => photo.originalHash).map((photo) => [photo.originalHash, photo]));
     const knownHashes = new Set(knownHashToPhoto.keys());
     const duplicatePhotoIds = new Set();
+    let exifDone = 0;
+    let thumbnailDone = 0;
+    let aiDone = 0;
+    let embeddingDone = 0;
     progress.update?.({ phase: "exif", done: 0, total: files.length });
-    for (let index = 0; index < files.length; index += 1) {
-      const file = files[index];
-      progress.update?.({ phase: "exif", done: index, total: files.length, currentFileName: file.name || `photo-${index + 1}` });
-      const parsed = file.buffer ? { mime: file.type || "image/jpeg", buffer: file.buffer } : dataUrlToBuffer(file.dataUrl);
-      const { mime, buffer } = parsed;
+    progress.update?.({ phase: "thumbnails", done: 0, total: files.length });
+    progress.update?.({ phase: "ai", done: 0, total: files.length });
+    progress.update?.({ phase: "embedding", done: 0, total: files.length });
+
+    const storageLimit = createLimiter(storageWriteConcurrency);
+    const visionLimit = createLimiter(aiConcurrency);
+    const embeddingLimit = createLimiter(embeddingConcurrency);
+    const downstreamTasks = [];
+    const importedSlots = new Array(files.length);
+    const allowCloud = payload.allowCloudAi !== false;
+
+    const markThumbnailDone = (fileName) => {
+      thumbnailDone += 1;
+      progress.update?.({ phase: "thumbnails", done: thumbnailDone, total: files.length, currentFileName: fileName });
+    };
+    const markAiDone = (fileName) => {
+      aiDone += 1;
+      progress.update?.({ phase: "ai", done: aiDone, total: files.length, currentFileName: fileName });
+    };
+    const markEmbeddingDone = (fileName) => {
+      embeddingDone += 1;
+      progress.update?.({ phase: "embedding", done: embeddingDone, total: files.length, currentFileName: fileName });
+    };
+
+    await mapConcurrent(files, metadataConcurrency, async (file, index) => {
+      const fileName = file.name || `photo-${index + 1}`;
+      progress.update?.({ phase: "exif", done: exifDone, total: files.length, currentFileName: fileName });
+      const parsed = await readImportFile(file);
+      const { fullPath, mime, buffer } = parsed;
       const ext = extFromName(file.name, mime);
       const originalHash = hashBuffer(buffer);
+      const exif = parseExif(buffer);
+      exifDone += 1;
+      progress.update?.({ phase: "exif", done: exifDone, total: files.length, currentFileName: fileName });
+
       if (knownHashes.has(originalHash)) {
-        duplicateNames.push(file.name || `duplicate-${index + 1}`);
+        duplicateNames.push(fileName);
         const duplicatePhoto = knownHashToPhoto.get(originalHash);
         if (duplicatePhoto?.id) duplicatePhotoIds.add(duplicatePhoto.id);
-        progress.update?.({ phase: "exif", done: index + 1, total: files.length, currentFileName: file.name || `photo-${index + 1}` });
+        markThumbnailDone(fileName);
         if (payload.reanalyzeDuplicates) {
           const existingPhoto = duplicatePhoto;
           if (existingPhoto) {
-            const exif = parseExif(buffer);
             const parsedLocation = isUsableLocation(exif.location) ? exif.location : existingPhoto.location;
-            const preset = inferPreset(file.name, parsedLocation);
-            const dataUrl = file.dataUrl ?? `data:${mime};base64,${buffer.toString("base64")}`;
-            progress.update?.({ phase: "ai", done: index, total: files.length, currentFileName: file.name || `photo-${index + 1}` });
-            const ai = await analyzePhoto({ fileName: file.name, mime, dataUrl, preset, location: parsedLocation, allowCloud: payload.allowCloudAi !== false });
-            recordAiStats(ai, aiStats);
-            const aiEvidence = toAiEvidence(ai, { makeId });
-            const resolvedLocation = existingPhoto.location ?? parsedLocation;
-            existingPhoto.tags = ai.tags;
-            existingPhoto.title = ai.title || makePhotoTitle(existingPhoto);
-            existingPhoto.aiCaption = ai.caption;
-            existingPhoto.ai = aiEvidence;
-            existingPhoto.locationResolution = resolveImportedLocation({
-              location: resolvedLocation,
-              aiEvidence,
-              pendingReason: existingPhoto.pendingReason,
-            });
-            existingPhoto.aiProvider = ai.provider;
-            existingPhoto.embeddingProvider = ai.embeddingProvider;
-            existingPhoto.embeddingDimension = ai.embeddingDimension ?? ai.embedding?.length;
-            existingPhoto.aiFallbackReason = ai.fallbackReason;
-            if (parsedLocation && !existingPhoto.location) existingPhoto.location = parsedLocation;
-            vectorIndex[existingPhoto.id] = ai.embedding;
+            downstreamTasks.push(
+              Promise.all([
+                visionLimit(async () => {
+                  const dataUrl = allowCloud ? await readImageDataUrl(fullPath, mime) : undefined;
+                  const ai = await analyzePhotoVision({
+                    fileName,
+                    mime,
+                    dataUrl,
+                    preset: inferPreset(fileName, parsedLocation),
+                    location: parsedLocation,
+                    allowCloud,
+                  });
+                  recordVisionStats(ai, aiStats);
+                  markAiDone(fileName);
+                  return ai;
+                }),
+                embeddingLimit(async () => {
+                  const dataUrl = allowCloud ? await readImageDataUrl(fullPath, mime) : undefined;
+                  const embedding = await embedPhotoImage({ fileName, mime, dataUrl, allowCloud });
+                  recordEmbeddingStats(embedding, aiStats);
+                  markEmbeddingDone(fileName);
+                  return embedding;
+                }),
+              ]).then(([ai, embedding]) => {
+                const aiEvidence = toAiEvidence(ai, { makeId });
+                const resolvedLocation = existingPhoto.location ?? parsedLocation;
+                existingPhoto.tags = ai.tags;
+                existingPhoto.title = ai.title || makePhotoTitle(existingPhoto);
+                existingPhoto.aiCaption = ai.caption;
+                existingPhoto.ai = aiEvidence;
+                existingPhoto.locationResolution = resolveImportedLocation({
+                  location: resolvedLocation,
+                  aiEvidence,
+                  pendingReason: existingPhoto.pendingReason,
+                });
+                existingPhoto.aiProvider = ai.provider;
+                existingPhoto.aiFallbackReason = ai.fallbackReason;
+                existingPhoto.embeddingProvider = embedding.embeddingProvider;
+                existingPhoto.embeddingDimension = embedding.embeddingDimension ?? embedding.embedding?.length;
+                existingPhoto.embeddingFallbackReason = embedding.embeddingFallbackReason;
+                if (parsedLocation && !existingPhoto.location) existingPhoto.location = parsedLocation;
+                vectorIndex[existingPhoto.id] = embedding.embedding;
+              }),
+            );
           }
+        } else {
+          markAiDone(fileName);
+          markEmbeddingDone(fileName);
         }
-        progress.update?.({ phase: "ai", done: index + 1, total: files.length, currentFileName: file.name || `photo-${index + 1}` });
-        continue;
+        return;
       }
+
       knownHashes.add(originalHash);
       const photoId = makeId("photo");
       const storageName = `${photoId}${ext}`;
-      const thumbName = `${photoId}.jpg`;
       const storagePath = path.join(paths.photoDir, storageName);
-      const thumbPath = path.join(paths.thumbDir, thumbName);
-      await fs.writeFile(storagePath, buffer);
-      const thumbnailSource = file.thumbnailDataUrl ? dataUrlToBuffer(file.thumbnailDataUrl).buffer : buffer;
-      await fs.writeFile(thumbPath, thumbnailSource);
-      const exif = parseExif(buffer);
-      progress.update?.({ phase: "exif", done: index + 1, total: files.length, currentFileName: file.name || storageName });
       const parsedLocation = isUsableLocation(exif.location) ? exif.location : undefined;
-      const preset = inferPreset(file.name, parsedLocation);
+      const preset = inferPreset(fileName, parsedLocation);
       const capturedAt =
         exif.capturedAt ??
         (file.lastModified ? new Date(file.lastModified).toISOString() : new Date(now.getTime() - (files.length - index) * 86400000).toISOString());
       const hasExifLocation = Boolean(parsedLocation);
       const location = parsedLocation;
-      const dataUrl = file.dataUrl ?? `data:${mime};base64,${buffer.toString("base64")}`;
-      progress.update?.({ phase: "ai", done: index, total: files.length, currentFileName: file.name || storageName });
-      const ai = await analyzePhoto({ fileName: file.name, mime, dataUrl, preset, location, allowCloud: payload.allowCloudAi !== false });
-      recordAiStats(ai, aiStats);
-      const aiEvidence = toAiEvidence(ai, { makeId });
       const pendingReason = !location ? "missing_gps" : !exif.capturedAt ? "missing_time" : undefined;
-      const photo = {
-        id: photoId,
-        fileName: file.name || storageName,
-        title: ai.title || makePhotoTitle({ fileName: file.name || storageName, tags: ai.tags, aiCaption: ai.caption }),
+      const newAiJob = {
+        type: "new",
+        index,
+        photoId,
+        fileName,
+        storageName,
+        thumbName: `${photoId}.jpg`,
         originalHash,
         mime,
-        thumbnailUrl: `/data/thumbs/${thumbName}`,
-        storageUrl: `/data/photos/${storageName}`,
-        capturedAt,
+        fullPath,
+        preset,
         location,
-        tags: ai.tags,
-        aiCaption: ai.caption,
-        ai: aiEvidence,
-        locationResolution: resolveImportedLocation({ location, aiEvidence, pendingReason }),
-        aiProvider: ai.provider,
-        embeddingProvider: ai.embeddingProvider,
-        embeddingDimension: ai.embeddingDimension ?? ai.embedding?.length,
-        aiFallbackReason: ai.fallbackReason,
-        importedBatchId: batchId,
+        capturedAt,
         pendingReason,
-        exifStatus: {
-          time: exif.capturedAt ? "read" : "fallback",
-          gps: hasExifLocation ? "read" : "missing",
-        },
+        hasExifLocation,
+        hasExifTime: Boolean(exif.capturedAt),
       };
-      vectorIndex[photo.id] = ai.embedding;
-      imported.push(photo);
-      progress.update?.({ phase: "ai", done: index + 1, total: files.length, currentFileName: file.name || storageName });
-    }
+      downstreamTasks.push(
+        Promise.all([
+          storageLimit(async () => {
+            const thumbnail = await createThumbnailFromFile(fullPath, ext);
+            const thumbName = `${photoId}${thumbnail.ext}`;
+            await Promise.all([fs.copyFile(fullPath, storagePath), fs.writeFile(path.join(paths.thumbDir, thumbName), thumbnail.buffer)]);
+            markThumbnailDone(fileName);
+            return thumbName;
+          }),
+          visionLimit(async () => {
+            const dataUrl = allowCloud ? await readImageDataUrl(fullPath, mime) : undefined;
+            const ai = await analyzePhotoVision({
+              fileName,
+              mime,
+              dataUrl,
+              preset,
+              location,
+              allowCloud,
+            });
+            recordVisionStats(ai, aiStats);
+            markAiDone(fileName);
+            return ai;
+          }),
+          embeddingLimit(async () => {
+            const dataUrl = allowCloud ? await readImageDataUrl(fullPath, mime) : undefined;
+            const embedding = await embedPhotoImage({ fileName, mime, dataUrl, allowCloud });
+            recordEmbeddingStats(embedding, aiStats);
+            markEmbeddingDone(fileName);
+            return embedding;
+          }),
+        ]).then(([thumbName, ai, embedding]) => {
+          const aiEvidence = toAiEvidence(ai, { makeId });
+          const photo = {
+            id: newAiJob.photoId,
+            fileName: newAiJob.fileName || newAiJob.storageName,
+            title: ai.title || makePhotoTitle({ fileName: newAiJob.fileName || newAiJob.storageName, tags: ai.tags, aiCaption: ai.caption }),
+            originalHash: newAiJob.originalHash,
+            mime: newAiJob.mime,
+            thumbnailUrl: `/data/thumbs/${thumbName}`,
+            storageUrl: `/data/photos/${newAiJob.storageName}`,
+            capturedAt: newAiJob.capturedAt,
+            location: newAiJob.location,
+            tags: ai.tags,
+            aiCaption: ai.caption,
+            ai: aiEvidence,
+            locationResolution: resolveImportedLocation({ location: newAiJob.location, aiEvidence, pendingReason: newAiJob.pendingReason }),
+            aiProvider: ai.provider,
+            aiFallbackReason: ai.fallbackReason,
+            embeddingProvider: embedding.embeddingProvider,
+            embeddingDimension: embedding.embeddingDimension ?? embedding.embedding?.length,
+            embeddingFallbackReason: embedding.embeddingFallbackReason,
+            importedBatchId: batchId,
+            pendingReason: newAiJob.pendingReason,
+            exifStatus: {
+              time: newAiJob.hasExifTime ? "read" : "fallback",
+              gps: newAiJob.hasExifLocation ? "read" : "missing",
+            },
+          };
+          vectorIndex[photo.id] = embedding.embedding;
+          importedSlots[newAiJob.index] = photo;
+        }),
+      );
+    });
+
+    await Promise.all(downstreamTasks);
+    imported.push(...importedSlots.filter(Boolean));
 
     progress.update?.({ phase: "grouping", done: files.length, total: files.length });
     const groups = imported.length ? groupImportedPhotos(imported) : [];
@@ -306,17 +485,47 @@ export function createImportServices({
     return responseState();
   }
 
-  function startImportJob(payload) {
+  async function startImportJob(payload) {
     const id = makeId("job");
-    const total = safeArray(payload.files).length;
+    return enqueueImportJob(id, {
+      ...payload,
+      allowCloudAi: payload.allowCloudAi === "false" ? false : payload.allowCloudAi === "true" ? true : payload.allowCloudAi,
+      reanalyzeDuplicates: payload.reanalyzeDuplicates === "true" ? true : payload.reanalyzeDuplicates,
+      files: safeArray(payload.files),
+    });
+  }
+
+  async function startMultipartImportJob(req) {
+    await cleanupStaleImportJobDirs();
+    const id = makeId("job");
+    const rawDir = path.join(paths.importJobDir ?? path.join(paths.rootDir, "data", "import-jobs"), id, "raw");
+    let payload;
+    try {
+      payload = await readMultipartFormDataToDir(req, rawDir);
+    } catch (error) {
+      await fs.rm(path.dirname(rawDir), { recursive: true, force: true });
+      throw error;
+    }
+    return enqueueImportJob(id, {
+      ...payload,
+      allowCloudAi: payload.allowCloudAi === "false" ? false : payload.allowCloudAi === "true" ? true : payload.allowCloudAi,
+      reanalyzeDuplicates: payload.reanalyzeDuplicates === "true" ? true : payload.reanalyzeDuplicates,
+    });
+  }
+
+  function enqueueImportJob(id, jobPayload) {
+    const total = safeArray(jobPayload.files).length;
     const createdAt = new Date().toISOString();
     const initialProgress = {
       phase: "queued",
       done: 0,
       total,
       steps: {
+        upload: { done: total, total },
         exif: { done: 0, total },
+        thumbnails: { done: 0, total },
         ai: { done: 0, total },
+        embedding: { done: 0, total },
       },
     };
     const job = {
@@ -341,24 +550,36 @@ export function createImportServices({
         done: 0,
         total,
         steps: {
+          upload: { done: total, total },
           exif: { done: 0, total },
+          thumbnails: { done: 0, total },
           ai: { done: 0, total },
+          embedding: { done: 0, total },
         },
       };
       appendProgressEvent(current);
       repository.saveImportJob(current);
       const updateProgress = (next) => {
         const steps = { ...(current.progress?.steps ?? {}) };
-        if (next.phase === "exif" || next.phase === "ai") {
+        if (["uploading", "exif", "thumbnails", "ai", "embedding"].includes(next.phase)) {
+          const stepKey = next.phase === "uploading" ? "upload" : next.phase;
           steps[next.phase] = {
             done: next.done ?? steps[next.phase]?.done ?? 0,
             total: next.total ?? steps[next.phase]?.total ?? total,
             currentFileName: next.currentFileName,
           };
+          steps[stepKey] = {
+            done: next.done ?? steps[stepKey]?.done ?? 0,
+            total: next.total ?? steps[stepKey]?.total ?? total,
+            currentFileName: next.currentFileName,
+          };
         }
         if (next.phase === "completed") {
+          steps.upload = { ...(steps.upload ?? {}), done: total, total };
           steps.exif = { ...(steps.exif ?? {}), done: total, total };
+          steps.thumbnails = { ...(steps.thumbnails ?? {}), done: total, total };
           steps.ai = { ...(steps.ai ?? {}), done: total, total };
+          steps.embedding = { ...(steps.embedding ?? {}), done: total, total };
         }
         current.progress = {
           ...(current.progress ?? {}),
@@ -371,7 +592,8 @@ export function createImportServices({
         repository.saveImportJob(current);
       };
       try {
-        current.result = await importPhotos(payload, { update: updateProgress });
+        current.result = await importPhotos(jobPayload, { update: updateProgress });
+        if (paths.importJobDir) await fs.rm(path.join(paths.importJobDir, id), { recursive: true, force: true });
         current.status = "completed";
         current.progress = {
           ...(current.progress ?? {}),
@@ -380,8 +602,11 @@ export function createImportServices({
           total,
           steps: {
             ...(current.progress?.steps ?? {}),
+            upload: { done: total, total },
             exif: { done: total, total },
+            thumbnails: { done: total, total },
             ai: { done: total, total },
+            embedding: { done: total, total },
           },
         };
       } catch (error) {
@@ -474,7 +699,15 @@ export function createImportServices({
     const files = [];
     for (const entry of entries) {
       if (entry.isFile() && /\.(jpe?g|png|heic)$/i.test(entry.name)) {
-        files.push(await makeImportFilePayloadFromLocalFile(path.join(appleDir, entry.name)));
+        const sourcePath = path.join(appleDir, entry.name);
+        const stat = await fs.stat(sourcePath);
+        files.push({
+          name: entry.name,
+          type: /\.(png)$/i.test(entry.name) ? "image/png" : /\.(heic)$/i.test(entry.name) ? "image/heic" : "image/jpeg",
+          size: stat.size,
+          lastModified: stat.mtimeMs,
+          sourcePath,
+        });
       }
     }
     const limitedFiles = Number.isFinite(Number(options.limit)) && Number(options.limit) > 0 ? files.slice(0, Number(options.limit)) : files;
@@ -513,24 +746,29 @@ export function createImportServices({
     if (!["missing_gps", "missing_time", "confirm_location_candidate"].includes(pending.type)) return responseState();
 
     const proposal = await buildMissingInfoInferenceProposal(state, batch, pending);
+    const latestState = await readState();
+    const latestBatch = latestState.importBatches.find((item) => item.id === batchId);
+    const latestPending = latestState.pendingItems.find((item) => item.id === pendingId);
+    if (!latestBatch || latestBatch.status !== "pending_confirmation" || !latestPending || !latestBatch.pendingItemIds.includes(latestPending.id)) return responseState();
+    if (!["missing_gps", "missing_time", "confirm_location_candidate"].includes(latestPending.type)) return responseState();
     const nextPending = {
-      ...pending,
+      ...latestPending,
       suggestion: proposal.suggestion,
       reason: proposal.reason,
       proposal: proposal.actionable ? proposal.proposal : undefined,
-        inference: {
-          status: proposal.actionable ? "suggested" : "keep_pending",
-          confidence: proposal.confidence,
-          reason: proposal.reason,
-          displayTarget: proposal.displayTarget,
-          displayTargetLabel: proposal.displayTargetLabel,
-          displayTargetBadge: proposal.displayTargetBadge,
-          updatedAt: new Date().toISOString(),
-        },
+      inference: {
+        status: proposal.actionable ? "suggested" : "keep_pending",
+        confidence: proposal.confidence,
+        reason: proposal.reason,
+        displayTarget: proposal.displayTarget,
+        displayTargetLabel: proposal.displayTargetLabel,
+        displayTargetBadge: proposal.displayTargetBadge,
+        updatedAt: new Date().toISOString(),
+      },
     };
     await writeState({
-      ...state,
-      pendingItems: state.pendingItems.map((item) => (item.id === pending.id ? nextPending : item)),
+      ...latestState,
+      pendingItems: latestState.pendingItems.map((item) => (item.id === latestPending.id ? nextPending : item)),
     });
     return responseState();
   }
@@ -665,8 +903,8 @@ export function createImportServices({
     return responseState();
   }
 
-  async function analyzePhoto({ fileName, mime, dataUrl, preset, location, allowCloud }) {
-    return analyzeTravelImage({
+  async function analyzePhotoVision({ fileName, mime, dataUrl, preset, location, allowCloud }) {
+    return analyzeTravelImageVision({
       rootDir: paths.rootDir,
       secretProvider,
       fileName,
@@ -678,9 +916,47 @@ export function createImportServices({
     });
   }
 
-  function recordAiStats(ai, aiStats) {
+  async function embedPhotoAnalysis({ fileName, analysis, allowCloud }) {
+    if (!embedTravelImageAnalysis) {
+      return {
+        embedding: analysis.embedding,
+        embeddingProvider: analysis.embeddingProvider,
+        embeddingDimension: analysis.embeddingDimension ?? analysis.embedding?.length,
+      };
+    }
+    return embedTravelImageAnalysis({
+      rootDir: paths.rootDir,
+      secretProvider,
+      fileName,
+      analysis,
+      allowCloud,
+    });
+  }
+
+  async function embedPhotoImage({ fileName, mime, dataUrl, allowCloud }) {
+    if (!embedTravelImageImage) {
+      return embedPhotoAnalysis({
+        fileName,
+        analysis: { title: fileName, caption: mime, tags: [], visiblePlaceNames: [] },
+        allowCloud: false,
+      });
+    }
+    return embedTravelImageImage({
+      rootDir: paths.rootDir,
+      secretProvider,
+      fileName,
+      mime,
+      dataUrl,
+      allowCloud,
+    });
+  }
+
+  function recordVisionStats(ai, aiStats) {
     if (ai.provider === "qwen") aiStats.qwenCount += 1;
     else aiStats.fallbackCount += 1;
+  }
+
+  function recordEmbeddingStats(ai, aiStats) {
     if (Array.isArray(ai.embedding) && ai.embedding.length > 0) aiStats.embeddingCount += 1;
     if (ai.embeddingProvider === "qwen") aiStats.qwenEmbeddingCount += 1;
     else aiStats.deterministicEmbeddingCount += 1;
@@ -933,6 +1209,7 @@ export function createImportServices({
   return {
     importPhotos,
     startImportJob,
+    startMultipartImportJob,
     getImportJob,
     subscribeImportJob,
     importAppleTestPhotos,

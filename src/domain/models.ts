@@ -252,7 +252,10 @@ export interface SearchDocument {
   capturedAt?: string;
   tags: string[];
   locationNames: string[];
-  text: string;
+  geoKeywords?: string[];
+  titleText?: string;
+  tagText?: string;
+  captionText?: string;
 }
 
 export interface SearchResult {
