@@ -97,6 +97,41 @@ export async function analyzeTravelImage({
   }
 }
 
+export async function inferMissingInfoWithImage({
+  rootDir = process.cwd(),
+  secretProvider,
+  missingInfoInferenceProviderId,
+  dataUrl,
+  mime,
+  inferenceInput,
+  allowCloud = true,
+}) {
+  if (!allowCloud) {
+    return {
+      action: "keep_pending",
+      confidence: 0,
+      reason: "云端 AI 未启用，无法执行当前照片二次视觉推断。",
+      provider: "mock",
+      promptId: "missing-info-inference",
+      promptVersion: "fallback",
+    };
+  }
+  try {
+    const provider = getAiProvider("missingInfoInference", missingInfoInferenceProviderId);
+    if (!provider) throw new Error("no missing info inference provider configured");
+    return provider.inferMissingInfo({ rootDir, secretProvider, dataUrl, mime, inferenceInput });
+  } catch (error) {
+    return {
+      action: "keep_pending",
+      confidence: 0,
+      reason: error instanceof Error ? error.message : "AI 二次推断失败。",
+      provider: "mock",
+      promptId: "missing-info-inference",
+      promptVersion: "fallback",
+    };
+  }
+}
+
 export async function embedSearchQuery(query, { rootDir = process.cwd(), allowCloud = true, secretProvider, embeddingProviderId } = {}) {
   if (allowCloud) {
     try {

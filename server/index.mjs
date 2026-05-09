@@ -1,6 +1,6 @@
 import http from "node:http";
 import { randomUUID } from "node:crypto";
-import { analyzeTravelImage, embedSearchQuery } from "./ai-provider.mjs";
+import { analyzeTravelImage, embedSearchQuery, inferMissingInfoWithImage } from "./ai-provider.mjs";
 import { createEditServices } from "./application/edit-services.mjs";
 import { createImportServices } from "./application/import-service.mjs";
 import { createSearchService } from "./application/search-service.mjs";
@@ -24,9 +24,18 @@ const stateServices = createStateService({
   repository,
 });
 const { ensureStorage, readState, readVectorIndex, responseState, writeState, writeVectorIndex } = stateServices;
-const editServices = createEditServices({ readState, writeState, responseState, makeId });
+const editServices = createEditServices({
+  readState,
+  readVectorIndex,
+  writeState,
+  writeVectorIndex,
+  responseState,
+  makeId,
+  paths: { photoDir, thumbDir },
+});
 const importServices = createImportServices({
   analyzeTravelImage,
+  inferMissingInfoWithImage,
   importJobs,
   makeId,
   paths: { rootDir, photoDir, thumbDir },

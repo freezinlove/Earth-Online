@@ -21,7 +21,8 @@ export interface LocationCandidate {
   city?: string;
   point?: GeoPoint;
   confidence: number;
-  source: "exif" | "ai_vision" | "filename" | "geo_catalog" | "nearby_trip" | "manual";
+  source: "exif" | "ai_vision" | "filename" | "geo_catalog" | "nearby_trip" | "manual" | "ai_context_inference" | "nearby_exif" | "geocode" | "existing_trip_context";
+  precision?: "confirmed" | "estimated";
   reason: string;
 }
 
@@ -45,6 +46,7 @@ export interface LocationResolution {
   effectivePoint?: GeoPoint;
   confidence?: number;
   source?: LocationCandidate["source"];
+  precision?: "confirmed" | "estimated";
   candidateId?: ID;
   candidates: LocationCandidate[];
   requiresUserAction: boolean;
@@ -86,6 +88,8 @@ export interface ImportBatch {
   successCount: number;
   failedCount: number;
   duplicateCount?: number;
+  duplicatePhotoIds?: ID[];
+  duplicateNames?: string[];
   status: "analyzing" | "pending_confirmation" | "confirmed" | "rolled_back";
   createdTripIds: ID[];
   updatedTripIds?: ID[];
@@ -127,6 +131,7 @@ export interface PlaceNode {
   country?: string;
   city?: string;
   center: GeoPoint;
+  coordinatePrecision?: "confirmed" | "estimated";
   photoIds: ID[];
   timeRange: {
     start: string;
@@ -163,6 +168,15 @@ export interface PendingItem {
   suggestion: string;
   reason: string;
   status: "open" | "accepted" | "ignored";
+  inference?: {
+    status: "suggested" | "keep_pending";
+    confidence: number;
+    reason: string;
+    displayTarget?: string;
+    displayTargetLabel?: string;
+    displayTargetBadge?: string;
+    updatedAt: string;
+  };
   proposal?: PendingProposal;
 }
 
@@ -177,6 +191,8 @@ export type PendingProposal =
       action: "bind_photos_to_place";
       photoIds: ID[];
       placeId: ID;
+      confidence?: number;
+      reason?: string;
     }
   | {
       action: "create_place_from_candidate";
@@ -193,6 +209,11 @@ export type PendingProposal =
       action: "merge_trips";
       targetTripId: ID;
       sourceTripIds: ID[];
+    }
+  | {
+      action: "keep_pending";
+      confidence: number;
+      reason: string;
     };
 
 export interface GlobeMarker {

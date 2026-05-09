@@ -1,9 +1,9 @@
-import { Archive, Bell, Globe2, MapPinned, Plus, Search, Settings } from "lucide-react";
+import { Archive, Globe2, MapPinned, Plus, Search, Settings } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { clsx } from "clsx";
 import { useAppStore, type AppPanel } from "@/store/appStore";
 
-const navItems: Array<{ panel: Exclude<AppPanel, "globe" | "upload" | "import" | "tripDetail">; label: string; icon: typeof Archive }> = [
+const navItems: Array<{ panel: Exclude<AppPanel, "globe" | "upload" | "tripDetail">; label: string; icon: typeof Archive }> = [
   { panel: "archive", label: "旅行档案", icon: Archive },
   { panel: "manual", label: "手动整理", icon: MapPinned },
   { panel: "settings", label: "本地设置", icon: Settings },
@@ -15,7 +15,6 @@ const primaryNavExitDuration = 240;
 export function MainLayout({ children }: { children: ReactNode }) {
   const activePanel = useAppStore((state) => state.activePanel);
   const setActivePanel = useAppStore((state) => state.setActivePanel);
-  const pendingItems = useAppStore((state) => state.pendingItems);
   const [indicatorMotion, setIndicatorMotion] = useState<{
     direction: "up" | "down";
     from: AppPanel;
@@ -27,7 +26,6 @@ export function MainLayout({ children }: { children: ReactNode }) {
   const motionTimer = useRef<number | undefined>(undefined);
   const primaryNavTimer = useRef<number | undefined>(undefined);
   const homeState = activePanel === "globe" ? "active" : "covered";
-  const openPendingCount = pendingItems.filter((item) => item.status === "open").length;
   const moveToPanel = (panel: AppPanel) => {
     const fromIndex = navPanelOrder.indexOf(activePanel);
     const toIndex = navPanelOrder.indexOf(panel);
@@ -96,18 +94,6 @@ export function MainLayout({ children }: { children: ReactNode }) {
               type="button"
             >
               <Search className="transition-transform group-hover:scale-110" size={20} strokeWidth={2.15} />
-            </button>
-            <button
-              className="group relative grid h-11 w-11 place-items-center text-on-surface-variant transition hover:text-primary"
-              aria-label="导入确认"
-              title="导入确认"
-              onClick={() => togglePanel("import")}
-              type="button"
-            >
-              <Bell className="transition-transform group-hover:scale-110" size={20} strokeWidth={2.15} />
-              {openPendingCount > 0 ? (
-                <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-primary ring-2 ring-background" />
-              ) : null}
             </button>
           </div>
         </header>

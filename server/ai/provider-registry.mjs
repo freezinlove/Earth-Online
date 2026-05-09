@@ -5,6 +5,7 @@ const providers = new Map();
 const defaultProviderByCapability = {
   embedding: "qwen",
   imageAnalysis: "qwen",
+  missingInfoInference: "qwen",
 };
 
 export function registerAiProvider(provider) {

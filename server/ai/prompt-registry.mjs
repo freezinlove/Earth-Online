@@ -10,6 +10,11 @@ const promptDefinitions = {
     version: "1.0.0",
     path: path.join(__dirname, "prompts", "photo-analysis.v1.zh.md"),
   },
+  missingInfoInference: {
+    id: "missing-info-inference",
+    version: "1.0.0",
+    path: path.join(__dirname, "prompts", "missing-info-inference.v1.zh.md"),
+  },
 };
 
 export async function loadPrompt(name) {

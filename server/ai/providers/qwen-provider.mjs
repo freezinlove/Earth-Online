@@ -1,4 +1,4 @@
-import { validatePhotoAnalysisResult } from "../ai-schemas.mjs";
+import { validateMissingInfoInferenceResult, validatePhotoAnalysisResult } from "../ai-schemas.mjs";
 import { readQwenChatApiKey, readQwenEmbeddingApiKey } from "../embedding-service.mjs";
 import { loadPrompt } from "../prompt-registry.mjs";
 import { qwenChatCompletion, qwenMultimodalEmbedding } from "../qwen-client.mjs";
@@ -18,6 +18,7 @@ export const qwenProvider = {
   displayName: "阿里 Qwen",
   capabilities: {
     imageAnalysis: true,
+    missingInfoInference: true,
     embedding: true,
   },
   async analyzeImage({ rootDir, secretProvider, fileName, mime, dataUrl, preset, geoContext }) {
@@ -51,6 +52,42 @@ export const qwenProvider = {
     const parsed = parseJsonObject(typeof content === "string" ? content : JSON.stringify(content));
     return {
       ...validatePhotoAnalysisResult(parsed, preset),
+      provider: this.id,
+      promptId: prompt.id,
+      promptVersion: prompt.version,
+    };
+  },
+  async inferMissingInfo({ rootDir, secretProvider, dataUrl, mime, inferenceInput }) {
+    const prompt = await loadPrompt("missingInfoInference");
+    const apiKey = readQwenChatApiKey(rootDir, secretProvider);
+    const content = await qwenChatCompletion({
+      rootDir,
+      apiKey,
+      temperature: 0.1,
+      messages: [
+        {
+          role: "system",
+          content: prompt.content,
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: [
+                "请根据当前待补照片图像和下方严格分区的 JSON 数据，输出一个待补信息二次推断 JSON。",
+                "注意：neighborContext 只是参考，不能覆盖 currentPhoto 图像证据。",
+                JSON.stringify(inferenceInput, null, 2),
+              ].join("\n\n"),
+            },
+            { type: "image_url", image_url: { url: dataUrl || `data:${mime};base64,` } },
+          ],
+        },
+      ],
+    });
+    const parsed = parseJsonObject(typeof content === "string" ? content : JSON.stringify(content));
+    return {
+      ...validateMissingInfoInferenceResult(parsed),
       provider: this.id,
       promptId: prompt.id,
       promptVersion: prompt.version,

@@ -1,1 +1,1 @@
-export { analyzeTravelImage, embedSearchQuery } from "./ai/ai-gateway.mjs";
+export { analyzeTravelImage, embedSearchQuery, inferMissingInfoWithImage } from "./ai/ai-gateway.mjs";

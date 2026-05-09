@@ -1,9 +1,11 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { safeArray } from "../domain/arrays.mjs";
 import { applyPendingDecision } from "../domain/pending-workflow.mjs";
 import { buildRoute } from "../domain/route-projector.mjs";
 import { rebuildTrips, rebuildTripsForPhotos } from "../domain/trip-rebuilder.mjs";
 
-export function createEditServices({ readState, writeState, responseState, makeId }) {
+export function createEditServices({ readState, readVectorIndex, writeState, writeVectorIndex, responseState, makeId, paths }) {
   async function createTrip(body) {
     const state = await readState();
     const trip = {
@@ -99,6 +101,40 @@ export function createEditServices({ readState, writeState, responseState, makeI
       placeNodes: state.placeNodes.map((place) => ({ ...place, photoIds: place.photoIds.filter((id) => id !== photoId) })),
     };
     await writeState(rebuildTrips(patched, new Set([beforeTripId, body.tripId].filter(Boolean)), { makeId }));
+    return responseState();
+  }
+
+  async function deletePhoto(photoId) {
+    const state = await readState();
+    const photo = state.photos.find((item) => item.id === photoId);
+    if (!photo) return responseState();
+
+    if (photo.storageUrl) await fs.rm(path.join(paths.photoDir, path.basename(photo.storageUrl)), { force: true });
+    if (photo.thumbnailUrl) await fs.rm(path.join(paths.thumbDir, path.basename(photo.thumbnailUrl)), { force: true });
+
+    const vectorIndex = await readVectorIndex();
+    delete vectorIndex[photoId];
+    await writeVectorIndex(vectorIndex);
+
+    const affectedTripIds = new Set([photo.tripId].filter(Boolean));
+    for (const place of state.placeNodes) {
+      if (place.photoIds?.includes(photoId)) affectedTripIds.add(place.tripId);
+    }
+    const pendingItems = state.pendingItems
+      .map((item) => ({ ...item, relatedPhotoIds: safeArray(item.relatedPhotoIds).filter((id) => id !== photoId) }))
+      .filter((item) => item.relatedPhotoIds.length > 0);
+    const patched = {
+      ...state,
+      photos: state.photos.filter((item) => item.id !== photoId),
+      placeNodes: state.placeNodes.map((place) => ({ ...place, photoIds: place.photoIds.filter((id) => id !== photoId) })),
+      pendingItems,
+      importBatches: state.importBatches.map((batch) => ({
+        ...batch,
+        addedPhotoIds: safeArray(batch.addedPhotoIds).filter((id) => id !== photoId),
+        duplicatePhotoIds: safeArray(batch.duplicatePhotoIds).filter((id) => id !== photoId),
+      })),
+    };
+    await writeState(rebuildTrips(patched, affectedTripIds, { makeId }));
     return responseState();
   }
 
@@ -241,6 +277,7 @@ export function createEditServices({ readState, writeState, responseState, makeI
     deletePlace,
     reorderPlaces,
     movePhoto,
+    deletePhoto,
     patchPhoto,
     bindPhoto,
     updatePending,

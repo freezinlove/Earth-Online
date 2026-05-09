@@ -46,15 +46,13 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
   const allPhotos = useAppStore((state) => state.photos);
   const allPlaces = useAppStore((state) => state.placeNodes);
   const dossierGroups = useAppStore((state) => state.dossierGroups);
-  const allPendingItems = useAppStore((state) => state.pendingItems);
   const setActivePanel = useAppStore((state) => state.setActivePanel);
   const updateTripTitle = useAppStore((state) => state.updateTripTitle);
   const updatePhotoMetadata = useAppStore((state) => state.updatePhotoMetadata);
   const selectPhoto = useAppStore((state) => state.selectPhoto);
   const selectPlace = useAppStore((state) => state.selectPlace);
   const setGlobeViewIntent = useAppStore((state) => state.setGlobeViewIntent);
-  const movePhotoToTrip = useAppStore((state) => state.movePhotoToTrip);
-  const acknowledgePendingItem = useAppStore((state) => state.acknowledgePendingItem);
+  const deletePhoto = useAppStore((state) => state.deletePhoto);
   const trip = trips.find((item) => item.id === selectedTripId);
   const [title, setTitle] = useState(tripLabel(trip));
   const [editingPhotoId, setEditingPhotoId] = useState<string>();
@@ -67,8 +65,6 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
   const dossier = dossierGroups.find((group) => group.tripId === selectedTripId);
   const photoById = useMemo(() => new Map(photos.map((photo) => [photo.id, photo])), [photos]);
   const placeById = useMemo(() => new Map(places.map((place) => [place.id, place])), [places]);
-  const pendingItems = allPendingItems.filter((item) => item.relatedTripId === selectedTripId && item.status === "open");
-
   const countryGroups = useMemo<CountryGroup[]>(() => {
     return (dossier?.countries ?? []).map((countryGroup) => ({
       country: countryGroup.country,
@@ -120,19 +116,6 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
       </header>
 
       <main className="trip-dossier-body mx-auto max-w-[1760px] px-5 pb-20 pt-8 md:px-10">
-        {pendingItems.length > 0 ? (
-          <section className="trip-dossier-pending">
-            {pendingItems.map((item) => (
-              <div key={item.id}>
-                <p>{item.suggestion}</p>
-                <span>{item.reason}</span>
-                <button onClick={() => acknowledgePendingItem(item.id, true)} type="button">确认</button>
-                <button onClick={() => acknowledgePendingItem(item.id, false)} type="button">忽略</button>
-              </div>
-            ))}
-          </section>
-        ) : null}
-
         <div className="trip-timeline">
           {countryGroups.map((countryGroup, countryIndex) => (
             <section key={`${countryGroup.country}-${countryIndex}`} className="trip-country-section">
@@ -215,7 +198,7 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
             setActivePanel("globe");
           }}
           onRemove={(photoId) => {
-            void movePhotoToTrip(photoId, undefined);
+            void deletePhoto(photoId);
             setOpenPhotoId(undefined);
           }}
           onToggleEdit={(photoId) => setEditingPhotoId(editingPhotoId === photoId ? undefined : photoId)}

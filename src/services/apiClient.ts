@@ -24,6 +24,38 @@ export interface LocalAiSettings {
   qwenEmbeddingApiKey: LocalAiCredential;
 }
 
+export type ImportJobPhase = "queued" | "reading" | "exif" | "ai" | "grouping" | "completed" | "failed";
+
+export interface ImportJobStepProgress {
+  done: number;
+  total: number;
+  currentFileName?: string;
+}
+
+export interface ImportJobProgress {
+  phase: ImportJobPhase;
+  done: number;
+  total: number;
+  currentFileName?: string;
+  steps?: Partial<Record<"reading" | "exif" | "ai", ImportJobStepProgress>>;
+}
+
+export interface ImportJobProgressEvent extends ImportJobProgress {
+  sequence: number;
+  createdAt: string;
+}
+
+export interface ImportJob {
+  id: string;
+  status: "queued" | "processing" | "completed" | "failed";
+  createdAt: string;
+  updatedAt: string;
+  progress?: ImportJobProgress;
+  progressEvents?: ImportJobProgressEvent[];
+  result?: AppSnapshot;
+  error?: string;
+}
+
 interface ImportFilePayload {
   name: string;
   type: string;
@@ -97,17 +129,83 @@ async function toImportPayload(filesLike: FileList | File[], onProgress?: (done:
   return payload;
 }
 
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function replayDelay(eventCount: number) {
+  if (eventCount <= 12) return 130;
+  if (eventCount <= 40) return 70;
+  return 24;
+}
+
+async function replayProgressEvents(events: ImportJobProgressEvent[], seenSequences: Set<number>, onProgress?: (progress: ImportJobProgress) => void) {
+  const unseen = events.filter((event) => !seenSequences.has(event.sequence)).sort((left, right) => left.sequence - right.sequence);
+  const delay = replayDelay(unseen.length);
+  for (const event of unseen) {
+    seenSequences.add(event.sequence);
+    onProgress?.(event);
+    if (unseen.length > 1) await wait(delay);
+  }
+}
+
+function watchImportJobProgress(jobId: string, seenSequences: Set<number>, onProgress?: (progress: ImportJobProgress) => void) {
+  if (typeof EventSource === "undefined") return () => {};
+  const source = new EventSource(`/api/import/jobs/${jobId}/events`);
+  source.addEventListener("progress", (message) => {
+    const event = JSON.parse((message as MessageEvent).data) as ImportJobProgressEvent;
+    if (seenSequences.has(event.sequence)) return;
+    seenSequences.add(event.sequence);
+    onProgress?.(event);
+  });
+  source.addEventListener("done", () => source.close());
+  return () => source.close();
+}
+
+async function pollImportJob(jobId: string, onProgress?: (progress: ImportJobProgress) => void) {
+  const seenSequences = new Set<number>();
+  const closeProgressStream = watchImportJobProgress(jobId, seenSequences, onProgress);
+  try {
+    for (;;) {
+      const job = await request<ImportJob>(`/api/import/jobs/${jobId}`);
+      if (job.progressEvents?.length) await replayProgressEvents(job.progressEvents, seenSequences, onProgress);
+      else if (job.progress) onProgress?.(job.progress);
+      if (job.status === "completed") {
+        if (!job.result) throw new Error("导入任务已完成但没有返回结果");
+        return job.result;
+      }
+      if (job.status === "failed") throw new Error(job.error ?? "导入任务失败");
+      await wait(900);
+    }
+  } finally {
+    closeProgressStream();
+  }
+}
+
 export const apiClient = {
   getState: () => request<AppSnapshot>("/api/state"),
   getLocalAiSettings: () => request<LocalAiSettings>("/api/settings/local-ai"),
   updateLocalAiSettings: (body: Partial<Record<keyof LocalAiSettings, string>>) =>
     request<LocalAiSettings>("/api/settings/local-ai", { method: "PATCH", body: JSON.stringify(body) }),
-  importFiles: async (files: FileList | File[], allowCloudAi: boolean, onProgress?: (done: number, total: number) => void) =>
-    request<AppSnapshot>("/api/import", { method: "POST", body: JSON.stringify({ files: await toImportPayload(files, onProgress), allowCloudAi }) }),
+  importFiles: async (
+    files: FileList | File[],
+    allowCloudAi: boolean,
+    onProgress?: (done: number, total: number) => void,
+    onJobProgress?: (progress: ImportJobProgress) => void,
+  ) => {
+    const payload = await toImportPayload(files, onProgress);
+    const job = await request<ImportJob>("/api/import/jobs", { method: "POST", body: JSON.stringify({ files: payload, allowCloudAi }) });
+    if (job.progress) onJobProgress?.(job.progress);
+    return pollImportJob(job.id, onJobProgress);
+  },
   importAppleTestPhotos: (allowCloudAi: boolean, limit?: number) =>
     request<AppSnapshot>("/api/import/apple-test", { method: "POST", body: JSON.stringify({ allowCloudAi, limit }) }),
   confirmImport: (batchId: string) => request<AppSnapshot>(`/api/import/${batchId}/confirm`, { method: "POST", body: "{}" }),
   rollbackImport: (batchId: string) => request<AppSnapshot>(`/api/import/${batchId}/rollback`, { method: "POST", body: "{}" }),
+  cancelImportPhotos: (batchId: string, photoIds: string[]) =>
+    request<AppSnapshot>(`/api/import/${batchId}/cancel-photos`, { method: "POST", body: JSON.stringify({ photoIds }) }),
+  inferPendingLocation: (batchId: string, pendingId: string) =>
+    request<AppSnapshot>(`/api/import/${batchId}/pending/${pendingId}/infer-location`, { method: "POST", body: "{}" }),
   mergeImportTrips: (batchId: string) => request<AppSnapshot>(`/api/import/${batchId}/merge`, { method: "POST", body: "{}" }),
   createTrip: (title: string, start: string, end: string) => request<AppSnapshot>("/api/trips", { method: "POST", body: JSON.stringify({ title, start, end }) }),
   updateTrip: (tripId: string, body: { title?: string; dateRange?: { start: string; end: string } }) =>
@@ -118,6 +216,7 @@ export const apiClient = {
   reorderPlaces: (tripId: string, placeIds: string[]) =>
     request<AppSnapshot>(`/api/trips/${tripId}/reorder-places`, { method: "POST", body: JSON.stringify({ placeIds }) }),
   movePhoto: (photoId: string, tripId?: string) => request<AppSnapshot>(`/api/photos/${photoId}/move`, { method: "POST", body: JSON.stringify({ tripId }) }),
+  deletePhoto: (photoId: string) => request<AppSnapshot>(`/api/photos/${photoId}/delete`, { method: "POST", body: "{}" }),
   updatePhoto: (photoId: string, body: { capturedAt?: string; location?: { lat?: number | string; lng?: number | string }; tags?: string[] }) =>
     request<AppSnapshot>(`/api/photos/${photoId}`, { method: "PATCH", body: JSON.stringify(body) }),
   bindPhoto: (photoId: string, placeId?: string) => request<AppSnapshot>(`/api/photos/${photoId}/bind-place`, { method: "POST", body: JSON.stringify({ placeId }) }),

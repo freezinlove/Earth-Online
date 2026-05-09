@@ -20,6 +20,10 @@ export function createRouter(handlers, paths) {
       if (req.method === "GET" && pathname === "/api/search") return send(res, 200, await handlers.search(url.searchParams));
       if (req.method === "POST" && pathname === "/api/import") return send(res, 200, await handlers.importPhotos(await readBody(req)));
       if (req.method === "POST" && pathname === "/api/import/jobs") return send(res, 202, handlers.startImportJob(await readBody(req)));
+      const importJobEvents = pathname.match(/^\/api\/import\/jobs\/([^/]+)\/events$/);
+      if (req.method === "GET" && importJobEvents) {
+        return handlers.subscribeImportJob(importJobEvents[1], req, res) ? undefined : sendError(res, 404, "Import job not found");
+      }
       const importJob = pathname.match(/^\/api\/import\/jobs\/([^/]+)$/);
       if (req.method === "GET" && importJob) {
         const job = handlers.getImportJob(importJob[1]);
@@ -30,6 +34,10 @@ export function createRouter(handlers, paths) {
       if (req.method === "POST" && importConfirm) return send(res, 200, await handlers.confirmImport(importConfirm[1]));
       const importRollback = pathname.match(/^\/api\/import\/([^/]+)\/rollback$/);
       if (req.method === "POST" && importRollback) return send(res, 200, await handlers.rollbackImport(importRollback[1]));
+      const importCancelPhotos = pathname.match(/^\/api\/import\/([^/]+)\/cancel-photos$/);
+      if (req.method === "POST" && importCancelPhotos) return send(res, 200, await handlers.cancelImportPhotos(importCancelPhotos[1], await readBody(req)));
+      const importPendingInfer = pathname.match(/^\/api\/import\/([^/]+)\/pending\/([^/]+)\/infer-location$/);
+      if (req.method === "POST" && importPendingInfer) return send(res, 200, await handlers.inferPendingLocation(importPendingInfer[1], importPendingInfer[2]));
       const importMerge = pathname.match(/^\/api\/import\/([^/]+)\/merge$/);
       if (req.method === "POST" && importMerge) return send(res, 200, await handlers.mergeImportTrips(importMerge[1]));
       if (req.method === "POST" && pathname === "/api/trips") return send(res, 200, await handlers.createTrip(await readBody(req)));
@@ -42,6 +50,8 @@ export function createRouter(handlers, paths) {
       if (req.method === "POST" && placeReorder) return send(res, 200, await handlers.reorderPlaces(placeReorder[1], await readBody(req)));
       const photoMove = pathname.match(/^\/api\/photos\/([^/]+)\/move$/);
       if (req.method === "POST" && photoMove) return send(res, 200, await handlers.movePhoto(photoMove[1], await readBody(req)));
+      const photoDelete = pathname.match(/^\/api\/photos\/([^/]+)\/delete$/);
+      if (req.method === "POST" && photoDelete) return send(res, 200, await handlers.deletePhoto(photoDelete[1]));
       const photoPatch = pathname.match(/^\/api\/photos\/([^/]+)$/);
       if (req.method === "PATCH" && photoPatch) return send(res, 200, await handlers.patchPhoto(photoPatch[1], await readBody(req)));
       const photoBind = pathname.match(/^\/api\/photos\/([^/]+)\/bind-place$/);
