@@ -1,6 +1,7 @@
 import { Undo2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { placeFocusIntent } from "@/domain/globeIntent";
+import { useI18n } from "@/i18n/useI18n";
 import { useAppStore } from "@/store/appStore";
 import {
   buildGlobalDomain,
@@ -69,11 +70,13 @@ function TimeTick({ tick, left }: { tick: TimeIncisionTick; left: number }) {
 }
 
 export function TimelineDock() {
+  const { t } = useI18n();
   const activePanel = useAppStore((state) => state.activePanel);
   const [level, setLevel] = useState<TimelineLevel>("global");
   const [primedTripId, setPrimedTripId] = useState<string>();
   const selectedTripId = useAppStore((state) => state.selectedTripId);
   const selectedPlaceId = useAppStore((state) => state.selectedPlaceId);
+  const locale = useAppStore((state) => state.locale);
   const segments = useAppStore((state) => state.timelineSegments);
   const trips = useAppStore((state) => state.trips);
   const placeNodes = useAppStore((state) => state.placeNodes);
@@ -88,12 +91,13 @@ export function TimelineDock() {
   const visibleSegments = useMemo(
     () =>
       level === "global"
-        ? buildTripSegments(segments, selectedTripId)
+        ? buildTripSegments(segments, selectedTripId, locale)
         : buildProjectedPlaceSegments(
             segments.filter((segment) => placeNodes.some((place) => place.tripId === selectedTripId && place.id === segment.relatedId)),
             selectedPlaceId,
+            locale,
           ),
-    [level, segments, selectedPlaceId, selectedTripId, placeNodes],
+    [level, segments, selectedPlaceId, selectedTripId, placeNodes, locale],
   );
   const ticks = useMemo(() => (level === "global" ? buildGlobalTicks(domain) : buildTripTicks(domain)), [domain, level]);
 
@@ -134,7 +138,7 @@ export function TimelineDock() {
   };
 
   return (
-    <section className="time-incision-shell" data-home-state={homeState} aria-label="旅行时间刻痕">
+    <section className="time-incision-shell" data-home-state={homeState} aria-label={t("timeline")}>
       <div className="time-incision-rail" aria-hidden="true" />
       <div className="time-incision-ticks">
         {ticks.map((tick) => (
@@ -156,7 +160,7 @@ export function TimelineDock() {
         })}
       </div>
       {level === "trip" ? (
-        <button className="time-incision-back" type="button" aria-label="返回全局时间刻痕" title="返回" onClick={backToGlobal}>
+        <button className="time-incision-back" type="button" aria-label={t("backToGlobalTimeline")} title={t("back")} onClick={backToGlobal}>
           <Undo2 size={16} strokeWidth={1.7} />
         </button>
       ) : null}

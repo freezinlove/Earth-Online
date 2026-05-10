@@ -7,8 +7,9 @@ import ThreeGlobe from "three-globe";
 import type { Line2, LineSegments2, OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { capturedDateTimeLabel } from "@/domain/datetime";
 import { countryLabel, markerLabel, photoAltText, photoLabel, placeLabel } from "@/domain/labels";
+import { useI18n } from "@/i18n/useI18n";
 import type { GeoPoint, GlobeMarker, Photo, Trip } from "@/domain/models";
-import { useAppStore, type GlobeViewIntent } from "@/store/appStore";
+import { useAppStore, type GlobeViewIntent, type Locale } from "@/store/appStore";
 
 export type TravelMarker = {
   id: string;
@@ -288,17 +289,17 @@ function cameraTargetForIntent(intent: GlobeViewIntent, fallbackPoint?: GeoPoint
   return new THREE.Vector3(0, y, z);
 }
 
-function toTravelMarker(marker: GlobeMarker): TravelMarker {
+function toTravelMarker(marker: GlobeMarker, locale: Locale): TravelMarker {
   return {
     id: marker.id,
     kind: marker.kind,
-    label: marker.label,
+    label: markerLabel(marker, locale),
     center: marker.center,
     count: marker.count,
     photoIds: marker.photoIds,
     placeIds: marker.placeIds,
     tripId: marker.tripId,
-    countryName: marker.countryName,
+    countryName: countryLabel(marker.countryNames, marker.countryName, locale),
     startTime: marker.startTime,
     endTime: marker.endTime,
     active: false,
@@ -796,6 +797,7 @@ function TravelMapAnnotation({
   onOpenArchive: () => void;
   onOpenPhoto: (photo: Photo) => void;
 }) {
+  const { t } = useI18n();
   const photoStripRef = useRef<HTMLDivElement | null>(null);
   const photoDragRef = useRef({ isDragging: false, lastX: 0, moved: false, pointerId: -1, startX: 0 });
   const photoStripTimer = useRef<number | undefined>(undefined);
@@ -895,8 +897,8 @@ function TravelMapAnnotation({
               <button
                 className="travel-map-note-action"
                 type="button"
-                aria-label="进入档案"
-                title="进入档案"
+                aria-label={t("enterArchive")}
+                title={t("enterArchive")}
                 onClick={(event) => {
                   event.stopPropagation();
                   onOpenArchive();
@@ -912,8 +914,8 @@ function TravelMapAnnotation({
                 <button
                   className="travel-map-note-action"
                   type="button"
-                  aria-label="进入档案"
-                  title="进入档案"
+                  aria-label={t("enterArchive")}
+                  title={t("enterArchive")}
                   onClick={(event) => {
                     event.stopPropagation();
                     onOpenArchive();
@@ -926,7 +928,7 @@ function TravelMapAnnotation({
                 <div
                   ref={photoStripRef}
                   className="travel-photo-strip"
-                  aria-label="相关照片"
+                  aria-label={t("relatedPhotos")}
                   onWheel={handlePhotoStripWheel}
                   onPointerDown={handlePhotoStripPointerDown}
                   onPointerMove={handlePhotoStripPointerMove}
@@ -959,12 +961,13 @@ function TravelMapAnnotation({
 }
 
 function PhotoLightbox({ photo, placeName, onClose }: { photo?: Photo; placeName?: string; onClose: () => void }) {
+  const { t } = useI18n();
   if (!photo) return null;
 
   return (
     <div className="travel-lightbox" role="dialog" aria-modal="true" onClick={onClose}>
       <div className="travel-lightbox-card" onClick={(event) => event.stopPropagation()}>
-        <button className="travel-lightbox-close" type="button" aria-label="关闭照片预览" onClick={onClose}>
+        <button className="travel-lightbox-close" type="button" aria-label={t("closePhotoPreview")} onClick={onClose}>
           <X size={18} />
         </button>
         <img src={photo.storageUrl ?? photo.thumbnailUrl} alt={photoAltText(photo)} />
@@ -979,6 +982,7 @@ function PhotoLightbox({ photo, placeName, onClose }: { photo?: Photo; placeName
 }
 
 export function EarthStage() {
+  const locale = useAppStore((state) => state.locale);
   const activePanel = useAppStore((state) => state.activePanel);
   const selectedTripId = useAppStore((state) => state.selectedTripId);
   const selectedPlaceId = useAppStore((state) => state.selectedPlaceId);
@@ -998,7 +1002,7 @@ export function EarthStage() {
   const trip = trips.find((item) => item.id === selectedTripId);
   const places = useMemo(() => placeNodes.filter((place) => place.tripId === selectedTripId), [placeNodes, selectedTripId]);
   const tripPhotos = useMemo(() => photos.filter((photo) => photo.tripId === selectedTripId), [photos, selectedTripId]);
-  const projectedMarkers = useMemo(() => globeMarkers.filter((marker) => marker.tripId === selectedTripId).map(toTravelMarker), [globeMarkers, selectedTripId]);
+  const projectedMarkers = useMemo(() => globeMarkers.filter((marker) => marker.tripId === selectedTripId).map((marker) => toTravelMarker(marker, locale)), [globeMarkers, locale, selectedTripId]);
   const placeMarkers = useMemo(() => applyRouteRoles(projectedMarkers.filter((marker) => marker.kind === "place")), [projectedMarkers]);
   const countryMarkers = useMemo(() => projectedMarkers.filter((marker) => marker.kind === "country"), [projectedMarkers]);
   const selectedMarker = [...countryMarkers, ...placeMarkers].find((marker) => marker.id === selectedMapItem?.id);
@@ -1084,7 +1088,7 @@ export function EarthStage() {
           </Suspense>
         </Canvas>
       </div>
-      <PhotoLightbox photo={previewPhoto} placeName={previewPlace?.name} onClose={() => setPreviewPhoto(undefined)} />
+      <PhotoLightbox photo={previewPhoto} placeName={placeLabel(previewPlace, locale)} onClose={() => setPreviewPhoto(undefined)} />
     </section>
   );
 }

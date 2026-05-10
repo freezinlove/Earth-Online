@@ -1,18 +1,21 @@
 import { Archive, Globe2, MapPinned, Plus, Search, Settings } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { clsx } from "clsx";
+import { useI18n } from "@/i18n/useI18n";
+import type { MessageKey } from "@/i18n/messages";
 import { useAppStore, type AppPanel } from "@/store/appStore";
 
-const navItems: Array<{ panel: Exclude<AppPanel, "globe" | "upload" | "tripDetail">; label: string; icon: typeof Archive }> = [
-  { panel: "archive", label: "旅行档案", icon: Archive },
-  { panel: "manual", label: "手动整理", icon: MapPinned },
-  { panel: "settings", label: "本地设置", icon: Settings },
+const navItems: Array<{ panel: Exclude<AppPanel, "globe" | "upload" | "tripDetail">; labelKey: MessageKey; icon: typeof Archive }> = [
+  { panel: "archive", labelKey: "archiveNav", icon: Archive },
+  { panel: "manual", labelKey: "manual", icon: MapPinned },
+  { panel: "settings", labelKey: "settings", icon: Settings },
 ];
 
 const navPanelOrder: AppPanel[] = ["upload", "globe", ...navItems.map((item) => item.panel)];
 const primaryNavExitDuration = 240;
 
 export function MainLayout({ children }: { children: ReactNode }) {
+  const { t } = useI18n();
   const activePanel = useAppStore((state) => state.activePanel);
   const setActivePanel = useAppStore((state) => state.setActivePanel);
   const [indicatorMotion, setIndicatorMotion] = useState<{
@@ -89,8 +92,8 @@ export function MainLayout({ children }: { children: ReactNode }) {
           <div className="pointer-events-auto flex items-center gap-3">
             <button
               className="group hidden h-11 w-11 place-items-center text-on-surface-variant transition hover:text-primary md:grid"
-              aria-label="记忆搜索"
-              title="记忆搜索"
+              aria-label={t("memorySearch")}
+              title={t("memorySearch")}
               onClick={() => togglePanel("search")}
               type="button"
             >
@@ -109,7 +112,8 @@ export function MainLayout({ children }: { children: ReactNode }) {
           className={clsx(
             "group relative grid h-11 w-11 place-items-center rounded-full text-primary transition active:scale-95",
           )}
-          aria-label="导入图片"
+          aria-label={t("importPhotos")}
+          title={t("importPhotos")}
           onClick={() => togglePanel("upload")}
           type="button"
         >
@@ -130,8 +134,8 @@ export function MainLayout({ children }: { children: ReactNode }) {
             activePanel === "globe" ? "text-primary" : "text-on-surface-variant",
           )}
           onClick={() => moveToPanel("globe")}
-          aria-label="时空主界面"
-          title="时空主界面"
+          aria-label={t("home")}
+          title={t("home")}
           type="button"
         >
           <Globe2 className={clsx("transition-transform group-hover:scale-110", activePanel === "globe" && "nav-icon-pop")} size={20} strokeWidth={1.9} />
@@ -148,6 +152,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = activePanel === item.panel;
+          const label = t(item.labelKey);
           return (
             <button
               key={item.panel}
@@ -156,8 +161,8 @@ export function MainLayout({ children }: { children: ReactNode }) {
                 isActive ? "text-primary" : "text-on-surface-variant",
               )}
               onClick={() => togglePanel(item.panel)}
-              aria-label={item.label}
-              title={item.label}
+              aria-label={label}
+              title={label}
               type="button"
             >
               <Icon className={clsx("transition-transform group-hover:scale-110", isActive && "nav-icon-pop")} size={20} strokeWidth={1.9} />
@@ -171,7 +176,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
                 <span key={`${indicatorMotion.id}-${item.panel}-exit`} className={clsx("nav-indicator", `nav-indicator-exit-${indicatorMotion.direction}`)} />
               ) : null}
               <span className="pointer-events-none absolute left-14 hidden whitespace-nowrap rounded-full bg-on-surface px-3 py-1.5 text-xs text-white opacity-0 shadow-soft transition group-hover:opacity-100 md:block">
-                {item.label}
+                {label}
               </span>
             </button>
           );

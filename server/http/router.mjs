@@ -44,6 +44,8 @@ export function createRouter(handlers, paths) {
       const importMerge = pathname.match(/^\/api\/import\/([^/]+)\/merge$/);
       if (req.method === "POST" && importMerge) return send(res, 200, await handlers.mergeImportTrips(importMerge[1]));
       if (req.method === "POST" && pathname === "/api/trips") return send(res, 200, await handlers.createTrip(await readBody(req)));
+      const tripDelete = pathname.match(/^\/api\/trips\/([^/]+)\/delete$/);
+      if (req.method === "POST" && tripDelete) return send(res, 200, await handlers.deleteTrip(tripDelete[1]));
       const tripPatch = pathname.match(/^\/api\/trips\/([^/]+)$/);
       if (req.method === "PATCH" && tripPatch) return send(res, 200, await handlers.patchTrip(tripPatch[1], await readBody(req)));
       if (req.method === "POST" && pathname === "/api/places") return send(res, 200, await handlers.createPlace(await readBody(req)));

@@ -20,7 +20,8 @@ export function rebuildTrips(state, affectedTripIds, { makeId }) {
     const tripPhotos = photos.filter((photo) => photo.tripId === tripId);
     const located = tripPhotos.filter((photo) => photo.location);
     if (!located.length) continue;
-    const places = buildPlacesForGroup(tripPhotos, tripId, { makeId });
+    const existingPlaces = state.placeNodes.filter((place) => place.tripId === tripId);
+    const places = buildPlacesForGroup(tripPhotos, tripId, { makeId, existingPlaces });
     placeNodes = placeNodes.concat(places);
     routes = routes.concat(buildPhotoRoute(tripId, located));
     for (const place of places) {

@@ -2,9 +2,11 @@ import { Archive, LocateFixed, Search, X } from "lucide-react";
 import { useEffect, useMemo, type CSSProperties } from "react";
 import { placeFocusIntent } from "@/domain/globeIntent";
 import { photoAltText, photoLabel } from "@/domain/labels";
+import { useI18n } from "@/i18n/useI18n";
 import { useAppStore } from "@/store/appStore";
 
 export function SearchPanel({ isClosing = false }: { isClosing?: boolean }) {
+  const { t } = useI18n();
   const setActivePanel = useAppStore((state) => state.setActivePanel);
   const selectTrip = useAppStore((state) => state.selectTrip);
   const focusPlaceOnGlobe = useAppStore((state) => state.focusPlaceOnGlobe);
@@ -54,7 +56,7 @@ export function SearchPanel({ isClosing = false }: { isClosing?: boolean }) {
 
   return (
     <section className="search-panel fixed inset-0 z-[70] overflow-y-auto bg-background/94 px-5 py-8 backdrop-blur-2xl md:px-24 md:py-12" data-state={isClosing ? "closing" : "open"}>
-      <button className="search-close" aria-label="关闭搜索" onClick={() => setActivePanel("globe")} type="button">
+      <button className="search-close" aria-label={t("closeSearch")} onClick={() => setActivePanel("globe")} type="button">
         <X size={22} />
       </button>
 
@@ -65,7 +67,8 @@ export function SearchPanel({ isClosing = false }: { isClosing?: boolean }) {
             className="search-input"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            aria-label="搜索照片"
+            aria-label={t("searchPhotos")}
+            placeholder={t("searchPlaceholder")}
             autoFocus
           />
         </label>
@@ -84,10 +87,10 @@ export function SearchPanel({ isClosing = false }: { isClosing?: boolean }) {
               <div className="search-result-copy">
                 <h3>{photoLabel(photo)}</h3>
                 <div className="search-result-actions">
-                  <button onClick={() => locatePhoto(photo.id, place?.id)} type="button" aria-label="定位到地球和时间轴" title="定位">
+                  <button onClick={() => locatePhoto(photo.id, place?.id)} type="button" aria-label={t("locate")} title={t("locate")}>
                     <LocateFixed size={17} />
                   </button>
-                  <button disabled={!trip} onClick={() => trip && selectTrip(trip.id, "tripDetail")} type="button" aria-label="打开对应旅行档案" title="档案">
+                  <button disabled={!trip} onClick={() => trip && selectTrip(trip.id, "tripDetail")} type="button" aria-label={t("openArchive")} title={t("openArchive")}>
                     <Archive size={17} />
                   </button>
                 </div>

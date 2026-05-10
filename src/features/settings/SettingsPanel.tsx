@@ -1,7 +1,9 @@
 import { Check, KeyRound, LoaderCircle, Trash2 } from "lucide-react";
 import type { CSSProperties } from "react";
 import { useEffect, useState } from "react";
+import { useI18n } from "@/i18n/useI18n";
 import { apiClient, type LocalAiCredential, type LocalAiSettings } from "@/services/apiClient";
+import { useAppStore, type Locale } from "@/store/appStore";
 
 type SecretField = keyof LocalAiSettings;
 type FieldStatus = "idle" | "loading" | "saving" | "saved" | "cleared" | "unchanged" | "error";
@@ -17,23 +19,9 @@ const fields: Array<{
 
 const emptyCredential: LocalAiCredential = { isSet: false, preview: "", source: "none" };
 
-const sourceLabel: Record<LocalAiCredential["source"], string> = {
-  env: "来自 .env",
-  local: "已保存在本机",
-  none: "未设置",
-};
-
-const statusText: Record<FieldStatus, string> = {
-  cleared: "已清除",
-  error: "保存失败",
-  idle: "",
-  loading: "读取中",
-  saved: "已保存",
-  saving: "保存中",
-  unchanged: "未修改",
-};
-
 export function SettingsPanel({ isClosing = false }: { isClosing?: boolean }) {
+  const { locale, t } = useI18n();
+  const setLocale = useAppStore((state) => state.setLocale);
   const [settings, setSettings] = useState<LocalAiSettings>();
   const [values, setValues] = useState<Record<SecretField, string>>({
     qwenChatApiKey: "",
@@ -98,6 +86,20 @@ export function SettingsPanel({ isClosing = false }: { isClosing?: boolean }) {
       setStatuses((current) => ({ ...current, [key]: "error" }));
     }
   };
+  const sourceLabel: Record<LocalAiCredential["source"], string> = {
+    env: t("sourceEnv"),
+    local: t("sourceLocal"),
+    none: t("sourceNone"),
+  };
+  const statusText: Record<FieldStatus, string> = {
+    cleared: t("statusCleared"),
+    error: t("statusError"),
+    idle: "",
+    loading: t("statusLoading"),
+    saved: t("statusSaved"),
+    saving: t("statusSaving"),
+    unchanged: t("statusUnchanged"),
+  };
 
   return (
     <section
@@ -106,10 +108,28 @@ export function SettingsPanel({ isClosing = false }: { isClosing?: boolean }) {
     >
       <div className="mx-auto max-w-6xl">
         <div className="settings-heading mb-8 md:mb-12">
-          <h2 className="font-serif text-4xl font-semibold leading-tight text-primary md:text-6xl">本地设置</h2>
+          <h2 className="font-serif text-4xl font-semibold leading-tight text-primary md:text-6xl">{t("settings")}</h2>
         </div>
 
         <div className="local-settings-form">
+          <article className="local-secret-row" style={{ "--local-secret-delay": "0ms" } as CSSProperties}>
+            <div className="local-secret-index">00</div>
+            <div className="min-w-0">
+              <h3 className="font-serif text-2xl font-semibold leading-tight text-on-surface md:text-3xl">{t("language")}</h3>
+              <div className="mt-5 flex flex-wrap gap-3">
+                {(["zh", "en"] satisfies Locale[]).map((item) => (
+                  <button
+                    className={`local-secret-action ${locale === item ? "" : "local-secret-action-subtle"}`}
+                    key={item}
+                    onClick={() => setLocale(item)}
+                    type="button"
+                  >
+                    {item === "zh" ? t("simplifiedChinese") : t("english")}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </article>
           {fields.map((field, index) => {
             const credential = settings?.[field.key] ?? emptyCredential;
             const status = statuses[field.key];
@@ -118,7 +138,7 @@ export function SettingsPanel({ isClosing = false }: { isClosing?: boolean }) {
             const canSave = Boolean(values[field.key].trim()) && !isSaving;
 
             return (
-              <article className="local-secret-row" key={field.key} style={{ "--local-secret-delay": `${index * 90}ms` } as CSSProperties}>
+              <article className="local-secret-row" key={field.key} style={{ "--local-secret-delay": `${(index + 1) * 90}ms` } as CSSProperties}>
                 <div className="local-secret-index">0{index + 1}</div>
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
@@ -132,7 +152,7 @@ export function SettingsPanel({ isClosing = false }: { isClosing?: boolean }) {
                         className="local-secret-input"
                         value={values[field.key]}
                         onChange={(event) => updateValue(field.key, event.target.value)}
-                        placeholder={credential.isSet ? `已保存：${credential.preview}` : "粘贴 API Key"}
+                        placeholder={credential.isSet ? `${t("savedApiKey")}: ${credential.preview}` : t("pasteApiKey")}
                         aria-label={field.title}
                         type="password"
                         autoComplete="off"
@@ -141,11 +161,11 @@ export function SettingsPanel({ isClosing = false }: { isClosing?: boolean }) {
                     </label>
                     <button className="local-secret-action" disabled={!canSave} onClick={() => void saveField(field.key)} type="button">
                       {isSaving ? <LoaderCircle className="animate-spin" size={16} /> : <Check size={16} />}
-                      保存
+                      {t("save")}
                     </button>
                     <button className="local-secret-action local-secret-action-subtle" disabled={!canClearLocal} onClick={() => void clearField(field.key)} type="button">
                       <Trash2 size={16} />
-                      清除
+                      {t("clear")}
                     </button>
                   </div>
                   <div className="local-secret-state">

@@ -1,5 +1,21 @@
 import { dateKey, sortByDate, unique } from "./projection-utils.mjs";
 
+const countryEnByZh = {
+  中国: "China",
+  捷克: "Czechia",
+  奥地利: "Austria",
+  德国: "Germany",
+  匈牙利: "Hungary",
+  挪威: "Norway",
+  瑞士: "Switzerland",
+  日本: "Japan",
+  法国: "France",
+  意大利: "Italy",
+  英国: "United Kingdom",
+  美国: "United States",
+  瑞典: "Sweden",
+};
+
 export function buildDossierGroups(state) {
   return state.trips.map((trip) => {
     const photos = state.photos
@@ -31,7 +47,7 @@ export function buildDossierGroups(state) {
           .sort((left, right) => sortByDate(left.start ?? left.day, right.start ?? right.day))
           .map((day) => ({
             ...day,
-            country: inferDayCountry(day, photoById, placeById, trip),
+            ...inferDayCountryDescription(day, photoById, placeById, trip),
           })),
       ),
     };
@@ -46,14 +62,45 @@ function buildCountryGroups(days) {
     const normalizedDay = {
       ...day,
       country,
+      countryNames: day.countryNames ?? namesFromFallback(country),
       photoIds: unique(day.photoIds),
       placeIds: unique(day.placeIds),
     };
     delete normalizedDay.start;
     if (current?.country === country) current.days.push(normalizedDay);
-    else groups.push({ country, days: [normalizedDay] });
+    else groups.push({ country, countryNames: normalizedDay.countryNames, days: [normalizedDay] });
   }
   return groups;
+}
+
+function namesFromFallback(value) {
+  return value ? { zh: value, en: countryEnByZh[value] ?? value, local: value } : undefined;
+}
+
+function inferDayCountryDescription(day, photoById, placeById, trip) {
+  const placeCountries = unique(day.placeIds)
+    .map((id) => placeById.get(id))
+    .filter((place) => place?.country && place.country !== "待确认");
+  if (placeCountries.length) {
+    const country = mostCommon(placeCountries.map((place) => place.country));
+    const place = placeCountries.find((item) => item.country === country);
+    return { country, countryNames: place?.countryNames ?? namesFromFallback(country) };
+  }
+
+  const candidateCountries = day.photoIds
+    .map((id) => photoById.get(id))
+    .filter(Boolean)
+    .map((photo) => strongestCandidateCountryDescription(photo))
+    .filter((item) => item.country);
+  if (candidateCountries.length) {
+    const country = mostCommon(candidateCountries.map((item) => item.country));
+    const candidate = candidateCountries.find((item) => item.country === country);
+    return { country, countryNames: candidate?.countryNames ?? namesFromFallback(country) };
+  }
+
+  const fallbackPhoto = photoById.get(day.photoIds[0]);
+  const country = fallbackPhoto ? inferPhotoCountry(fallbackPhoto, undefined, trip) : trip.countries?.[0];
+  return { country, countryNames: namesFromFallback(country) };
 }
 
 function inferPhotoCountry(photo, place, trip) {
@@ -68,24 +115,6 @@ function inferPhotoCountry(photo, place, trip) {
   return trip.countries?.[0];
 }
 
-function inferDayCountry(day, photoById, placeById, trip) {
-  const placeCountries = unique(day.placeIds)
-    .map((id) => placeById.get(id))
-    .map((place) => place?.country)
-    .filter((country) => country && country !== "待确认");
-  if (placeCountries.length) return mostCommon(placeCountries);
-
-  const candidateCountries = day.photoIds
-    .map((id) => photoById.get(id))
-    .filter(Boolean)
-    .map((photo) => strongestCandidateCountry(photo))
-    .filter(Boolean);
-  if (candidateCountries.length) return mostCommon(candidateCountries);
-
-  const fallbackPhoto = photoById.get(day.photoIds[0]);
-  return fallbackPhoto ? inferPhotoCountry(fallbackPhoto, undefined, trip) : trip.countries?.[0];
-}
-
 function mostCommon(values) {
   const counts = new Map();
   for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
@@ -97,6 +126,16 @@ function strongestCandidateCountry(photo, place) {
   return candidates
     .filter((candidate) => candidate?.country && (!candidate.point || !place?.center || distanceKm(candidate.point, place.center) <= 35))
     .sort((left, right) => Number(right.confidence ?? 0) - Number(left.confidence ?? 0))[0]?.country;
+}
+
+function strongestCandidateCountryDescription(photo, place) {
+  const candidate = (photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? [])
+    .filter((item) => item?.country && (!item.point || !place?.center || distanceKm(item.point, place.center) <= 35))
+    .sort((left, right) => Number(right.confidence ?? 0) - Number(left.confidence ?? 0))[0];
+  return {
+    country: candidate?.country,
+    countryNames: candidate?.localizedCountryNames ?? namesFromFallback(candidate?.country),
+  };
 }
 
 function distanceKm(start, end) {

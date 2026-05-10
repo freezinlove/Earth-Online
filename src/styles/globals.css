@@ -1229,7 +1229,6 @@ input {
 .settings-heading {
   position: relative;
   z-index: 1;
-  padding-top: 1.45rem;
   animation: archive-heading-in 720ms cubic-bezier(0.18, 0.88, 0.2, 1) 80ms both;
 }
 
@@ -1799,9 +1798,9 @@ input {
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: clamp(22px, 4vw, 54px);
-  align-items: center;
+  grid-template-columns: minmax(190px, auto) minmax(0, 1fr);
+  gap: clamp(24px, 4vw, 58px);
+  align-items: start;
   border-block: 1px solid rgba(151, 71, 35, 0.2);
   padding: clamp(22px, 4vw, 34px) 0;
   animation: archive-index-in 720ms cubic-bezier(0.18, 0.88, 0.2, 1) 120ms both;
@@ -1836,6 +1835,7 @@ input {
   justify-content: center;
   gap: 10px;
   min-height: 44px;
+  min-width: 190px;
   border: 0;
   border-radius: 999px;
   background: #944521;
@@ -1866,8 +1866,8 @@ input {
 
 .import-progress-line {
   display: grid;
-  grid-template-columns: 18px 92px minmax(80px, 1fr) 52px;
-  gap: 12px;
+  grid-template-columns: 18px minmax(150px, 210px) minmax(120px, 1fr) 58px;
+  gap: 14px;
   align-items: center;
   color: #88726b;
 }
@@ -1893,6 +1893,8 @@ input {
   font-size: 12px;
   font-weight: 850;
   letter-spacing: 0.06em;
+  min-width: 0;
+  overflow-wrap: anywhere;
   white-space: nowrap;
 }
 
@@ -2973,10 +2975,12 @@ input {
 }
 
 .archive-entry-action {
+  min-width: 44px;
+  min-height: 44px;
+  place-items: center;
   opacity: 0;
   transform: translateX(-8px);
   transition:
-    background-color 180ms ease,
     opacity 180ms ease,
     transform 180ms ease;
 }
@@ -2997,9 +3001,89 @@ input {
 }
 
 .archive-entry:hover .archive-entry-action {
-  background: rgba(255, 219, 206, 0.62);
   opacity: 1;
   transform: translateX(0);
+}
+
+.archive-entry:focus-visible {
+  outline: 2px solid rgba(151, 71, 35, 0.42);
+  outline-offset: 4px;
+}
+
+.archive-entry-action:has(.archive-delete-confirm) {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.archive-delete-trigger,
+.archive-delete-accept,
+.archive-delete-cancel {
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: #944521;
+  cursor: pointer;
+}
+
+.archive-delete-trigger {
+  width: 38px;
+  height: 38px;
+  border-radius: 999px;
+  opacity: 0.86;
+  transition:
+    color 160ms ease,
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.archive-delete-trigger:hover {
+  color: #b33a23;
+  opacity: 1;
+  transform: scale(1.06);
+}
+
+.archive-delete-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: max-content;
+  color: #944521;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.archive-delete-accept,
+.archive-delete-cancel {
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  transition:
+    color 160ms ease,
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.archive-delete-accept {
+  color: #2f7d5d;
+}
+
+.archive-delete-cancel {
+  color: #944521;
+}
+
+.archive-delete-accept:hover,
+.archive-delete-cancel:hover {
+  opacity: 1;
+  transform: scale(1.06);
+}
+
+.archive-delete-accept:disabled,
+.archive-delete-cancel:disabled {
+  cursor: wait;
+  opacity: 0.45;
+  transform: none;
 }
 
 .archive-drawer[data-state="closing"] .archive-heading {
@@ -3483,16 +3567,16 @@ input {
   top: 34px;
   display: block;
   width: max-content;
-  max-width: 108px;
+  max-width: 154px;
   margin-top: 7px;
-  overflow: hidden;
+  overflow: visible;
   color: rgba(151, 71, 35, 0.72);
   font-family: Georgia, "Times New Roman", "Noto Serif SC", serif;
   font-size: 34px;
   font-weight: 500;
-  line-height: 1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.02;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .trip-route-column {
@@ -3587,13 +3671,22 @@ input {
   grid-column: span 1;
 }
 
-.trip-photo-piece button {
+.trip-photo-frame {
   position: relative;
   overflow: hidden;
   border: 0;
   border-radius: 8px;
   background: #e8ded3;
+}
+
+.trip-photo-open {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
   cursor: pointer;
+  padding: 0;
+  text-align: left;
 }
 
 .trip-photo-piece img {
@@ -3650,14 +3743,46 @@ input {
   font-weight: 700;
 }
 
-.trip-photo-piece button:hover img {
+.trip-photo-frame:hover img {
   filter: saturate(1) contrast(1);
   transform: scale(1.045);
 }
 
-.trip-photo-piece button:hover .trip-photo-caption {
+.trip-photo-frame:hover .trip-photo-caption {
   opacity: 1;
   transform: translateY(0);
+}
+
+.trip-photo-remove {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 4;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  padding: 0;
+  opacity: 0;
+  mix-blend-mode: difference;
+  transform: translateY(-4px);
+  transition:
+    opacity 180ms ease,
+    transform 220ms cubic-bezier(0.18, 0.88, 0.2, 1);
+}
+
+.trip-photo-frame:hover .trip-photo-remove,
+.trip-photo-remove:focus-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.trip-photo-remove:hover {
+  transform: translateY(0) scale(1.08);
 }
 
 .trip-photo-modal {

@@ -4,8 +4,10 @@ import sharp from "sharp";
 import { safeArray } from "../domain/arrays.mjs";
 import { toDateInput } from "../domain/dates.mjs";
 import { parseExif } from "../domain/exif-parser.mjs";
-import { geoContextFor, inferPreset, isUsableLocation } from "../domain/geo.mjs";
-import { resolveImportedLocation, toAiEvidence } from "../domain/location-resolver.mjs";
+import { geoContextFor, haversineKm, inferPreset, isUsableLocation } from "../domain/geo.mjs";
+import { forwardLocalGeocode, reverseLocalGeocode } from "../domain/local-geocoder.mjs";
+import { mergeLocationCandidates, resolveImportedLocation, toAiEvidence } from "../domain/location-resolver.mjs";
+import { cleanPlaceName } from "../domain/place-name-selector.mjs";
 import { buildPlacesForGroup } from "../domain/place-projector.mjs";
 import { buildPhotoRoute, buildRoute } from "../domain/route-projector.mjs";
 import { makePhotoTitle } from "../domain/text-normalizer.mjs";
@@ -213,8 +215,10 @@ export function createImportServices({
                   return embedding;
                 }),
               ]).then(([ai, embedding]) => {
-                const aiEvidence = toAiEvidence(ai, { makeId });
                 const resolvedLocation = existingPhoto.location ?? parsedLocation;
+                const geocodeCandidates = reverseLocalGeocode(resolvedLocation, { makeId });
+                const aiEvidenceBase = toAiEvidence(ai, { makeId });
+                const aiEvidence = { ...aiEvidenceBase, locationCandidates: mergeLocationCandidates(geocodeCandidates, aiEvidenceBase.locationCandidates) };
                 existingPhoto.tags = ai.tags;
                 existingPhoto.title = ai.title || makePhotoTitle(existingPhoto);
                 existingPhoto.aiCaption = ai.caption;
@@ -301,7 +305,9 @@ export function createImportServices({
             return embedding;
           }),
         ]).then(([thumbName, ai, embedding]) => {
-          const aiEvidence = toAiEvidence(ai, { makeId });
+          const geocodeCandidates = reverseLocalGeocode(newAiJob.location, { makeId });
+          const aiEvidenceBase = toAiEvidence(ai, { makeId });
+          const aiEvidence = { ...aiEvidenceBase, locationCandidates: mergeLocationCandidates(geocodeCandidates, aiEvidenceBase.locationCandidates) };
           const photo = {
             id: newAiJob.photoId,
             fileName: newAiJob.fileName || newAiJob.storageName,
@@ -380,7 +386,7 @@ export function createImportServices({
       const archivableTripPhotos = tripPhotosAfter.filter((photo) => !hasMissingImportInfo(photo));
       const tripLocatedAfter = archivableTripPhotos.filter((photo) => photo.location);
       if (tripLocatedAfter.length) {
-        const places = buildPlacesForGroup(archivableTripPhotos, tripId, { makeId });
+        const places = buildPlacesForGroup(archivableTripPhotos, tripId, { makeId, existingPlaces: workingPlaceNodes.filter((place) => place.tripId === tripId) });
         workingPlaceNodes = workingPlaceNodes.filter((place) => place.tripId !== tripId).concat(places);
         workingRoutes = workingRoutes.filter((route) => route.tripId !== tripId).concat(buildPhotoRoute(tripId, tripLocatedAfter));
         for (const photo of tripPhotosAfter) photo.placeNodeId = undefined;
@@ -1157,9 +1163,30 @@ export function createImportServices({
     }
 
     if (aiResult.action === "create_place_from_candidate") {
-      const candidate = aiResult.candidate;
-      if (!candidate?.name || !candidate.point) return keepPending(candidate?.reason || "AI 未给出可创建地点的合法名称或估计坐标。", candidate?.confidence ?? 0);
+      const candidate = completeCandidatePoint(aiResult.candidate);
+      if (!candidate?.name) return keepPending(candidate?.reason || "AI 未给出可创建地点的合法名称。", candidate?.confidence ?? 0);
+      if (!candidate.point) return keepPending(candidate.reason || "AI 给出了地点名，但本地地名库无法估计可用坐标，仍需手动补点。", candidate.confidence ?? 0);
       if (isMissingGpsPhoto(photo) && Number(candidate.confidence ?? 0) < 0.55) return keepPending(candidate.reason || "待补照片地点置信度不足。", candidate.confidence ?? 0);
+      const mergePlace = findMergeableContextPlace(candidate, contextPlaces);
+      if (mergePlace) {
+        const placeName = mergePlace.displayName ?? mergePlace.name;
+        return {
+          actionable: true,
+          confidence: candidate.confidence,
+          displayTarget: `合并 ${placeName}`,
+          displayTargetLabel: placeName,
+          displayTargetBadge: "合并",
+          suggestion: `合并 ${placeName}`,
+          reason: `${candidate.reason || "AI 给出了明确地点。"} 已匹配到同一行程中的现有地点：${placeName}。`,
+          proposal: {
+            action: "bind_photos_to_place",
+            photoIds: [photo.id],
+            placeId: mergePlace.id,
+            confidence: candidate.confidence,
+            reason: `${candidate.reason || "AI 给出了明确地点。"} 已匹配到同一行程中的现有地点：${placeName}。`,
+          },
+        };
+      }
       return {
         actionable: true,
         confidence: candidate.confidence,
@@ -1182,6 +1209,53 @@ export function createImportServices({
     }
 
     return keepPending(aiResult.reason || "AI 认为当前照片仍无法可靠判断地点。", aiResult.confidence ?? 0);
+  }
+
+  function findMergeableContextPlace(candidate, contextPlaces) {
+    if (!candidate?.point) return undefined;
+    const candidateName = cleanPlaceName(candidate.name);
+    const candidateCity = cleanPlaceName(candidate.city);
+    const candidateCountry = cleanPlaceName(candidate.country);
+    return contextPlaces
+      .map((place) => {
+        if (!place.center) return undefined;
+        const distance = haversineKm(candidate.point, place.center);
+        const placeName = cleanPlaceName(place.displayName ?? place.name);
+        const placeCity = cleanPlaceName(place.city);
+        const placeCountry = cleanPlaceName(place.country);
+        const sameCountry = !candidateCountry || !placeCountry || candidateCountry === placeCountry;
+        const sameCity = Boolean(candidateCity && placeCity && candidateCity === placeCity);
+        const sameName = Boolean(candidateName && placeName && (candidateName === placeName || candidateName.includes(placeName) || placeName.includes(candidateName)));
+        const threshold = sameName ? 25 : sameCity ? 12 : 2.5;
+        if (!sameCountry || distance > threshold) return undefined;
+        return { place, distance, sameName, sameCity };
+      })
+      .filter(Boolean)
+      .sort((left, right) => Number(right.sameName) - Number(left.sameName) || Number(right.sameCity) - Number(left.sameCity) || left.distance - right.distance)[0]?.place;
+  }
+
+  function completeCandidatePoint(candidate) {
+    if (!candidate?.name) return candidate;
+    if (candidate.point) return candidate;
+    const fallback = forwardLocalGeocode(
+      {
+        name: candidate.name,
+        city: candidate.city,
+        country: candidate.country,
+      },
+      { makeId },
+    )[0];
+    if (!fallback?.point) return candidate;
+    return {
+      ...candidate,
+      point: fallback.point,
+      city: candidate.city ?? fallback.city,
+      country: candidate.country ?? fallback.country,
+      localizedNames: candidate.localizedNames ?? fallback.localizedNames,
+      localizedCountryNames: candidate.localizedCountryNames ?? fallback.localizedCountryNames,
+      confidence: Math.max(Number(candidate.confidence ?? 0), Math.min(0.72, Number(fallback.confidence ?? 0.6))),
+      reason: `${candidate.reason || "AI 给出了明确地点名。"} 已用本地地名库补入估计坐标：${fallback.name}。`,
+    };
   }
 
   function isMissingGpsPhoto(photo) {

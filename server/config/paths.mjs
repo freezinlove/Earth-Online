@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const rootDir = path.resolve(__dirname, "..", "..");
 export const dataDir = process.env.EARTH_ONLINE_DATA_DIR ? path.resolve(process.env.EARTH_ONLINE_DATA_DIR) : path.join(rootDir, "data");
+export const geodataPath = process.env.EARTH_ONLINE_GEODATA_PATH ? path.resolve(process.env.EARTH_ONLINE_GEODATA_PATH) : path.join(rootDir, "external", "geodata", "geonames.sqlite");
 export const photoDir = path.join(dataDir, "photos");
 export const thumbDir = path.join(dataDir, "thumbnails");
 export const importJobDir = path.join(dataDir, "import-jobs");

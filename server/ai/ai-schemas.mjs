@@ -77,6 +77,8 @@ export function validateMissingInfoInferenceResult(parsed) {
       candidate: {
         name: String(candidate.name ?? "").trim().slice(0, 80),
         point,
+        city: candidate.city ? String(candidate.city).trim().slice(0, 80) : undefined,
+        country: candidate.country ? String(candidate.country).trim().slice(0, 80) : undefined,
         confidence: clampConfidence(candidate.confidence),
         source: "ai_context_inference",
         precision: "estimated",

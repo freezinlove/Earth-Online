@@ -21,7 +21,15 @@ export function buildTimelineSegments(trips, placeNodes = []) {
     .map((place) => ({
       id: `segment-${place.id}`,
       label: place.name,
+      labelNames: place.names,
       shortLabel: shortTimelineSourceLabel(place.name),
+      shortLabelNames: place.names
+        ? {
+            zh: shortTimelineSourceLabel(place.names.zh ?? place.name),
+            en: shortTimelineSourceLabel(place.names.en ?? place.name),
+            local: shortTimelineSourceLabel(place.names.local ?? place.name),
+          }
+        : undefined,
       start: place.timeRange?.start,
       end: place.timeRange?.end,
       granularity: "photo",

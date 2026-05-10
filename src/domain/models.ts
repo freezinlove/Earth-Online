@@ -5,6 +5,12 @@ export interface GeoPoint {
   lng: number;
 }
 
+export interface LocalizedNames {
+  zh?: string;
+  en?: string;
+  local?: string;
+}
+
 export type PendingReason =
   | "missing_gps"
   | "missing_time"
@@ -17,13 +23,24 @@ export type PendingReason =
 export interface LocationCandidate {
   id: ID;
   name: string;
+  localizedNames?: LocalizedNames;
   country?: string;
+  localizedCountryNames?: LocalizedNames;
   city?: string;
+  localizedCityNames?: LocalizedNames;
   point?: GeoPoint;
   confidence: number;
   source: "exif" | "ai_vision" | "filename" | "geo_catalog" | "nearby_trip" | "manual" | "ai_context_inference" | "nearby_exif" | "geocode" | "existing_trip_context";
   precision?: "confirmed" | "estimated";
   reason: string;
+  admin1?: string;
+  admin2?: string;
+  countryCode?: string;
+  featureCode?: string;
+  featureLabel?: string;
+  distanceKm?: number;
+  geocodeRank?: number;
+  population?: number;
 }
 
 export interface PhotoAiEvidence {
@@ -127,9 +144,12 @@ export interface PlaceNode {
   id: ID;
   tripId: ID;
   name: string;
+  names?: LocalizedNames;
   displayName?: string;
   country?: string;
+  countryNames?: LocalizedNames;
   city?: string;
+  cityNames?: LocalizedNames;
   center: GeoPoint;
   coordinatePrecision?: "confirmed" | "estimated";
   photoIds: ID[];
@@ -150,7 +170,9 @@ export interface Route {
 export interface TimelineSegment {
   id: ID;
   label: string;
+  labelNames?: LocalizedNames;
   shortLabel?: string;
+  shortLabelNames?: LocalizedNames;
   start: string;
   end: string;
   granularity: "year" | "month" | "day" | "photo";
@@ -220,12 +242,14 @@ export interface GlobeMarker {
   id: ID;
   kind: "country" | "place";
   label: string;
+  labelNames?: LocalizedNames;
   center: GeoPoint;
   count: number;
   photoIds: ID[];
   placeIds?: ID[];
   tripId: ID;
   countryName?: string;
+  countryNames?: LocalizedNames;
   startTime?: string;
   endTime?: string;
   status: "confirmed" | "suggested" | "missing";
@@ -234,6 +258,7 @@ export interface GlobeMarker {
 export interface DossierDayGroup {
   day: string;
   country: string;
+  countryNames?: LocalizedNames;
   photoIds: ID[];
   placeIds: ID[];
   status: "confirmed" | "suggested" | "missing";
@@ -241,7 +266,7 @@ export interface DossierDayGroup {
 
 export interface DossierTripGroup {
   tripId: ID;
-  countries: Array<{ country: string; days: DossierDayGroup[] }>;
+  countries: Array<{ country: string; countryNames?: LocalizedNames; days: DossierDayGroup[] }>;
 }
 
 export interface SearchDocument {

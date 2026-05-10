@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { applyPendingDecision } from "../server/domain/pending-workflow.mjs";
+import { forwardLocalGeocode } from "../server/domain/local-geocoder.mjs";
 import { buildPlacesForGroup } from "../server/domain/place-projector.mjs";
 import { projectState } from "../server/domain/state-projector.mjs";
 
@@ -119,6 +120,11 @@ assert.equal(projectedAfter.globeMarkers.some((marker) => marker.kind === "place
 
 const ignored = applyPendingDecision(baseState, "pending-location", { accepted: false });
 assert.equal(projectState(ignored).pendingItems[0].status, "ignored");
+
+const berlinFallback = forwardLocalGeocode({ name: "柏林中央火车站", city: "柏林", country: "德国" })[0];
+assert.equal(berlinFallback?.country, "德国");
+assert.equal(berlinFallback?.localizedCountryNames?.en, "Germany");
+assert.equal(Boolean(berlinFallback?.point), true);
 
 const centralEuropePhotos = [
   {
@@ -245,16 +251,14 @@ const centralEuropeProjected = projectState({
   pendingItems: [],
 });
 const praguePlace = centralEuropeProjected.placeNodes.find((place) => place.name === "布拉格");
-assert.equal(praguePlace, undefined);
-const pragueLandmarkPlace = centralEuropeProjected.placeNodes.find((place) => place.name === "布拉格查理大桥");
-assert.equal(pragueLandmarkPlace?.country, "捷克");
-assert.equal(pragueLandmarkPlace?.displayName, "布拉格查理大桥与城堡");
-assert.equal(centralEuropeProjected.timelineSegments.find((segment) => segment.relatedId === pragueLandmarkPlace?.id)?.label, "布拉格查理大桥");
+assert.equal(praguePlace?.country, "捷克");
+assert.equal(praguePlace?.displayName, "布拉格查理大桥与城堡");
+assert.equal(centralEuropeProjected.timelineSegments.find((segment) => segment.relatedId === praguePlace?.id)?.label, "布拉格");
 assert.deepEqual(
   centralEuropeProjected.dossierGroups[0].countries.map((group) => group.country),
   ["捷克", "奥地利"],
 );
-assert.equal(centralEuropeProjected.globeMarkers.find((marker) => marker.kind === "place" && marker.label === "布拉格查理大桥")?.countryName, "捷克");
+assert.equal(centralEuropeProjected.globeMarkers.find((marker) => marker.kind === "place" && marker.label === "布拉格")?.countryName, "捷克");
 
 const incrementalPlacePhotos = [
   {
@@ -505,5 +509,227 @@ assert.deepEqual(
 );
 assert.deepEqual(new Set(sameDayDossierDays.flatMap((day) => day.placeIds)), new Set(sameDayGlobePlaceIds));
 assert.equal(sameDayDossierPlaceIds.length, 1);
+
+const sceneTagOnlyPhotos = [
+  {
+    id: "photo-scene-tag",
+    fileName: "norway-lake.jpg",
+    title: "峡湾畔的悠闲午后",
+    thumbnailUrl: "/data/thumbs/norway-lake.jpg",
+    capturedAt: "2024-08-06T12:16:14Z",
+    tripId: "trip-norway",
+    location: { lat: 59.223972, lng: 5.465675 },
+    tags: ["山间湖泊", "挪威海岸风光"],
+    aiCaption: "峡湾边的一段午后。",
+    ai: {
+      visiblePlaceNames: ["挪威海岸"],
+      locationCandidates: [
+        {
+          id: "candidate-norway-country",
+          name: "挪威",
+          country: "挪威",
+          confidence: 0.9,
+          source: "ai_vision",
+          reason: "GPS 匹配挪威。",
+        },
+      ],
+    },
+    locationResolution: {
+      status: "confirmed",
+      effectivePoint: { lat: 59.223972, lng: 5.465675 },
+      source: "exif",
+      candidates: [
+        {
+          id: "candidate-haugesund",
+          name: "Haugesund",
+          country: "挪威",
+          city: "Haugesund",
+          point: { lat: 59.4138, lng: 5.268 },
+          confidence: 0.82,
+          source: "geocode",
+          reason: "GeoNames nearest locality.",
+        },
+        {
+          id: "candidate-norway-country",
+          name: "挪威",
+          country: "挪威",
+          confidence: 0.9,
+          source: "ai_vision",
+          reason: "GPS 匹配挪威。",
+        },
+      ],
+      requiresUserAction: false,
+      updatedAt: "2026-05-09T11:00:00Z",
+    },
+  },
+];
+const sceneTagPlaces = buildPlacesForGroup(sceneTagOnlyPhotos, "trip-norway", { makeId });
+assert.equal(sceneTagPlaces[0].name, "Haugesund");
+assert.notEqual(sceneTagPlaces[0].name, "山间湖泊");
+assert.notEqual(sceneTagPlaces[0].name, "挪威");
+
+const existingWeakPlace = {
+  id: "place-existing-weak",
+  tripId: "trip-norway",
+  name: "山间湖泊",
+  center: { lat: 59.223972, lng: 5.465675 },
+  photoIds: ["photo-old-norway"],
+  timeRange: { start: "2024-08-06T10:00:00Z", end: "2024-08-06T10:00:00Z" },
+  pending: false,
+};
+const weakUpgradePlaces = buildPlacesForGroup(
+  [
+    { ...sceneTagOnlyPhotos[0], id: "photo-old-norway", capturedAt: "2024-08-06T10:00:00Z" },
+    sceneTagOnlyPhotos[0],
+  ],
+  "trip-norway",
+  { makeId, existingPlaces: [existingWeakPlace] },
+);
+assert.equal(weakUpgradePlaces[0].id, existingWeakPlace.id);
+assert.equal(weakUpgradePlaces[0].name, "Haugesund");
+
+const existingViennaPlace = {
+  id: "place-vienna-existing",
+  tripId: "trip-vienna",
+  name: "阿尔贝蒂娜博物馆",
+  displayName: "阿尔贝蒂娜博物馆",
+  country: "奥地利",
+  city: "维也纳",
+  center: { lat: 48.2044, lng: 16.3682 },
+  photoIds: ["photo-vienna-1", "photo-vienna-2", "photo-vienna-3"],
+  timeRange: { start: "2025-07-19T10:00:00Z", end: "2025-07-19T10:20:00Z" },
+  pending: false,
+};
+const viennaMuseumPhoto = (id, capturedAt) => ({
+  id,
+  fileName: `${id}.jpg`,
+  title: "维也纳博物馆",
+  capturedAt,
+  tripId: "trip-vienna",
+  location: { lat: 48.2044, lng: 16.3682 },
+  tags: ["维也纳", "博物馆"],
+  aiCaption: "维也纳市中心的博物馆建筑。",
+  ai: {
+    visiblePlaceNames: ["阿尔贝蒂娜博物馆"],
+    locationCandidates: [
+      {
+        id: `candidate-${id}`,
+        name: "阿尔贝蒂娜博物馆",
+        country: "奥地利",
+        city: "维也纳",
+        point: { lat: 48.2044, lng: 16.3682 },
+        confidence: 0.82,
+        source: "ai_vision",
+      },
+    ],
+  },
+  locationResolution: {
+    status: "confirmed",
+    effectiveName: "阿尔贝蒂娜博物馆",
+    effectivePoint: { lat: 48.2044, lng: 16.3682 },
+    confidence: 0.82,
+    source: "ai_vision",
+    candidates: [],
+    requiresUserAction: false,
+  },
+});
+const contextBoundKarlskirchePhoto = {
+  ...viennaMuseumPhoto("photo-vienna-4", "2025-07-19T10:30:00Z"),
+  title: "维也纳查尔斯教堂",
+  location: { lat: 48.1984, lng: 16.3716 },
+  tags: ["卡尔教堂", "维也纳"],
+  aiCaption: "画面显示维也纳查尔斯教堂建筑特征。",
+  ai: {
+    visiblePlaceNames: ["维也纳查尔斯教堂"],
+    locationCandidates: [
+      {
+        id: "candidate-karlskirche",
+        name: "卡尔教堂",
+        country: "奥地利",
+        city: "维也纳",
+        point: { lat: 48.1984, lng: 16.3716 },
+        confidence: 0.86,
+        source: "ai_context_inference",
+      },
+    ],
+  },
+  locationResolution: {
+    status: "confirmed",
+    effectiveName: "阿尔贝蒂娜博物馆",
+    effectivePoint: { lat: 48.2044, lng: 16.3682 },
+    confidence: 0.86,
+    source: "existing_trip_context",
+    candidates: [],
+    requiresUserAction: false,
+  },
+};
+const contextBoundPlaces = buildPlacesForGroup(
+  [
+    viennaMuseumPhoto("photo-vienna-1", "2025-07-19T10:00:00Z"),
+    viennaMuseumPhoto("photo-vienna-2", "2025-07-19T10:10:00Z"),
+    viennaMuseumPhoto("photo-vienna-3", "2025-07-19T10:20:00Z"),
+    contextBoundKarlskirchePhoto,
+  ],
+  "trip-vienna",
+  { makeId, existingPlaces: [existingViennaPlace] },
+);
+assert.equal(contextBoundPlaces[0].id, existingViennaPlace.id);
+assert.equal(contextBoundPlaces[0].name, "卡尔教堂");
+
+const existingEstimatedViennaPlace = {
+  ...existingViennaPlace,
+  id: "place-vienna-estimated",
+  name: "维也纳博物馆",
+  displayName: "维也纳博物馆",
+  photoIds: ["photo-vienna-estimated-1", "photo-vienna-estimated-2", "photo-vienna-estimated-3", "photo-vienna-estimated-4"],
+};
+const estimatedViennaPhoto = (id, capturedAt) => ({
+  ...viennaMuseumPhoto(id, capturedAt),
+  locationResolution: {
+    status: "confirmed",
+    effectiveName: "维也纳博物馆",
+    effectivePoint: { lat: 48.2044, lng: 16.3682 },
+    confidence: 0.72,
+    source: "ai_context_inference",
+    candidates: [],
+    requiresUserAction: false,
+  },
+});
+const firstGpsViennaPhoto = {
+  ...viennaMuseumPhoto("photo-vienna-first-gps", "2025-07-19T11:00:00Z"),
+  locationResolution: {
+    status: "confirmed",
+    effectiveName: "阿尔贝蒂娜博物馆",
+    effectivePoint: { lat: 48.2044, lng: 16.3682 },
+    confidence: 0.95,
+    source: "exif",
+    candidates: [
+      {
+        id: "candidate-first-gps",
+        name: "阿尔贝蒂娜博物馆",
+        country: "奥地利",
+        city: "维也纳",
+        point: { lat: 48.2044, lng: 16.3682 },
+        confidence: 0.95,
+        source: "geocode",
+      },
+    ],
+    requiresUserAction: false,
+  },
+  exifStatus: { gps: "read", time: "read" },
+};
+const firstGpsPlaces = buildPlacesForGroup(
+  [
+    estimatedViennaPhoto("photo-vienna-estimated-1", "2025-07-19T10:00:00Z"),
+    estimatedViennaPhoto("photo-vienna-estimated-2", "2025-07-19T10:10:00Z"),
+    estimatedViennaPhoto("photo-vienna-estimated-3", "2025-07-19T10:20:00Z"),
+    estimatedViennaPhoto("photo-vienna-estimated-4", "2025-07-19T10:30:00Z"),
+    firstGpsViennaPhoto,
+  ],
+  "trip-vienna",
+  { makeId, existingPlaces: [existingEstimatedViennaPlace] },
+);
+assert.equal(firstGpsPlaces[0].id, existingEstimatedViennaPlace.id);
+assert.equal(firstGpsPlaces[0].name, "阿尔贝蒂娜博物馆");
 
 console.log("Backend projection checks passed");

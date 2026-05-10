@@ -1,0 +1,122 @@
+- generic [ref=e3]:
+  - banner:
+    - button "Earth_Online"
+    - generic:
+      - button "记忆搜索":
+        - img
+  - navigation [ref=e10]:
+    - button "导入图片" [ref=e11] [cursor=pointer]:
+      - img [ref=e12]
+    - button "时空主界面" [ref=e13] [cursor=pointer]:
+      - img [ref=e14]
+    - button "旅行档案" [active] [ref=e20] [cursor=pointer]:
+      - img [ref=e21]
+      - generic: 旅行档案
+    - button "手动整理" [ref=e24] [cursor=pointer]:
+      - img [ref=e25]
+      - generic: 手动整理
+    - button "本地设置" [ref=e29] [cursor=pointer]:
+      - img [ref=e30]
+      - generic: 本地设置
+  - main [ref=e33]:
+    - generic [ref=e36]:
+      - button "中国" [ref=e64] [cursor=pointer]
+      - button "捷克" [ref=e65] [cursor=pointer]
+      - button "奥地利" [ref=e66] [cursor=pointer]
+      - button "德国" [ref=e67] [cursor=pointer]
+      - button "匈牙利" [ref=e68] [cursor=pointer]
+      - button "瑞士" [ref=e69] [cursor=pointer]
+      - generic:
+        - generic:
+          - button "北京首都国际机场"
+      - generic:
+        - generic:
+          - button "布拉格城堡"
+      - generic:
+        - generic:
+          - button "维也纳"
+      - generic:
+        - generic:
+          - button "哈尔施塔特"
+      - generic:
+        - generic:
+          - button "AC酒店因斯布鲁克"
+      - generic:
+        - generic:
+          - button "萨尔茨堡"
+      - generic:
+        - generic:
+          - button "艾布湖"
+      - generic:
+        - generic:
+          - button "德国高速公路"
+      - generic:
+        - generic:
+          - button "布达佩斯多瑙河"
+      - generic:
+        - generic:
+          - button "苏黎世机场"
+    - region "旅行时间刻痕":
+      - generic:
+        - generic:
+          - generic: "2024"
+        - generic:
+          - generic: "2025"
+        - generic:
+          - generic: "2026"
+      - generic:
+        - button "-08 欧洲多城旅行 2024.08.05-08.12":
+          - generic: "-08 欧洲多城旅行"
+        - button "-07 欧洲多城旅行 2025.07.13-07.29":
+          - generic: "-07 欧洲多城旅行"
+    - generic [ref=e99]:
+      - generic [ref=e101]:
+        - paragraph [ref=e102]: Travel Archive
+        - heading "旅行档案袋" [level=2] [ref=e103]
+      - generic [ref=e104]:
+        - generic [ref=e105]: 2 trips
+        - generic [ref=e106]: 71 photos
+        - generic [ref=e107]: 14 places
+      - generic [ref=e108]:
+        - generic [ref=e109]:
+          - generic [ref=e110]: "2025"
+          - button "2025-07 欧洲多城旅行 2025-07 欧洲多城旅行 confirmed 奥地利 / 匈牙利 / 德国 / 捷克 / 瑞士 / 中国 · 布达佩斯 / 哈尔施塔特 / 维也纳 / 艾布湖 / 布拉格 / 加米施-帕滕基兴 2025-07-13 - 2025-07-29 60 张照片 10 个地点" [ref=e112] [cursor=pointer]:
+            - img "2025-07 欧洲多城旅行" [ref=e114]
+            - generic [ref=e115]:
+              - generic [ref=e116]:
+                - generic [ref=e117]:
+                  - heading "2025-07 欧洲多城旅行" [level=3] [ref=e118]
+                  - generic [ref=e119]: confirmed
+                - generic [ref=e121]: 奥地利 / 匈牙利 / 德国 / 捷克 / 瑞士 / 中国 · 布达佩斯 / 哈尔施塔特 / 维也纳 / 艾布湖 / 布拉格 / 加米施-帕滕基兴
+              - generic [ref=e122]:
+                - generic [ref=e123]:
+                  - img [ref=e124]
+                  - text: 2025-07-13 - 2025-07-29
+                - generic [ref=e126]:
+                  - img [ref=e127]
+                  - text: 60 张照片
+                - generic [ref=e131]:
+                  - img [ref=e132]
+                  - text: 10 个地点
+            - img [ref=e136]
+        - generic [ref=e139]:
+          - generic [ref=e140]: "2024"
+          - button "2024-08 欧洲多城旅行 2024-08 欧洲多城旅行 confirmed 挪威 / 瑞典 · 奥斯陆 / 挪威 / 挪威峡湾地区 / 未明确城镇 / 卑尔根 / 挪威北部沿海 2024-08-05 - 2024-08-12 11 张照片 4 个地点" [ref=e142] [cursor=pointer]:
+            - img "2024-08 欧洲多城旅行" [ref=e144]
+            - generic [ref=e145]:
+              - generic [ref=e146]:
+                - generic [ref=e147]:
+                  - heading "2024-08 欧洲多城旅行" [level=3] [ref=e148]
+                  - generic [ref=e149]: confirmed
+                - generic [ref=e151]: 挪威 / 瑞典 · 奥斯陆 / 挪威 / 挪威峡湾地区 / 未明确城镇 / 卑尔根 / 挪威北部沿海
+              - generic [ref=e152]:
+                - generic [ref=e153]:
+                  - img [ref=e154]
+                  - text: 2024-08-05 - 2024-08-12
+                - generic [ref=e156]:
+                  - img [ref=e157]
+                  - text: 11 张照片
+                - generic [ref=e161]:
+                  - img [ref=e162]
+                  - text: 4 个地点
+            - img [ref=e166]

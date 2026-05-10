@@ -3,12 +3,14 @@ import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { capturedDateLabel, capturedTimeLabel, toCapturedDateTimeInput } from "@/domain/datetime";
 import { placeFocusIntent } from "@/domain/globeIntent";
-import { photoAltText, photoLabel, placeLabel, tripLabel } from "@/domain/labels";
-import type { Photo, PlaceNode } from "@/domain/models";
+import { countryLabel, photoAltText, photoLabel, placeLabel, tripLabel } from "@/domain/labels";
+import { useI18n } from "@/i18n/useI18n";
+import type { LocalizedNames, Photo, PlaceNode } from "@/domain/models";
 import { useAppStore } from "@/store/appStore";
 
 type DayGroup = {
   country: string;
+  countryNames?: LocalizedNames;
   day: string;
   photos: Photo[];
   places: PlaceNode[];
@@ -16,6 +18,7 @@ type DayGroup = {
 
 type CountryGroup = {
   country: string;
+  countryNames?: LocalizedNames;
   days: DayGroup[];
 };
 
@@ -41,6 +44,7 @@ function placeKey(group?: Pick<DayGroup, "places">) {
 }
 
 export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) {
+  const { locale, t } = useI18n();
   const selectedTripId = useAppStore((state) => state.selectedTripId);
   const trips = useAppStore((state) => state.trips);
   const allPhotos = useAppStore((state) => state.photos);
@@ -68,8 +72,10 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
   const countryGroups = useMemo<CountryGroup[]>(() => {
     return (dossier?.countries ?? []).map((countryGroup) => ({
       country: countryGroup.country,
+      countryNames: countryGroup.countryNames,
       days: countryGroup.days.map((day) => ({
         country: day.country,
+        countryNames: day.countryNames,
         day: day.day,
         photos: day.photoIds.map((id) => photoById.get(id)).filter((photo): photo is Photo => Boolean(photo)),
         places: day.placeIds.map((id) => placeById.get(id)).filter((place): place is PlaceNode => Boolean(place)),
@@ -96,9 +102,8 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
       <header className="trip-dossier-hero">
         <img src={heroPhoto} alt={tripLabel(trip)} className="trip-dossier-hero-image" />
         <div className="trip-dossier-hero-copy">
-          <p className="text-xs font-semibold uppercase tracking-[0.34em] text-white/72">Travel Dossier</p>
           <label className="mt-4 block max-w-4xl">
-            <span className="sr-only">旅行标题</span>
+            <span className="sr-only">{t("archive")}</span>
             <textarea
               className="trip-dossier-title-input"
               value={title}
@@ -109,8 +114,8 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
           </label>
           <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm font-semibold text-white/78">
             <span className="inline-flex items-center gap-2"><CalendarDays size={15} /> {trip.dateRange.start} - {trip.dateRange.end}</span>
-            <span className="inline-flex items-center gap-2"><Image size={15} /> {photos.length} 张照片</span>
-            <span className="inline-flex items-center gap-2"><MapPin size={15} /> {places.length} 个地点</span>
+            <span className="inline-flex items-center gap-2"><Image size={15} /> {photos.length} {t("photoCount")}</span>
+            <span className="inline-flex items-center gap-2"><MapPin size={15} /> {places.length} {t("placeCount")}</span>
           </div>
         </div>
       </header>
@@ -120,7 +125,7 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
           {countryGroups.map((countryGroup, countryIndex) => (
             <section key={`${countryGroup.country}-${countryIndex}`} className="trip-country-section">
               <div className="trip-country-column">
-                <span>{countryGroup.country}</span>
+                <span>{countryLabel(countryGroup.countryNames, countryGroup.country, locale)}</span>
               </div>
 
               <div className="trip-country-days">
@@ -141,13 +146,13 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
                             {group.places.length ? (
                               <div className="trip-route-labels">
                                 {group.places.map((place) => (
-                                  <button className="trip-route-label" key={place.id} onClick={() => focusPlaceOnGlobe(place)} title={placeLabel(place)} type="button">
-                                    {placeLabel(place)}
+                                  <button className="trip-route-label" key={place.id} onClick={() => focusPlaceOnGlobe(place)} title={placeLabel(place, locale)} type="button">
+                                    {placeLabel(place, locale)}
                                   </button>
                                 ))}
                               </div>
                             ) : (
-                              <span className="trip-route-label">未标地点</span>
+                              <span className="trip-route-label">{t("unmarkedPlace")}</span>
                             )}
                           </>
                         )}
@@ -163,13 +168,27 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
                           {group.photos.map((photo, index) => {
                             return (
                               <article key={photo.id} className={index === 0 ? "trip-photo-piece trip-photo-piece-featured" : "trip-photo-piece"}>
-                                <button className="block w-full text-left" onClick={() => setOpenPhotoId(photo.id)} type="button">
-                                  <img src={getPhotoSource(photo)} alt={photoAltText(photo)} />
-                                  <span className="trip-photo-caption">
-                                    <strong>{photoLabel(photo)}</strong>
-                                    <em>{capturedTimeLabel(photo.capturedAt) || photo.fileName}</em>
-                                  </span>
-                                </button>
+                                <div className="trip-photo-frame">
+                                  <button className="trip-photo-open" onClick={() => setOpenPhotoId(photo.id)} type="button">
+                                    <img src={getPhotoSource(photo)} alt={photoAltText(photo)} />
+                                    <span className="trip-photo-caption">
+                                      <strong>{photoLabel(photo)}</strong>
+                                      <em>{capturedTimeLabel(photo.capturedAt) || photo.fileName}</em>
+                                    </span>
+                                  </button>
+                                  <button
+                                    className="trip-photo-remove"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void deletePhoto(photo.id);
+                                    }}
+                                    title={t("removePhoto")}
+                                    type="button"
+                                    aria-label={`${t("clear")} ${photoLabel(photo)}`}
+                                  >
+                                    <X size={21} />
+                                  </button>
+                                </div>
                               </article>
                             );
                           })}
@@ -213,9 +232,10 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
 }
 
 function TripDossierBackButton({ onBack }: { onBack: () => void }) {
+  const { t } = useI18n();
   return createPortal(
     <div className="trip-dossier-actions">
-      <button className="trip-dossier-link" aria-label="返回档案袋" onClick={onBack} title="返回档案袋" type="button">
+      <button className="trip-dossier-link" aria-label={t("back")} onClick={onBack} title={t("back")} type="button">
         <ArrowLeft size={30} />
       </button>
     </div>,
@@ -252,6 +272,7 @@ function PhotoDetailModal({
   onToggleEdit: (photoId: string) => void;
   onSave: (photoId: string, capturedAt: string, lat: string, lng: string, tags: string) => void;
 }) {
+  const { t } = useI18n();
   if (!photo) return null;
 
   return createPortal(
@@ -269,7 +290,7 @@ function PhotoDetailModal({
               <p>{capturedDateLabel(photo.capturedAt)}</p>
               <h3>{photoLabel(photo)}</h3>
             </div>
-            <button className="trip-photo-modal-close" onClick={onClose} type="button" aria-label="关闭照片详情">
+            <button className="trip-photo-modal-close" onClick={onClose} type="button" aria-label={t("closePhotoPreview")}>
               <X size={17} />
             </button>
           </div>
@@ -279,18 +300,18 @@ function PhotoDetailModal({
             {photo.tags.map((tag) => (
               <span key={tag}>{tag}</span>
             ))}
-            {photo.pendingReason ? <span>待确认</span> : null}
+            {photo.pendingReason ? <span>{t("pending")}</span> : null}
           </div>
 
           <div className="trip-photo-modal-actions">
             <button onClick={() => onLocate(photo.id)} type="button">
-              <MapPin size={16} /> 定位
+              <MapPin size={16} /> {t("locate")}
             </button>
             <button onClick={() => onRemove(photo.id)} type="button">
-              <Trash2 size={16} /> 移除
+              <Trash2 size={16} /> {t("clear")}
             </button>
             <button onClick={() => onToggleEdit(photo.id)} type="button">
-              <PencilLine size={16} /> 修改
+              <PencilLine size={16} /> {t("edit")}
             </button>
           </div>
 
@@ -318,6 +339,7 @@ function PhotoMetadataEditor({
   photo: { capturedAt?: string; location?: { lat: number; lng: number }; tags: string[]; exifStatus?: { time: string; gps: string } };
   onSave: (capturedAt: string, lat: string, lng: string, tags: string) => void;
 }) {
+  const { t } = useI18n();
   const [capturedAt, setCapturedAt] = useState(toLocalDateTime(photo.capturedAt));
   const [lat, setLat] = useState(photo.location?.lat.toFixed(6) ?? "");
   const [lng, setLng] = useState(photo.location?.lng.toFixed(6) ?? "");
@@ -331,10 +353,10 @@ function PhotoMetadataEditor({
           <input className="soft-input text-xs outline-none" placeholder="Latitude" value={lat} onChange={(event) => setLat(event.target.value)} />
           <input className="soft-input text-xs outline-none" placeholder="Longitude" value={lng} onChange={(event) => setLng(event.target.value)} />
         </div>
-        <input className="soft-input text-xs outline-none" placeholder="标签，用空格或逗号分隔" value={tags} onChange={(event) => setTags(event.target.value)} />
-        <p className="text-[11px] text-outline">EXIF：时间 {photo.exifStatus?.time ?? "unknown"} · GPS {photo.exifStatus?.gps ?? "unknown"}</p>
+        <input className="soft-input text-xs outline-none" placeholder={t("tagsPlaceholder")} value={tags} onChange={(event) => setTags(event.target.value)} />
+        <p className="text-[11px] text-outline">EXIF: {t("exifTime")} {photo.exifStatus?.time ?? "unknown"} · GPS {photo.exifStatus?.gps ?? "unknown"}</p>
         <button className="w-fit rounded-full bg-primary px-4 py-2 text-xs font-semibold text-white" onClick={() => onSave(capturedAt, lat, lng, tags)} type="button">
-          保存照片信息
+          {t("savePhotoInfo")}
         </button>
       </div>
     </div>

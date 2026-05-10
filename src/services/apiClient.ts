@@ -166,6 +166,7 @@ export const apiClient = {
   createTrip: (title: string, start: string, end: string) => request<AppSnapshot>("/api/trips", { method: "POST", body: JSON.stringify({ title, start, end }) }),
   updateTrip: (tripId: string, body: { title?: string; dateRange?: { start: string; end: string } }) =>
     request<AppSnapshot>(`/api/trips/${tripId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteTrip: (tripId: string) => request<AppSnapshot>(`/api/trips/${tripId}/delete`, { method: "POST", body: "{}" }),
   createPlace: (tripId: string, name: string, lat: number, lng: number) =>
     request<AppSnapshot>("/api/places", { method: "POST", body: JSON.stringify({ tripId, name, lat, lng }) }),
   deletePlace: (placeId: string) => request<AppSnapshot>(`/api/places/${placeId}/delete`, { method: "POST", body: "{}" }),

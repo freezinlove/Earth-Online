@@ -7,6 +7,9 @@ data/**
 !data/README.md
 test-results
 external/cobe
+external/geodata/*.sqlite
+external/geodata/*.sqlite-*
+external/geodata/downloads/
 .env
 .env.*
 !.env.example

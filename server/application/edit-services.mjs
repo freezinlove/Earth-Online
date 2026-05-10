@@ -41,6 +41,48 @@ export function createEditServices({ readState, readVectorIndex, writeState, wri
     return responseState();
   }
 
+  async function deleteTrip(id) {
+    const state = await readState();
+    const trip = state.trips.find((item) => item.id === id);
+    if (!trip) return responseState();
+    const tripPhotos = state.photos.filter((photo) => photo.tripId === id);
+    const photoIds = new Set(tripPhotos.map((photo) => photo.id));
+    const pendingIds = new Set(
+      state.pendingItems
+        .filter((item) => item.relatedTripId === id || safeArray(item.relatedPhotoIds).some((photoId) => photoIds.has(photoId)))
+        .map((item) => item.id),
+    );
+
+    for (const photo of tripPhotos) {
+      if (photo.storageUrl) await fs.rm(path.join(paths.photoDir, path.basename(photo.storageUrl)), { force: true });
+      if (photo.thumbnailUrl) await fs.rm(path.join(paths.thumbDir, path.basename(photo.thumbnailUrl)), { force: true });
+    }
+
+    const vectorIndex = await readVectorIndex();
+    for (const photoId of photoIds) delete vectorIndex[photoId];
+    await writeVectorIndex(vectorIndex);
+
+    await writeState({
+      ...state,
+      trips: state.trips.filter((item) => item.id !== id),
+      photos: state.photos.filter((photo) => photo.tripId !== id),
+      placeNodes: state.placeNodes.filter((place) => place.tripId !== id),
+      routes: state.routes.filter((route) => route.tripId !== id),
+      pendingItems: state.pendingItems.filter((item) => !pendingIds.has(item.id)),
+      importBatches: state.importBatches.map((batch) => ({
+        ...batch,
+        addedPhotoIds: safeArray(batch.addedPhotoIds).filter((photoId) => !photoIds.has(photoId)),
+        duplicatePhotoIds: safeArray(batch.duplicatePhotoIds).filter((photoId) => !photoIds.has(photoId)),
+        createdTripIds: safeArray(batch.createdTripIds).filter((tripId) => tripId !== id),
+        updatedTripIds: safeArray(batch.updatedTripIds).filter((tripId) => tripId !== id),
+        pendingItemIds: safeArray(batch.pendingItemIds).filter((pendingId) => !pendingIds.has(pendingId)),
+        storedFileNames: safeArray(batch.storedFileNames).filter((name) => !tripPhotos.some((photo) => path.basename(photo.storageUrl ?? "") === path.basename(name))),
+        storedThumbnailNames: safeArray(batch.storedThumbnailNames).filter((name) => !tripPhotos.some((photo) => path.basename(photo.thumbnailUrl ?? "") === path.basename(name))),
+      })),
+    });
+    return responseState();
+  }
+
   async function createPlace(body) {
     const state = await readState();
     const now = new Date().toISOString();
@@ -273,6 +315,7 @@ export function createEditServices({ readState, readVectorIndex, writeState, wri
   return {
     createTrip,
     patchTrip,
+    deleteTrip,
     createPlace,
     deletePlace,
     reorderPlaces,

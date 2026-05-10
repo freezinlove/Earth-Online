@@ -1,0 +1,199 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - banner:
+      - button "Earth_Online"
+      - generic:
+        - button "记忆搜索":
+          - img
+    - main [ref=e33]:
+      - generic [ref=e36]:
+        - button "挪威" [ref=e173] [cursor=pointer]
+        - generic:
+          - generic:
+            - button "奥斯陆王宫"
+        - generic:
+          - generic:
+            - button "挪威"
+        - generic:
+          - generic:
+            - button "山间湖泊"
+        - generic:
+          - generic:
+            - button "罗弗敦群岛"
+      - region "旅行时间刻痕":
+        - generic:
+          - generic:
+            - generic: "2024"
+          - generic:
+            - generic: "2025"
+          - generic:
+            - generic: "2026"
+        - generic:
+          - button "-08 欧洲多城旅行 2024.08.05-08.12":
+            - generic: "-08 欧洲多城旅行"
+          - button "-07 欧洲多城旅行 2025.07.13-07.29":
+            - generic: "-07 欧洲多城旅行"
+      - generic [ref=e174]:
+        - generic [ref=e175]:
+          - img "2024-08 欧洲多城旅行" [ref=e176]
+          - generic [ref=e177]:
+            - paragraph [ref=e178]: Travel Dossier
+            - generic [ref=e179]:
+              - generic [ref=e180]: 旅行标题
+              - textbox "旅行标题" [ref=e181]: 2024-08 欧洲多城旅行
+            - generic [ref=e182]:
+              - generic [ref=e183]:
+                - img [ref=e184]
+                - text: 2024-08-05 - 2024-08-12
+              - generic [ref=e186]:
+                - img [ref=e187]
+                - text: 12 张照片
+              - generic [ref=e191]:
+                - img [ref=e192]
+                - text: 4 个地点
+        - main [ref=e195]:
+          - generic [ref=e197]:
+            - generic [ref=e199]: 挪威
+            - generic [ref=e200]:
+              - generic [ref=e201]:
+                - generic [ref=e204] [cursor=pointer]: 未标地点
+                - generic [ref=e205]:
+                  - heading "2024.08.05" [level=3] [ref=e207]
+                  - generic [ref=e209]:
+                    - article [ref=e210]:
+                      - generic [ref=e211]:
+                        - button "山巅三人小憩 山巅三人小憩 21:58" [ref=e212] [cursor=pointer]:
+                          - img "山巅三人小憩" [ref=e213]
+                          - generic [ref=e214]:
+                            - strong [ref=e215]: 山巅三人小憩
+                            - emphasis [ref=e216]: 21:58
+                        - button "清除 山巅三人小憩" [ref=e217] [cursor=pointer]:
+                          - img [ref=e218]
+                    - article [ref=e221]:
+                      - generic [ref=e222]:
+                        - button "山巅独坐听风 山巅独坐听风 22:04" [ref=e223] [cursor=pointer]:
+                          - img "山巅独坐听风" [ref=e224]
+                          - generic [ref=e225]:
+                            - strong [ref=e226]: 山巅独坐听风
+                            - emphasis [ref=e227]: 22:04
+                        - button "清除 山巅独坐听风" [ref=e228] [cursor=pointer]:
+                          - img [ref=e229]
+              - generic [ref=e232]:
+                - button "山间湖泊" [ref=e236] [cursor=pointer]
+                - generic [ref=e237]:
+                  - heading "2024.08.06" [level=3] [ref=e239]
+                  - article [ref=e242]:
+                    - generic [ref=e243]:
+                      - button "峡湾畔的悠闲午后 峡湾畔的悠闲午后 12:16" [ref=e244] [cursor=pointer]:
+                        - img "峡湾畔的悠闲午后" [ref=e245]
+                        - generic [ref=e246]:
+                          - strong [ref=e247]: 峡湾畔的悠闲午后
+                          - emphasis [ref=e248]: 12:16
+                      - button "清除 峡湾畔的悠闲午后" [ref=e249] [cursor=pointer]:
+                        - img [ref=e250]
+              - generic [ref=e253]:
+                - button "挪威" [ref=e257] [cursor=pointer]
+                - generic [ref=e258]:
+                  - heading "2024.08.06" [level=3] [ref=e260]
+                  - article [ref=e263]:
+                    - generic [ref=e264]:
+                      - button "挪威旅途中的好友相聚 挪威旅途中的好友相聚 19:14" [ref=e265] [cursor=pointer]:
+                        - img "挪威旅途中的好友相聚" [ref=e266]
+                        - generic [ref=e267]:
+                          - strong [ref=e268]: 挪威旅途中的好友相聚
+                          - emphasis [ref=e269]: 19:14
+                      - button "清除 挪威旅途中的好友相聚" [ref=e270] [cursor=pointer]:
+                        - img [ref=e271]
+              - generic [ref=e274]:
+                - generic [ref=e277] [cursor=pointer]: 未标地点
+                - generic [ref=e278]:
+                  - heading "2024.08.08" [level=3] [ref=e280]
+                  - generic [ref=e282]:
+                    - article [ref=e283]:
+                      - generic [ref=e284]:
+                        - button "港口旧船与城市天际线 港口旧船与城市天际线 18:31" [ref=e285] [cursor=pointer]:
+                          - img "港口旧船与城市天际线" [ref=e286]
+                          - generic [ref=e287]:
+                            - strong [ref=e288]: 港口旧船与城市天际线
+                            - emphasis [ref=e289]: 18:31
+                        - button "清除 港口旧船与城市天际线" [ref=e290] [cursor=pointer]:
+                          - img [ref=e291]
+                    - article [ref=e294]:
+                      - generic [ref=e295]:
+                        - button "奥斯陆港口的木质旧船 奥斯陆港口的木质旧船 18:34" [ref=e296] [cursor=pointer]:
+                          - img "奥斯陆港口的木质旧船" [ref=e297]
+                          - generic [ref=e298]:
+                            - strong [ref=e299]: 奥斯陆港口的木质旧船
+                            - emphasis [ref=e300]: 18:34
+                        - button "清除 奥斯陆港口的木质旧船" [ref=e301] [cursor=pointer]:
+                          - img [ref=e302]
+                    - article [ref=e305]:
+                      - generic [ref=e306]:
+                        - button "钟楼下的青铜雕像 钟楼下的青铜雕像 18:35" [ref=e307] [cursor=pointer]:
+                          - img "钟楼下的青铜雕像" [ref=e308]
+                          - generic [ref=e309]:
+                            - strong [ref=e310]: 钟楼下的青铜雕像
+                            - emphasis [ref=e311]: 18:35
+                        - button "清除 钟楼下的青铜雕像" [ref=e312] [cursor=pointer]:
+                          - img [ref=e313]
+              - generic [ref=e316]:
+                - button "奥斯陆王宫" [ref=e320] [cursor=pointer]
+                - generic [ref=e321]:
+                  - heading "2024.08.09" [level=3] [ref=e323]
+                  - article [ref=e326]:
+                    - generic [ref=e327]:
+                      - button "奥斯陆王宫前的人潮与阴天 奥斯陆王宫前的人潮与阴天 13:31" [ref=e328] [cursor=pointer]:
+                        - img "奥斯陆王宫前的人潮与阴天" [ref=e329]
+                        - generic [ref=e330]:
+                          - strong [ref=e331]: 奥斯陆王宫前的人潮与阴天
+                          - emphasis [ref=e332]: 13:31
+                      - button "清除 奥斯陆王宫前的人潮与阴天" [ref=e333] [cursor=pointer]:
+                        - img [ref=e334]
+              - generic [ref=e337]:
+                - button "罗弗敦群岛" [ref=e341] [cursor=pointer]
+                - generic [ref=e342]:
+                  - heading "2024.08.11" [level=3] [ref=e344]
+                  - generic [ref=e346]:
+                    - article [ref=e347]:
+                      - generic [ref=e348]:
+                        - button "罗弗敦群岛的岛屿小镇 罗弗敦群岛的岛屿小镇 13:04" [ref=e349] [cursor=pointer]:
+                          - img "罗弗敦群岛的岛屿小镇" [ref=e350]
+                          - generic [ref=e351]:
+                            - strong [ref=e352]: 罗弗敦群岛的岛屿小镇
+                            - emphasis [ref=e353]: 13:04
+                        - button "清除 罗弗敦群岛的岛屿小镇" [ref=e354] [cursor=pointer]:
+                          - img [ref=e355]
+                    - article [ref=e358]:
+                      - generic [ref=e359]:
+                        - button "海岛足球场的午后 海岛足球场的午后 13:12" [ref=e360] [cursor=pointer]:
+                          - img "海岛足球场的午后" [ref=e361]
+                          - generic [ref=e362]:
+                            - strong [ref=e363]: 海岛足球场的午后
+                            - emphasis [ref=e364]: 13:12
+                        - button "清除 海岛足球场的午后" [ref=e365] [cursor=pointer]:
+                          - img [ref=e366]
+              - generic [ref=e369]:
+                - generic [ref=e372] [cursor=pointer]: 未标地点
+                - generic [ref=e373]:
+                  - heading "2024.08.12" [level=3] [ref=e375]
+                  - generic [ref=e377]:
+                    - article [ref=e378]:
+                      - generic [ref=e379]:
+                        - button "峡湾晨雾小屋 峡湾晨雾小屋 13:27" [ref=e380] [cursor=pointer]:
+                          - img "峡湾晨雾小屋" [ref=e381]
+                          - generic [ref=e382]:
+                            - strong [ref=e383]: 峡湾晨雾小屋
+                            - emphasis [ref=e384]: 13:27
+                        - button "清除 峡湾晨雾小屋" [ref=e385] [cursor=pointer]:
+                          - img [ref=e386]
+                    - article [ref=e389]:
+                      - generic [ref=e390]:
+                        - button "帽檐轻触暮色时 帽檐轻触暮色时 14:18" [ref=e391] [cursor=pointer]:
+                          - img "帽檐轻触暮色时" [ref=e392]
+                          - generic [ref=e393]:
+                            - strong [ref=e394]: 帽檐轻触暮色时
+                            - emphasis [ref=e395]: 14:18
+                        - button "清除 帽檐轻触暮色时" [ref=e396] [cursor=pointer]:
+                          - img [ref=e397]
+  - button "返回档案袋" [ref=e400] [cursor=pointer]:
+    - img [ref=e401]

@@ -1,0 +1,318 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import readline from "node:readline";
+import { Readable } from "node:stream";
+import zlib from "node:zlib";
+import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const rootDir = path.resolve(__dirname, "..");
+const geodataDir = path.join(rootDir, "external", "geodata");
+const downloadDir = path.join(geodataDir, "downloads");
+const dbPath = path.join(geodataDir, "geonames.sqlite");
+const alternateLanguagePriority = {
+  zh: ["zh-CN", "zh-Hans", "zh"],
+  en: ["en"],
+};
+const countryNameZh = {
+  AD: "安道尔",
+  AE: "阿联酋",
+  AF: "阿富汗",
+  AL: "阿尔巴尼亚",
+  AM: "亚美尼亚",
+  AR: "阿根廷",
+  AT: "奥地利",
+  AU: "澳大利亚",
+  BE: "比利时",
+  BG: "保加利亚",
+  BR: "巴西",
+  CA: "加拿大",
+  CH: "瑞士",
+  CL: "智利",
+  CN: "中国",
+  CZ: "捷克",
+  DE: "德国",
+  DK: "丹麦",
+  ES: "西班牙",
+  FI: "芬兰",
+  FR: "法国",
+  GB: "英国",
+  GR: "希腊",
+  HR: "克罗地亚",
+  HU: "匈牙利",
+  IE: "爱尔兰",
+  IS: "冰岛",
+  IT: "意大利",
+  JP: "日本",
+  KR: "韩国",
+  LI: "列支敦士登",
+  LU: "卢森堡",
+  MC: "摩纳哥",
+  NL: "荷兰",
+  NO: "挪威",
+  NZ: "新西兰",
+  PL: "波兰",
+  PT: "葡萄牙",
+  RO: "罗马尼亚",
+  SE: "瑞典",
+  SI: "斯洛文尼亚",
+  SK: "斯洛伐克",
+  US: "美国",
+};
+
+function parseTsv(text) {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => line.trim() && !line.startsWith("#"))
+    .map((line) => line.split("\t"));
+}
+
+function findEndOfCentralDirectory(buffer) {
+  const signature = 0x06054b50;
+  for (let offset = buffer.length - 22; offset >= Math.max(0, buffer.length - 65557); offset -= 1) {
+    if (buffer.readUInt32LE(offset) === signature) return offset;
+  }
+  throw new Error("Invalid zip: missing end of central directory");
+}
+
+function firstFileEntryFromZip(buffer) {
+  const eocd = findEndOfCentralDirectory(buffer);
+  const centralDirOffset = buffer.readUInt32LE(eocd + 16);
+  const signature = buffer.readUInt32LE(centralDirOffset);
+  if (signature !== 0x02014b50) throw new Error("Invalid zip: missing central directory file header");
+
+  const method = buffer.readUInt16LE(centralDirOffset + 10);
+  const compressedSize = buffer.readUInt32LE(centralDirOffset + 20);
+  const uncompressedSize = buffer.readUInt32LE(centralDirOffset + 24);
+  const fileNameLength = buffer.readUInt16LE(centralDirOffset + 28);
+  const extraLength = buffer.readUInt16LE(centralDirOffset + 30);
+  const commentLength = buffer.readUInt16LE(centralDirOffset + 32);
+  const localHeaderOffset = buffer.readUInt32LE(centralDirOffset + 42);
+  const fileName = buffer.toString("utf8", centralDirOffset + 46, centralDirOffset + 46 + fileNameLength);
+
+  const localSignature = buffer.readUInt32LE(localHeaderOffset);
+  if (localSignature !== 0x04034b50) throw new Error(`Invalid zip: missing local header for ${fileName}`);
+  const localFileNameLength = buffer.readUInt16LE(localHeaderOffset + 26);
+  const localExtraLength = buffer.readUInt16LE(localHeaderOffset + 28);
+  const dataStart = localHeaderOffset + 30 + localFileNameLength + localExtraLength;
+  const data = buffer.subarray(dataStart, dataStart + compressedSize);
+  void extraLength;
+  void commentLength;
+  return { fileName, method, data, uncompressedSize };
+}
+
+function extractFirstFileFromZip(buffer) {
+  const { fileName, method, data, uncompressedSize } = firstFileEntryFromZip(buffer);
+  let bytes;
+  if (method === 0) bytes = data;
+  else if (method === 8) bytes = zlib.inflateRawSync(data);
+  else throw new Error(`Unsupported zip compression method ${method} for ${fileName}`);
+
+  if (bytes.byteLength !== uncompressedSize) {
+    throw new Error(`Unexpected zip size for ${fileName}: ${bytes.byteLength} !== ${uncompressedSize}`);
+  }
+
+  return bytes.toString("utf8");
+}
+
+async function forEachZipLine(name, onLine) {
+  const buffer = await fs.readFile(path.join(downloadDir, name));
+  const { fileName, method, data } = firstFileEntryFromZip(buffer);
+  let stream = Readable.from(data);
+  if (method === 8) stream = stream.pipe(zlib.createInflateRaw());
+  else if (method !== 0) throw new Error(`Unsupported zip compression method ${method} for ${fileName}`);
+  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  for await (const line of lines) {
+    if (line.trim() && !line.startsWith("#")) onLine(line);
+  }
+}
+
+async function readTextFile(name) {
+  return fs.readFile(path.join(downloadDir, name), "utf8");
+}
+
+async function readZipText(name) {
+  const buffer = await fs.readFile(path.join(downloadDir, name));
+  return extractFirstFileFromZip(buffer);
+}
+
+function loadCountries(text) {
+  const countries = new Map();
+  for (const fields of parseTsv(text)) {
+    const [iso, , , , name] = fields;
+    if (iso && name) countries.set(iso, name);
+  }
+  return countries;
+}
+
+function chooseAlternateName(record, language) {
+  const priority = alternateLanguagePriority[language];
+  if (!priority) return undefined;
+  for (const code of priority) {
+    if (record?.[code]) return record[code];
+  }
+  return undefined;
+}
+
+async function loadAlternateNames(geonameIds) {
+  const names = new Map();
+  await forEachZipLine("alternateNamesV2.zip", (line) => {
+    const [, geonameId, language, name] = line.split("\t");
+    if (!geonameIds.has(geonameId) || !name) return;
+    if (!alternateLanguagePriority.zh.includes(language) && !alternateLanguagePriority.en.includes(language)) return;
+    const record = names.get(geonameId) ?? {};
+    if (!record[language]) record[language] = name;
+    names.set(geonameId, record);
+  });
+  return names;
+}
+
+function loadAdmin1(text) {
+  const admin = new Map();
+  for (const fields of parseTsv(text)) {
+    const [key, name, asciiName] = fields;
+    if (key) admin.set(key, asciiName || name);
+  }
+  return admin;
+}
+
+function loadAdmin2(text) {
+  const admin = new Map();
+  for (const fields of parseTsv(text)) {
+    const [key, name, asciiName] = fields;
+    if (key) admin.set(key, asciiName || name);
+  }
+  return admin;
+}
+
+function loadFeatures(text) {
+  const features = new Map();
+  for (const fields of parseTsv(text)) {
+    const [code, label] = fields;
+    if (code) features.set(code, label);
+  }
+  return features;
+}
+
+await fs.mkdir(geodataDir, { recursive: true });
+
+const [citiesText, countryText, admin1Text, admin2Text, featureText] = await Promise.all([
+  readZipText("cities500.zip"),
+  readTextFile("countryInfo.txt"),
+  readTextFile("admin1CodesASCII.txt"),
+  readTextFile("admin2Codes.txt"),
+  readTextFile("featureCodes_en.txt"),
+]);
+const cityRows = parseTsv(citiesText);
+const geonameIds = new Set(cityRows.map((fields) => fields[0]).filter(Boolean));
+const alternateNames = await loadAlternateNames(geonameIds);
+
+await fs.rm(dbPath, { force: true });
+const db = new DatabaseSync(dbPath);
+db.exec(`
+  PRAGMA journal_mode = WAL;
+  CREATE TABLE geoname_places (
+    geoname_id TEXT PRIMARY KEY,
+    name TEXT,
+    ascii_name TEXT,
+    lat REAL,
+    lng REAL,
+    country_code TEXT,
+    country_name TEXT,
+    country_name_zh TEXT,
+    country_name_en TEXT,
+    admin1_code TEXT,
+    admin1_name TEXT,
+    admin2_code TEXT,
+    admin2_name TEXT,
+    feature_class TEXT,
+    feature_code TEXT,
+    feature_label TEXT,
+    name_zh TEXT,
+    name_en TEXT,
+    population INTEGER,
+    timezone TEXT
+  );
+`);
+
+const countries = loadCountries(countryText);
+const admin1 = loadAdmin1(admin1Text);
+const admin2 = loadAdmin2(admin2Text);
+const features = loadFeatures(featureText);
+const insert = db.prepare(`
+  INSERT INTO geoname_places (
+    geoname_id, name, ascii_name, lat, lng, country_code, country_name, country_name_zh, country_name_en,
+    admin1_code, admin1_name, admin2_code, admin2_name,
+    feature_class, feature_code, feature_label, name_zh, name_en, population, timezone
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
+
+let inserted = 0;
+db.exec("BEGIN IMMEDIATE");
+try {
+  for (const fields of cityRows) {
+    const [
+      geonameId,
+      name,
+      asciiName,
+      ,
+      lat,
+      lng,
+      featureClass,
+      featureCode,
+      countryCode,
+      ,
+      admin1Code,
+      admin2Code,
+      ,
+      ,
+      population,
+      ,
+      ,
+      timezone,
+    ] = fields;
+    const admin1Key = `${countryCode}.${admin1Code}`;
+    const admin2Key = `${countryCode}.${admin1Code}.${admin2Code}`;
+    const featureKey = `${featureClass}.${featureCode}`;
+    const alt = alternateNames.get(geonameId);
+    const countryNameEn = countries.get(countryCode) ?? countryCode;
+    const nameEn = chooseAlternateName(alt, "en") ?? asciiName ?? name;
+    const nameZh = chooseAlternateName(alt, "zh") ?? "";
+    insert.run(
+      geonameId,
+      name,
+      asciiName,
+      Number(lat),
+      Number(lng),
+      countryCode,
+      countryNameEn,
+      countryNameZh[countryCode] ?? countryNameEn,
+      countryNameEn,
+      admin1Code,
+      admin1.get(admin1Key) ?? "",
+      admin2Code,
+      admin2.get(admin2Key) ?? "",
+      featureClass,
+      featureCode,
+      features.get(featureKey) ?? "",
+      nameZh,
+      nameEn,
+      Number(population) || 0,
+      timezone,
+    );
+    inserted += 1;
+  }
+  db.exec("COMMIT");
+} catch (error) {
+  db.exec("ROLLBACK");
+  throw error;
+}
+
+db.exec(`
+  CREATE INDEX idx_geoname_lat_lng ON geoname_places(lat, lng);
+  CREATE INDEX idx_geoname_country_admin ON geoname_places(country_code, admin1_code, admin2_code);
+`);
+db.close();
+
+console.log(`Built ${dbPath} with ${inserted.toLocaleString()} GeoNames places.`);

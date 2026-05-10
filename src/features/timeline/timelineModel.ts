@@ -1,6 +1,8 @@
 import { capturedTimeValue } from "@/domain/datetime";
 import { timelineLabel } from "@/domain/labels";
+import { timelineSegmentShortLabel } from "@/domain/geoLabels";
 import type { TimelineSegment, Trip } from "@/domain/models";
+import type { Locale } from "@/store/appStore";
 
 export type TimelineLevel = "global" | "trip";
 
@@ -73,7 +75,7 @@ export function buildTripDomain(trip?: Trip) {
   return { min, max };
 }
 
-export function buildTripSegments(segments: TimelineSegment[], selectedTripId: string): TimeIncisionSegment[] {
+export function buildTripSegments(segments: TimelineSegment[], selectedTripId: string, locale: Locale = "zh"): TimeIncisionSegment[] {
   return segments
     .filter((segment) => segment.relatedType === "trip")
     .map((segment) => ({
@@ -83,12 +85,12 @@ export function buildTripSegments(segments: TimelineSegment[], selectedTripId: s
       end: segment.end,
       relatedId: segment.relatedId,
       active: segment.relatedId === selectedTripId,
-      label: timelineLabel(segment),
-      shortLabel: segment.shortLabel ?? timelineLabel(segment),
+      label: timelineLabel(segment, locale),
+      shortLabel: timelineSegmentShortLabel(segment, locale),
     }));
 }
 
-export function buildProjectedPlaceSegments(segments: TimelineSegment[], selectedPlaceId?: string): TimeIncisionSegment[] {
+export function buildProjectedPlaceSegments(segments: TimelineSegment[], selectedPlaceId?: string, locale: Locale = "zh"): TimeIncisionSegment[] {
   return segments
     .filter((segment) => segment.relatedType === "place" && segment.start && segment.end)
     .slice()
@@ -100,8 +102,8 @@ export function buildProjectedPlaceSegments(segments: TimelineSegment[], selecte
       end: segment.end,
       relatedId: segment.relatedId,
       active: segment.relatedId === selectedPlaceId,
-      label: timelineLabel(segment),
-      shortLabel: segment.shortLabel ?? timelineLabel(segment),
+      label: timelineLabel(segment, locale),
+      shortLabel: timelineSegmentShortLabel(segment, locale),
     }));
 }
 

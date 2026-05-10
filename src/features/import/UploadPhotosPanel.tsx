@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { capturedDateLabel } from "@/domain/datetime";
 import { photoAltText, placeLabel, tripLabel } from "@/domain/labels";
+import { useI18n } from "@/i18n/useI18n";
+import type { MessageKey } from "@/i18n/messages";
 import type { ImportBatch, PendingItem, Photo, PlaceNode, Trip } from "@/domain/models";
 import type { ImportJobProgress } from "@/services/apiClient";
 import { useAppStore } from "@/store/appStore";
@@ -64,7 +66,7 @@ function shortDate(value?: string) {
 function compactTimeLabel(start?: string, end?: string) {
   const startDate = shortDate(start);
   const endDate = shortDate(end);
-  if (!startDate && !endDate) return "待补时间";
+  if (!startDate && !endDate) return undefined;
   if (startDate && endDate && startDate !== endDate) return `${startDate}-${endDate}`;
   return startDate || endDate;
 }
@@ -115,10 +117,12 @@ function buildProgressSteps({
   importProgress,
   isImporting,
   latestBatch,
+  t,
 }: {
   importProgress?: ImportJobProgress;
   isImporting: boolean;
   latestBatch?: ImportBatch;
+  t: (key: MessageKey) => string;
 }): ImportStep[] {
   const latestTotal = latestBatch?.totalCount ?? 0;
   const liveTotal = Math.max(
@@ -151,11 +155,11 @@ function buildProgressSteps({
       (phase === "embedding" ? importProgress?.done ?? 0 : phase === "grouping" || phase === "completed" ? total : 0);
 
     return [
-      { icon: FileImage, label: "上传照片", done: Math.min(uploadDone, total), total, active: phase === "reading" || phase === "uploading" },
-      { icon: Clock3, label: "解析 EXIF", done: Math.min(exifDone, total), total, active: phase === "exif" },
-      { icon: ImagePlus, label: "生成缩略图", done: Math.min(thumbnailDone, total), total, active: phase === "thumbnails" },
-      { icon: Sparkles, label: "AI 图片理解", done: Math.min(aiDone, total), total, active: phase === "ai" },
-      { icon: Circle, label: "生成向量", done: Math.min(embeddingDone, total), total, active: phase === "embedding" },
+      { icon: FileImage, label: t("uploadPhotos"), done: Math.min(uploadDone, total), total, active: phase === "reading" || phase === "uploading" },
+      { icon: Clock3, label: t("parseExif"), done: Math.min(exifDone, total), total, active: phase === "exif" },
+      { icon: ImagePlus, label: t("generateThumbnails"), done: Math.min(thumbnailDone, total), total, active: phase === "thumbnails" },
+      { icon: Sparkles, label: t("aiImageUnderstanding"), done: Math.min(aiDone, total), total, active: phase === "ai" },
+      { icon: Circle, label: t("generateVectors"), done: Math.min(embeddingDone, total), total, active: phase === "embedding" },
     ];
   }
 
@@ -167,11 +171,15 @@ function buildTripPreview({
   photos,
   placeNodes,
   trips,
+  locale,
+  t,
 }: {
   batch?: ImportBatch;
   photos: Photo[];
   placeNodes: PlaceNode[];
   trips: Trip[];
+  locale: ReturnType<typeof useI18n>["locale"];
+  t: (key: MessageKey) => string;
 }): TripPreview[] {
   if (!batch) return [];
   const importedPhotoIds = new Set(batch.addedPhotoIds);
@@ -193,10 +201,10 @@ function buildTripPreview({
           const placePhotos = tripPhotos.filter((photo) => placePhotoIds.has(photo.id));
           return {
             place,
-            label: placeLabel(place),
+            label: placeLabel(place, locale),
             isNew: createdTripIds.has(trip.id) || place.photoIds.every((id) => importedPhotoIds.has(id)) || place.pending,
             photos: placePhotos,
-            timeLabel: compactTimeLabel(place.timeRange.start, place.timeRange.end),
+            timeLabel: compactTimeLabel(place.timeRange.start, place.timeRange.end) ?? t("timeMissing"),
           };
         });
       const placedPhotoIds = new Set(places.flatMap((place) => place.photos.map((photo) => photo.id)));
@@ -204,24 +212,24 @@ function buildTripPreview({
 
       if (unplacedPhotos.length) {
         places.push({
-          label: "待定",
+          label: t("undecided"),
           isNew: true,
           photos: unplacedPhotos,
-          timeLabel: photosTimeLabel(unplacedPhotos),
+          timeLabel: photosTimeLabel(unplacedPhotos) ?? t("timeMissing"),
         });
       }
 
       return {
         trip,
         isNew: createdTripIds.has(trip.id),
-        places: places.sort((left, right) => (left.timeLabel === "待补时间" ? "99.99" : left.timeLabel).localeCompare(right.timeLabel === "待补时间" ? "99.99" : right.timeLabel)),
+        places: places.sort((left, right) => (left.timeLabel === t("timeMissing") ? "99.99" : left.timeLabel).localeCompare(right.timeLabel === t("timeMissing") ? "99.99" : right.timeLabel)),
       };
     })
     .filter((item): item is TripPreview => Boolean(item))
     .sort((left, right) => left.trip.dateRange.start.localeCompare(right.trip.dateRange.start));
 }
 
-function groupMissingPreviews(batch: ImportBatch | undefined, photos: Photo[], pendingItems: PendingItem[]): MissingPreview[] {
+function groupMissingPreviews(batch: ImportBatch | undefined, photos: Photo[], pendingItems: PendingItem[], t: (key: MessageKey) => string): MissingPreview[] {
   if (!batch) return [];
   const importedIds = new Set(batch.addedPhotoIds);
   const imported = photos.filter((photo) => importedIds.has(photo.id));
@@ -253,7 +261,7 @@ function groupMissingPreviews(batch: ImportBatch | undefined, photos: Photo[], p
       groups.set(key, {
         id: key,
         icon,
-        label: gps && time ? "缺少GPS / 时间" : gps ? "缺少GPS" : "缺少时间",
+        label: gps && time ? t("missingGpsTime") : gps ? t("missingGps") : t("missingTime"),
         target,
         photos: [photo],
         confidence: candidate?.confidence ?? photo.locationResolution?.confidence,
@@ -271,12 +279,14 @@ function PhotoStrip({
   selectedPhotoId,
   onOpenPreview,
   onSelect,
+  t,
 }: {
   photos: Photo[];
   onRemovePhoto?: (photoId: string) => void;
   selectedPhotoId?: string;
   onOpenPreview?: (photo: Photo) => void;
   onSelect: (photoId: string) => void;
+  t: (key: MessageKey) => string;
 }) {
   return (
     <div className="import-photo-strip">
@@ -300,9 +310,9 @@ function PhotoStrip({
                 event.stopPropagation();
                 onRemovePhoto(photo.id);
               }}
-              title="清除此张图片"
+              title={t("removePhoto")}
               type="button"
-              aria-label={`清除 ${photo.title ?? photo.fileName}`}
+              aria-label={`${t("clear")} ${photo.title ?? photo.fileName}`}
             >
               <X size={12} />
             </button>
@@ -337,23 +347,25 @@ function ReviewTree({
   onOpenPreview,
   onRemovePhoto,
   onSelectPhoto,
+  t,
 }: {
   previews: TripPreview[];
   selectedPhotoId?: string;
   onOpenPreview: (photo: Photo) => void;
-  onRemovePhoto: (photoId: string) => void;
+  onRemovePhoto?: (photoId: string) => void;
   onSelectPhoto: (photoId: string) => void;
+  t: (key: MessageKey) => string;
 }) {
   if (!previews.length) return null;
 
   return (
-    <section className="import-review-tree" aria-label="归档树">
+    <section className="import-review-tree" aria-label={t("archiveTree")}>
       {previews.map((preview) => (
         <div key={preview.trip.id} className="import-trip-node" data-new={preview.isNew || undefined}>
           <div className="import-node-label import-node-label-trip">
             {preview.isNew ? <Circle size={12} /> : <span className="import-solid-dot" />}
             <span>{tripLabel(preview.trip)}</span>
-            <em>{preview.isNew ? "新建旅程" : "已有旅程"}</em>
+            <em>{preview.isNew ? t("newTrip") : t("existingTrip")}</em>
           </div>
           <div className="import-place-branch">
             {preview.places.map((placePreview) => (
@@ -362,10 +374,10 @@ function ReviewTree({
                   {placePreview.isNew ? <Circle size={10} /> : <span className="import-solid-dot import-solid-dot-small" />}
                   <MapPin size={14} />
                   <span>{placePreview.label}</span>
-                  <em>{placePreview.isNew ? "新地点" : "合并"}</em>
+                  <em>{placePreview.isNew ? t("newPlace") : t("merge")}</em>
                   <time>{placePreview.timeLabel}</time>
                 </div>
-                <PhotoStrip photos={placePreview.photos} selectedPhotoId={selectedPhotoId} onOpenPreview={onOpenPreview} onRemovePhoto={onRemovePhoto} onSelect={onSelectPhoto} />
+                <PhotoStrip photos={placePreview.photos} selectedPhotoId={selectedPhotoId} onOpenPreview={onOpenPreview} onRemovePhoto={onRemovePhoto} onSelect={onSelectPhoto} t={t} />
               </div>
             ))}
           </div>
@@ -385,6 +397,7 @@ function MissingSuggestions({
   onOpenPreview,
   onReject,
   onSelectPhoto,
+  t,
 }: {
   groups: MissingPreview[];
   inferFeedback: Record<string, InferFeedback>;
@@ -395,14 +408,15 @@ function MissingSuggestions({
   onOpenPreview: (photo: Photo) => void;
   onReject: (photoIds: string[]) => void;
   onSelectPhoto: (photoId: string) => void;
+  t: (key: MessageKey) => string;
 }) {
   if (!groups.length) return null;
 
   return (
-    <section className="import-missing" aria-label="待确认建议">
+    <section className="import-missing" aria-label={t("pendingSuggestions")}>
       <div className="import-missing-heading">
-        <span>待补信息</span>
-        <small>{groups.reduce((count, group) => count + group.photos.length, 0)} 张</small>
+        <span>{t("pendingInfo")}</span>
+        <small>{groups.reduce((count, group) => count + group.photos.length, 0)} {t("photoCount")}</small>
       </div>
       <div className="import-missing-list">
         {groups.map((group) => {
@@ -412,33 +426,33 @@ function MissingSuggestions({
           const feedback = group.pending ? inferFeedback[group.pending.id] : undefined;
           const statusLabel =
             feedback?.status === "running"
-              ? "推断中"
+              ? t("inferring")
               : feedback?.status === "error"
-                ? "失败"
+                ? t("failed")
                 : isInferring
-                  ? "推断中"
+                  ? t("inferring")
                   : actionable
-                    ? "AI 建议"
+                    ? t("aiSuggestion")
                     : group.pending?.inference?.status === "keep_pending"
-                      ? "仍待定"
-                      : "待推断";
+                      ? t("stillPending")
+                      : t("waitingInference");
           return (
             <div key={group.id} className="import-missing-row" title={group.pending?.reason ?? group.label}>
-              <PhotoStrip photos={group.photos} selectedPhotoId={selectedPhotoId} onOpenPreview={onOpenPreview} onSelect={onSelectPhoto} />
+              <PhotoStrip photos={group.photos} selectedPhotoId={selectedPhotoId} onOpenPreview={onOpenPreview} onSelect={onSelectPhoto} t={t} />
               <span className="import-missing-field">{group.label}</span>
               <span className="import-ai-suggest" data-status={statusLabel}>{statusLabel}</span>
               <strong className="import-missing-target">
                 <span>{suggestedTarget.label}</span>
                 {suggestedTarget.badge ? <em>{suggestedTarget.badge}</em> : null}
               </strong>
-              <button className="import-inline-cancel" onClick={() => onReject(group.photos.map((photo) => photo.id))} title="取消导入" type="button">
+              <button className="import-inline-cancel" onClick={() => onReject(group.photos.map((photo) => photo.id))} title={t("cancelImport")} type="button">
                 <X size={13} />
               </button>
-              <button className="import-inline-infer" onClick={() => onInfer(group.pending)} disabled={!group.pending || isInferring} title="AI 二次推断" type="button" data-tooltip="AI深度识别">
+              <button className="import-inline-infer" onClick={() => onInfer(group.pending)} disabled={!group.pending || isInferring} title={t("aiSecondInference")} type="button" data-tooltip={t("aiSecondInference")}>
                 {isInferring ? <LoaderCircle className="animate-spin" size={13} /> : <Sparkles size={13} />}
               </button>
               {actionable ? (
-                <button className="import-inline-confirm" onClick={() => onAccept(group.pending)} title="确认建议" type="button">
+                <button className="import-inline-confirm" onClick={() => onAccept(group.pending)} title={t("confirmSuggestion")} type="button">
                   <Check size={14} />
                 </button>
               ) : null}
@@ -458,6 +472,7 @@ function MissingSuggestions({
 }
 
 export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }) {
+  const { locale, t } = useI18n();
   const importFiles = useAppStore((state) => state.importFiles);
   const importBatches = useAppStore((state) => state.importBatches);
   const pendingItems = useAppStore((state) => state.pendingItems);
@@ -488,9 +503,9 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
     () => pendingItems.filter((item) => latestBatch?.pendingItemIds.includes(item.id) && item.status === "open"),
     [latestBatch?.pendingItemIds, pendingItems],
   );
-  const progressSteps = useMemo(() => buildProgressSteps({ importProgress, isImporting, latestBatch }), [importProgress, isImporting, latestBatch]);
-  const tripPreviews = useMemo(() => buildTripPreview({ batch: latestBatch, photos, placeNodes, trips }), [latestBatch, photos, placeNodes, trips]);
-  const missingGroups = useMemo(() => groupMissingPreviews(latestBatch, photos, pendingItems), [latestBatch, pendingItems, photos]);
+  const progressSteps = useMemo(() => buildProgressSteps({ importProgress, isImporting, latestBatch, t }), [importProgress, isImporting, latestBatch, t]);
+  const tripPreviews = useMemo(() => buildTripPreview({ batch: latestBatch, photos, placeNodes, trips, locale, t }), [latestBatch, photos, placeNodes, trips, locale, t]);
+  const missingGroups = useMemo(() => groupMissingPreviews(latestBatch, photos, pendingItems, t), [latestBatch, pendingItems, photos, t]);
   const canConfirm = isPendingBatch(latestBatch) && missingGroups.length === 0 && !isSubmitting;
   const canRollback = isPendingBatch(latestBatch) && !isSubmitting;
   const summaryTrips = tripPreviews.length;
@@ -517,7 +532,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
       onClick={closePhotoPreview}
     >
       <figure onClick={(event) => event.stopPropagation()}>
-        <button className="import-photo-preview-close" type="button" title="关闭预览" onClick={closePhotoPreview}>
+        <button className="import-photo-preview-close" type="button" title={t("closePreview")} onClick={closePhotoPreview}>
           <X size={26} />
         </button>
         <img src={previewPhoto.storageUrl ?? previewPhoto.thumbnailUrl} alt={photoAltText(previewPhoto)} />
@@ -570,7 +585,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
     setInferringIds((ids) => new Set(ids).add(item.id));
     setInferFeedback((feedback) => ({
       ...feedback,
-      [item.id]: { status: "running", message: "正在读取前后照片上下文..." },
+      [item.id]: { status: "running", message: t("readingContext") },
     }));
     try {
       await inferPendingLocation(item.id);
@@ -582,7 +597,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
     } catch (error) {
       setInferFeedback((feedback) => ({
         ...feedback,
-        [item.id]: { status: "error", message: error instanceof Error ? error.message : "二次推断失败" },
+        [item.id]: { status: "error", message: error instanceof Error ? error.message : t("secondInferenceFailed") },
       }));
     } finally {
       setInferringIds((ids) => {
@@ -635,20 +650,19 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
       <div className="mx-auto max-w-6xl">
         <div className="photo-import-heading mb-7 flex items-start justify-between gap-6">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.34em] text-outline">Photo Intake</p>
-            <h2 className="mt-2 font-serif text-4xl font-semibold leading-tight text-primary md:text-6xl">归档预演</h2>
+            <h2 className="font-serif text-4xl font-semibold leading-tight text-primary md:text-6xl">{t("archivePreview")}</h2>
           </div>
         </div>
 
         <input ref={inputRef} className="sr-only" type="file" accept="image/*" multiple onChange={handleFileChange} />
 
         <div className="import-intake" data-dragging={isDragging || undefined}>
-          <button className="import-pick-button" type="button" onClick={() => inputRef.current?.click()} disabled={isImporting} title="选择照片">
+          <button className="import-pick-button" type="button" onClick={() => inputRef.current?.click()} disabled={isImporting} title={t("choosePhotos")}>
             {isImporting ? <LoaderCircle className="animate-spin" size={18} /> : <FolderOpen size={18} />}
-            <span>{isImporting ? "导入中" : "选择照片"}</span>
+            <span>{isImporting ? t("importing") : t("choosePhotos")}</span>
           </button>
 
-          <div className="import-progress-stack" aria-label="导入进度">
+          <div className="import-progress-stack" aria-label={t("importing")}>
             {progressSteps.map((step) => (
               <ProgressLine key={step.label} step={step} />
             ))}
@@ -661,11 +675,12 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
           {tripPreviews.length ? (
             <ReviewTree
               previews={tripPreviews}
-              selectedPhotoId={selectedPhotoId}
-              onOpenPreview={openPhotoPreview}
-              onRemovePhoto={(photoId) => void cancelPendingImportPhotos([photoId])}
-              onSelectPhoto={setSelectedPhotoId}
-            />
+            selectedPhotoId={selectedPhotoId}
+            onOpenPreview={openPhotoPreview}
+            onRemovePhoto={isPendingBatch(latestBatch) ? (photoId) => void cancelPendingImportPhotos([photoId]) : undefined}
+            onSelectPhoto={setSelectedPhotoId}
+            t={t}
+          />
           ) : (
             <div className="import-empty-stage">
               <ImagePlus size={26} />
@@ -683,24 +698,25 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
             onOpenPreview={openPhotoPreview}
             onReject={(photoIds) => void cancelPendingImportPhotos(photoIds)}
             onSelectPhoto={setSelectedPhotoId}
+            t={t}
           />
 
           {(latestBatch || isImporting) ? (
             <footer className="import-command-bar">
               <div className="import-command-stats">
-                <span title="新增照片"><FileImage size={15} />新增 {latestBatch?.addedPhotoIds.length ?? importProgress?.total ?? 0}</span>
-                {(latestBatch?.duplicateCount ?? 0) > 0 ? <span title="重复跳过">重复跳过 {latestBatch?.duplicateCount}</span> : null}
-                <span title="旅程"><Circle size={13} />旅程 {summaryTrips}</span>
-                <span title="地点"><MapPin size={15} />地点 {summaryPlaces}</span>
-                <span title="待确认">待确认 {batchPendingItems.length}</span>
+                <span title={t("newPhotos")}><FileImage size={15} />{t("newPhotos")} {latestBatch?.addedPhotoIds.length ?? importProgress?.total ?? 0}</span>
+                {(latestBatch?.duplicateCount ?? 0) > 0 ? <span title={t("duplicateSkipped")}>{t("duplicateSkipped")} {latestBatch?.duplicateCount}</span> : null}
+                <span title={t("trips")}><Circle size={13} />{t("trips")} {summaryTrips}</span>
+                <span title={t("places")}><MapPin size={15} />{t("places")} {summaryPlaces}</span>
+                <span title={t("pending")}>{t("pending")} {batchPendingItems.length}</span>
               </div>
               <div className="import-command-actions">
-                <button className="import-undo-button" onClick={() => void rollbackBatch()} disabled={!canRollback} type="button" title="撤回导入" aria-label="撤回导入">
+                <button className="import-undo-button" onClick={() => void rollbackBatch()} disabled={!canRollback} type="button" title={t("rollbackImport")} aria-label={t("rollbackImport")}>
                   <RotateCcw size={17} />
                 </button>
                 <button className="import-confirm-button" onClick={() => void confirmBatch()} disabled={!canConfirm} type="button">
                   {isSubmitting ? <LoaderCircle className="animate-spin" size={15} /> : null}
-                  确认
+                  {t("confirm")}
                 </button>
               </div>
             </footer>

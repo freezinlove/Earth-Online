@@ -1,6 +1,22 @@
 import { centerOf, unique } from "./projection-utils.mjs";
 import { inferPreset } from "./geo.mjs";
 
+const countryEnByZh = {
+  中国: "China",
+  捷克: "Czechia",
+  奥地利: "Austria",
+  德国: "Germany",
+  匈牙利: "Hungary",
+  挪威: "Norway",
+  瑞士: "Switzerland",
+  日本: "Japan",
+  法国: "France",
+  意大利: "Italy",
+  英国: "United Kingdom",
+  美国: "United States",
+  瑞典: "Sweden",
+};
+
 export function buildGlobeMarkers(state) {
   const markers = [];
   for (const trip of state.trips) {
@@ -10,9 +26,10 @@ export function buildGlobeMarkers(state) {
 
     for (const place of places) {
       const country = inferPlaceCountry(place, photos, trip);
-      const group = countryGroups.get(country) ?? { country, places: [], photoIds: [] };
+      const group = countryGroups.get(country) ?? { country, countryNames: inferPlaceCountryNames(place, country), places: [], photoIds: [] };
       group.places.push(place);
       group.photoIds.push(...place.photoIds);
+      if (!group.countryNames) group.countryNames = inferPlaceCountryNames(place, country);
       countryGroups.set(country, group);
     }
 
@@ -21,7 +38,9 @@ export function buildGlobeMarkers(state) {
         id: `country-${trip.id}-${group.country}`,
         kind: "country",
         label: group.country,
+        labelNames: group.countryNames,
         countryName: group.country,
+        countryNames: group.countryNames,
         center: centerOf(group.places.map((place) => place.center)),
         count: unique(group.photoIds).length,
         photoIds: unique(group.photoIds),
@@ -36,12 +55,14 @@ export function buildGlobeMarkers(state) {
         id: `place-${place.id}`,
         kind: "place",
         label: place.name,
+        labelNames: place.names,
         center: place.center,
         count: place.photoIds.length,
         photoIds: place.photoIds,
         placeIds: [place.id],
         tripId: trip.id,
         countryName: inferPlaceCountry(place, photos, trip),
+        countryNames: inferPlaceCountryNames(place, inferPlaceCountry(place, photos, trip)),
         startTime: place.timeRange?.start,
         endTime: place.timeRange?.end,
         status: place.pending ? "suggested" : "confirmed",
@@ -49,6 +70,16 @@ export function buildGlobeMarkers(state) {
     }
   }
   return markers.filter((marker) => marker.center);
+}
+
+function inferPlaceCountryNames(place, fallback) {
+  if (place.countryNames) {
+    return {
+      ...place.countryNames,
+      en: /[\u4e00-\u9fff]/u.test(place.countryNames.en ?? "") ? countryEnByZh[place.countryNames.zh ?? fallback] ?? place.countryNames.en : place.countryNames.en,
+    };
+  }
+  return fallback ? { zh: fallback, en: countryEnByZh[fallback] ?? fallback, local: fallback } : undefined;
 }
 
 function inferPlaceCountry(place, photos, trip) {

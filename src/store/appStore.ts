@@ -5,6 +5,7 @@ import { apiClient, type AppSnapshot, type ImportJobProgress } from "@/services/
 
 export type AppPanel = "globe" | "archive" | "tripDetail" | "search" | "settings" | "upload" | "manual";
 export type TimelineZoom = "global" | "trip" | "day";
+export type Locale = "zh" | "en";
 export type GlobeViewIntent =
   | { source: "timeline-trip"; point: { lat: number; lng: number }; distance: "far" }
   | { source: "timeline-trip-entry"; point: { lat: number; lng: number }; distance: "mid" }
@@ -31,6 +32,11 @@ function applySnapshot(snapshot: AppSnapshot) {
   };
 }
 
+function initialLocale(): Locale {
+  if (typeof window === "undefined") return "zh";
+  return window.localStorage.getItem("earth-online-locale") === "en" ? "en" : "zh";
+}
+
 async function rollbackLatestPendingImportIfNeeded(getState: () => AppState, setState: (partial: Partial<AppState>) => void) {
   const batches = getState().importBatches;
   const latest = batches[batches.length - 1];
@@ -45,6 +51,7 @@ async function rollbackLatestPendingImportIfNeeded(getState: () => AppState, set
 }
 
 interface AppState {
+  locale: Locale;
   activePanel: AppPanel;
   selectedTripId: ID;
   selectedPlaceId?: ID;
@@ -73,6 +80,7 @@ interface AppState {
   searchDocuments: SearchDocument[];
   loadState: () => Promise<void>;
   setActivePanel: (panel: AppPanel) => void;
+  setLocale: (locale: Locale) => void;
   selectTrip: (tripId: ID, panel?: AppPanel) => void;
   selectPlace: (placeId: ID) => void;
   focusPlaceOnGlobe: (placeId: ID, intent: GlobeViewIntent) => void;
@@ -93,6 +101,7 @@ interface AppState {
   inferPendingLocation: (pendingId: ID) => Promise<void>;
   mergeLatestImportTrips: () => Promise<void>;
   createManualTrip: (title: string, start: string, end: string) => Promise<void>;
+  deleteTrip: (tripId: ID) => Promise<void>;
   addManualPlace: (tripId: ID, name: string, lat: number, lng: number) => Promise<void>;
   deleteManualPlace: (placeId: ID) => Promise<void>;
   reorderTripPlaces: (tripId: ID, placeIds: ID[]) => Promise<void>;
@@ -106,6 +115,7 @@ interface AppState {
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
+  locale: initialLocale(),
   activePanel: "globe",
   selectedTripId: "",
   cursorDate: new Date().toISOString().slice(0, 10),
@@ -146,6 +156,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   setActivePanel: (panel) => set({ activePanel: panel }),
+  setLocale: (locale) => {
+    if (typeof window !== "undefined") window.localStorage.setItem("earth-online-locale", locale);
+    set({ locale });
+  },
   selectTrip: (tripId, panel = "globe") => {
     const trip = get().trips.find((item) => item.id === tripId);
     set({
@@ -298,6 +312,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     const snapshot = await apiClient.createTrip(title, start, end);
     const created = snapshot.trips[snapshot.trips.length - 1];
     set({ ...applySnapshot(snapshot), selectedTripId: created?.id ?? get().selectedTripId, activePanel: "tripDetail" });
+  },
+  deleteTrip: async (tripId) => {
+    const snapshot = await apiClient.deleteTrip(tripId);
+    const nextSelectedTripId = snapshot.trips.some((trip) => trip.id === get().selectedTripId) ? get().selectedTripId : (snapshot.trips[0]?.id ?? "");
+    set({
+      ...applySnapshot(snapshot),
+      selectedTripId: nextSelectedTripId,
+      selectedPlaceId: undefined,
+      selectedPhotoId: undefined,
+      cursorDate: snapshot.trips.find((trip) => trip.id === nextSelectedTripId)?.dateRange.start ?? get().cursorDate,
+      activePanel: "archive",
+    });
   },
   addManualPlace: async (tripId, name, lat, lng) => {
     const snapshot = await apiClient.createPlace(tripId, name, lat, lng);

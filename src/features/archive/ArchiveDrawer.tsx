@@ -1,16 +1,10 @@
 import type { CSSProperties } from "react";
-import { ArrowUpRight, CalendarDays, Image, MapPin } from "lucide-react";
+import { useState } from "react";
+import { CalendarDays, Check, Image, MapPin, X } from "lucide-react";
 import { countryLabel, tripLabel } from "@/domain/labels";
+import { useI18n } from "@/i18n/useI18n";
 import type { Trip } from "@/domain/models";
 import { useAppStore } from "@/store/appStore";
-
-const statusMeta: Record<Trip["status"], { label: string; tone: string }> = {
-  archived: { label: "archived", tone: "bg-outline" },
-  confirmed: { label: "confirmed", tone: "bg-secondary" },
-  draft: { label: "draft", tone: "bg-primary" },
-  ongoing: { label: "ongoing", tone: "bg-tertiary" },
-  pending: { label: "pending", tone: "bg-primary-container" },
-};
 
 function groupTripsByYear(trips: Trip[]) {
   return [...trips]
@@ -30,11 +24,29 @@ function groupTripsByYear(trips: Trip[]) {
 }
 
 export function ArchiveDrawer({ isClosing = false }: { isClosing?: boolean }) {
+  const { locale, t } = useI18n();
   const trips = useAppStore((state) => state.trips);
   const selectTrip = useAppStore((state) => state.selectTrip);
+  const deleteTrip = useAppStore((state) => state.deleteTrip);
+  const [confirmingTripId, setConfirmingTripId] = useState<string>();
+  const [deletingTripId, setDeletingTripId] = useState<string>();
   const groupedTrips = groupTripsByYear(trips);
   const totalPhotos = trips.reduce((count, trip) => count + trip.photoCount, 0);
   const totalPlaces = trips.reduce((count, trip) => count + trip.placeNodeCount, 0);
+
+  const requestDeleteTrip = (tripId: string) => {
+    setConfirmingTripId((current) => (current === tripId ? undefined : tripId));
+  };
+
+  const confirmDeleteTrip = async (tripId: string) => {
+    setDeletingTripId(tripId);
+    try {
+      await deleteTrip(tripId);
+      setConfirmingTripId(undefined);
+    } finally {
+      setDeletingTripId(undefined);
+    }
+  };
 
   return (
     <section
@@ -44,15 +56,14 @@ export function ArchiveDrawer({ isClosing = false }: { isClosing?: boolean }) {
       <div className="mx-auto max-w-6xl">
         <div className="archive-heading mb-8 md:mb-12">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.34em] text-outline">Travel Archive</p>
-            <h2 className="mt-2 font-serif text-4xl font-semibold leading-tight text-primary md:text-6xl">旅行档案袋</h2>
+            <h2 className="font-serif text-4xl font-semibold leading-tight text-primary md:text-6xl">{t("archive")}</h2>
           </div>
         </div>
 
         <div className="archive-index mb-10 flex flex-wrap gap-x-6 gap-y-2 border-y border-outline-variant/45 py-3 text-xs font-semibold uppercase tracking-[0.18em] text-outline">
-          <span>{trips.length} trips</span>
-          <span>{totalPhotos} photos</span>
-          <span>{totalPlaces} places</span>
+          <span>{trips.length} {t("tripCount")}</span>
+          <span>{totalPhotos} {t("photoCount")}</span>
+          <span>{totalPlaces} {t("placeCount")}</span>
         </div>
 
         <div className="space-y-11">
@@ -61,15 +72,22 @@ export function ArchiveDrawer({ isClosing = false }: { isClosing?: boolean }) {
               <div className="archive-year-label font-serif text-3xl text-primary/70 md:text-4xl">{group.year}</div>
               <div className="min-w-0 border-t border-outline-variant/50">
                 {group.trips.map((trip, index) => {
-                  const status = statusMeta[trip.status];
-
+                  const isConfirmingDelete = confirmingTripId === trip.id;
+                  const isDeleting = deletingTripId === trip.id;
                   return (
-                    <button
+                    <div
                       key={trip.id}
                       className="archive-entry group grid w-full gap-5 border-b border-outline-variant/50 py-5 text-left transition md:grid-cols-[210px_1fr_auto] md:items-center md:py-6"
                       onClick={() => selectTrip(trip.id, "tripDetail")}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          selectTrip(trip.id, "tripDetail");
+                        }
+                      }}
+                      role="button"
                       style={{ "--archive-entry-delay": `${index * 80}ms` } as CSSProperties}
-                      type="button"
+                      tabIndex={0}
                     >
                       <span className="archive-entry-media block h-40 w-full overflow-hidden rounded-lg bg-surface-container md:h-32">
                         <img src={trip.coverUrl} alt={tripLabel(trip)} className="h-full w-full object-cover" />
@@ -79,27 +97,58 @@ export function ArchiveDrawer({ isClosing = false }: { isClosing?: boolean }) {
                         <span>
                           <span className="flex flex-wrap items-center gap-x-4 gap-y-2">
                             <h3 className="archive-entry-title font-serif text-2xl font-semibold leading-tight text-on-surface md:text-3xl">{tripLabel(trip)}</h3>
-                            <span className="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-outline">
-                              <span className={`h-1.5 w-1.5 rounded-full ${status.tone}`} />
-                              {status.label}
-                            </span>
                           </span>
                           <span className="mt-3 block text-sm leading-6 text-on-surface-variant">
-                            {trip.countries.map(countryLabel).join(" / ")} · {trip.cities.join(" / ")}
+                            {trip.countries.map((country) => countryLabel(country, undefined, locale)).join(" / ")}
                           </span>
                         </span>
 
                         <span className="flex flex-wrap gap-x-4 gap-y-2 text-xs font-semibold text-outline">
                           <span className="inline-flex items-center gap-1.5"><CalendarDays size={14} /> {trip.dateRange.start} - {trip.dateRange.end}</span>
-                          <span className="inline-flex items-center gap-1.5"><Image size={14} /> {trip.photoCount} 张照片</span>
-                          <span className="inline-flex items-center gap-1.5"><MapPin size={14} /> {trip.placeNodeCount} 个地点</span>
+                          <span className="inline-flex items-center gap-1.5"><Image size={14} /> {trip.photoCount} {t("photoCount")}</span>
+                          <span className="inline-flex items-center gap-1.5"><MapPin size={14} /> {trip.placeNodeCount} {t("placeCount")}</span>
                         </span>
                       </span>
 
-                      <span className="archive-entry-action hidden h-10 w-10 place-items-center rounded-full text-primary md:grid">
-                        <ArrowUpRight size={18} />
+                      <span className="archive-entry-action hidden md:grid">
+                        {isConfirmingDelete ? (
+                          <span className="archive-delete-confirm" onClick={(event) => event.stopPropagation()}>
+                            <span>{t("confirmDeleteTrip")}</span>
+                            <button
+                              className="archive-delete-accept"
+                              disabled={isDeleting}
+                              onClick={() => void confirmDeleteTrip(trip.id)}
+                              title={t("confirm")}
+                              type="button"
+                            >
+                              <Check size={14} />
+                            </button>
+                            <button
+                              className="archive-delete-cancel"
+                              disabled={isDeleting}
+                              onClick={() => setConfirmingTripId(undefined)}
+                              title={t("cancel")}
+                              type="button"
+                            >
+                              <X size={13} />
+                            </button>
+                          </span>
+                        ) : (
+                          <button
+                            className="archive-delete-trigger"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              requestDeleteTrip(trip.id);
+                            }}
+                            title={t("deleteTrip")}
+                            type="button"
+                            aria-label={t("deleteTrip")}
+                          >
+                            <X size={18} />
+                          </button>
+                        )}
                       </span>
-                    </button>
+                    </div>
                   );
                 })}
               </div>
@@ -108,7 +157,7 @@ export function ArchiveDrawer({ isClosing = false }: { isClosing?: boolean }) {
 
           {trips.length === 0 ? (
             <div className="border-y border-outline-variant/50 py-12 text-sm text-on-surface-variant">
-              暂无旅行档案。
+              {t("noTrips")}
             </div>
           ) : null}
         </div>
