@@ -41,20 +41,13 @@ export function geoContextFor(preset, location) {
       hasGps: false,
       cityHint: preset.city,
       countryHint: preset.country,
-      instruction: "这张照片没有可用 GPS，只能根据画面内容和文件名判断，不要编造具体城市。",
     };
   }
-  const distanceKm = haversineKm(location, preset.point);
   return {
     hasGps: true,
     lat: Number(location.lat.toFixed(6)),
     lng: Number(location.lng.toFixed(6)),
     cityHint: preset.city,
     countryHint: preset.country,
-    distanceKm: Number(distanceKm.toFixed(1)),
-    instruction:
-      preset.city.includes("待确认")
-        ? "GPS 位于欧洲范围但本地地名表无法精确到城市/小镇，请不要只输出欧洲/旅行/城市这类泛标签。"
-        : `GPS 反查候选为 ${preset.country}${preset.city} 附近，距离候选中心约 ${distanceKm.toFixed(1)}km。`,
   };
 }

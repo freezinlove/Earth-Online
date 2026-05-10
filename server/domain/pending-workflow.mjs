@@ -1,3 +1,10 @@
+import { haversineKm } from "./geo.mjs";
+import { cleanPlaceName } from "./place-name-selector.mjs";
+
+const DEFAULT_PLACE_MERGE_RADIUS_KM = 1.2;
+const SAME_CITY_PLACE_MERGE_RADIUS_KM = 12;
+const SAME_NAME_PLACE_MERGE_RADIUS_KM = 25;
+
 function markPending(state, id, status) {
   return {
     ...state,
@@ -10,6 +17,51 @@ function clearMissingExifStatus(photo) {
     ...(photo.exifStatus ?? {}),
     time: photo.exifStatus?.time ?? (photo.capturedAt ? "fallback" : "missing"),
     gps: photo.exifStatus?.gps === "missing" ? "fallback" : (photo.exifStatus?.gps ?? (photo.location ? "fallback" : "missing")),
+  };
+}
+
+function candidatePoint(candidate) {
+  if (!candidate) return undefined;
+  if (candidate.point) return candidate.point;
+  if (Number.isFinite(candidate.lat) && Number.isFinite(candidate.lng)) return { lat: candidate.lat, lng: candidate.lng };
+  return undefined;
+}
+
+function rewrittenCandidate(candidate, fallback = {}) {
+  if (!candidate?.name) return undefined;
+  return {
+    id: candidate.id ?? fallback.id,
+    name: candidate.name,
+    country: candidate.country ?? fallback.country,
+    city: candidate.city ?? fallback.city,
+    point: candidatePoint(candidate) ?? fallback.point,
+    confidence: Number.isFinite(Number(candidate.confidence)) ? Number(candidate.confidence) : Number(fallback.confidence ?? 0.65),
+    source: "ai_context_inference",
+    precision: "estimated",
+    reason: fallback.reason ?? "AI 二次推断修正了初次地点判断。",
+  };
+}
+
+function applyRewrittenInitialAnalysis(photo, rewrite, fallbackCandidate) {
+  if (!rewrite) return photo;
+  const candidate = rewrittenCandidate(rewrite.locationCandidate, fallbackCandidate);
+  const locationCandidates = candidate ? [candidate] : (photo.ai?.locationCandidates ?? []);
+  return {
+    ...photo,
+    title: rewrite.title ?? photo.title,
+    tags: Array.isArray(rewrite.tags) && rewrite.tags.length ? rewrite.tags : photo.tags,
+    aiCaption: rewrite.caption ?? photo.aiCaption,
+    ai: photo.ai
+      ? {
+          ...photo.ai,
+          title: rewrite.title ?? photo.ai.title,
+          caption: rewrite.caption ?? photo.ai.caption,
+          tags: Array.isArray(rewrite.tags) && rewrite.tags.length ? rewrite.tags : photo.ai.tags,
+          visiblePlaceNames: [],
+          locationCandidates,
+          uncertainties: [],
+        }
+      : photo.ai,
   };
 }
 
@@ -52,25 +104,34 @@ function bindPhotosToPlace(state, proposal) {
     ...state,
     photos: state.photos.map((photo) =>
       photoIds.has(photo.id)
-        ? {
-            ...photo,
+        ? (() => {
+            const rewritten = applyRewrittenInitialAnalysis(photo, proposal.rewrittenInitialAnalysis, {
+              name: place.displayName ?? place.name,
+              country: place.country,
+              city: place.city,
+              point: place.center,
+              confidence: proposal.confidence,
+            });
+            return {
+            ...rewritten,
             tripId: place.tripId,
             placeNodeId: place.id,
             location: place.center,
             pendingReason: undefined,
-            exifStatus: clearMissingExifStatus({ ...photo, location: place.center }),
+            exifStatus: clearMissingExifStatus({ ...rewritten, location: place.center }),
             locationResolution: {
-              ...(photo.locationResolution ?? {}),
+              ...(rewritten.locationResolution ?? {}),
               status: "confirmed",
               effectiveName: place.displayName ?? place.name,
               effectivePoint: place.center,
-              confidence: proposal.confidence ?? photo.locationResolution?.confidence,
+              confidence: proposal.confidence ?? rewritten.locationResolution?.confidence,
               source: "existing_trip_context",
               requiresUserAction: false,
               updatedAt: new Date().toISOString(),
-              candidates: photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? [],
+              candidates: rewritten.ai?.locationCandidates ?? rewritten.locationResolution?.candidates ?? [],
             },
-          }
+          };
+        })()
         : photo,
     ),
     placeNodes: state.placeNodes.map((item) => ({
@@ -83,9 +144,20 @@ function bindPhotosToPlace(state, proposal) {
 
 function createPlaceFromCandidate(state, proposal) {
   const candidate = proposal.candidate;
-  const point = candidate?.point ?? (Number.isFinite(candidate?.lat) && Number.isFinite(candidate?.lng) ? { lat: candidate.lat, lng: candidate.lng } : undefined);
+  const point = candidatePoint(candidate);
   if (!proposal.tripId || !point) return state;
   const photoIds = new Set(proposal.photoIds ?? []);
+  const existingPlace = findMergeableExistingPlace(state, proposal.tripId, candidate, point, proposal.placeId);
+  if (existingPlace) {
+    return bindPhotosToPlace(state, {
+      action: "bind_photos_to_place",
+      photoIds: Array.from(photoIds),
+      placeId: existingPlace.id,
+      confidence: candidate.confidence,
+      reason: candidate.reason,
+      rewrittenInitialAnalysis: proposal.rewrittenInitialAnalysis,
+    });
+  }
   const placeId = proposal.placeId ?? `place-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const relatedPhotos = state.photos.filter((photo) => photoIds.has(photo.id));
   const dates = relatedPhotos.map((photo) => photo.capturedAt).filter(Boolean).sort();
@@ -94,6 +166,8 @@ function createPlaceFromCandidate(state, proposal) {
     tripId: proposal.tripId,
     name: candidate.name ?? "AI 建议地点",
     displayName: candidate.name ?? "AI 建议地点",
+    city: candidate.city,
+    country: candidate.country,
     center: point,
     coordinatePrecision: candidate.precision ?? "estimated",
     photoIds: Array.from(photoIds),
@@ -104,15 +178,17 @@ function createPlaceFromCandidate(state, proposal) {
     ...state,
     photos: state.photos.map((photo) =>
       photoIds.has(photo.id)
-        ? {
-            ...photo,
+        ? (() => {
+            const rewritten = applyRewrittenInitialAnalysis(photo, proposal.rewrittenInitialAnalysis, candidate);
+            return {
+            ...rewritten,
             tripId: proposal.tripId,
             placeNodeId: place.id,
             location: point,
             pendingReason: undefined,
-            exifStatus: clearMissingExifStatus({ ...photo, location: point }),
+            exifStatus: clearMissingExifStatus({ ...rewritten, location: point }),
             locationResolution: {
-              ...(photo.locationResolution ?? {}),
+              ...(rewritten.locationResolution ?? {}),
               status: "confirmed",
               effectiveName: place.name,
               effectivePoint: point,
@@ -120,15 +196,41 @@ function createPlaceFromCandidate(state, proposal) {
               source: candidate.source ?? "ai_vision",
               precision: candidate.precision ?? "estimated",
               candidateId: candidate.id,
-              candidates: photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? [],
+              candidates: rewritten.ai?.locationCandidates ?? rewritten.locationResolution?.candidates ?? [],
               requiresUserAction: false,
               updatedAt: new Date().toISOString(),
             },
-          }
+          };
+        })()
         : photo,
     ),
     placeNodes: [...state.placeNodes, place],
   };
+}
+
+function findMergeableExistingPlace(state, tripId, candidate, point, candidatePlaceId) {
+  const candidateName = cleanPlaceName(candidate?.name);
+  const candidateCity = cleanPlaceName(candidate?.city);
+  const candidateCountry = cleanPlaceName(candidate?.country);
+  return state.placeNodes
+    .filter((place) => place.tripId === tripId && place.id !== candidatePlaceId && place.center)
+    .map((place) => {
+      const distance = haversineKm(point, place.center);
+      const placeName = cleanPlaceName(place.displayName ?? place.name);
+      const placeCity = cleanPlaceName(place.city);
+      const placeCountry = cleanPlaceName(place.country);
+      const sameCountry = !candidateCountry || !placeCountry || candidateCountry === placeCountry;
+      const sameCity = Boolean(candidateCity && placeCity && candidateCity === placeCity);
+      const sameName = Boolean(candidateName && placeName && (candidateName === placeName || candidateName.includes(placeName) || placeName.includes(candidateName)));
+      const threshold = sameName ? SAME_NAME_PLACE_MERGE_RADIUS_KM : sameCity ? SAME_CITY_PLACE_MERGE_RADIUS_KM : DEFAULT_PLACE_MERGE_RADIUS_KM;
+      if (!sameCountry || distance > threshold) return undefined;
+      return {
+        place,
+        score: distance - (sameName ? 20 : 0) - (sameCity ? 8 : 0) - (sameCountry ? 1 : 0),
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.score - right.score)[0]?.place;
 }
 
 function confirmTripAssignment(state, proposal) {

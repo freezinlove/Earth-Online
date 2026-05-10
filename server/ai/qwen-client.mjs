@@ -3,7 +3,7 @@ import { envValue } from "../config/env.mjs";
 const qwenCompatibleBaseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1";
 const qwenMultimodalEmbeddingUrl =
   "https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding";
-const qwenRequestTimeoutMs = 45000;
+const qwenRequestTimeoutMs = 80000;
 
 function requestSignal(rootDir) {
   const timeout = Number(envValue(rootDir, "QWEN_REQUEST_TIMEOUT_MS", qwenRequestTimeoutMs));

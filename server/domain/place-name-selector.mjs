@@ -237,7 +237,11 @@ export function bestDisplayName(photos, placeName) {
   if (title) return title;
 
   const visible = photos
-    .flatMap((photo) => photo.ai?.visiblePlaceNames ?? [])
+    .flatMap((photo) => [
+      ...(photo.ai?.visiblePlaceNames ?? []),
+      ...(photo.ai?.locationCandidates ?? []).flatMap((candidate) => [candidate.name, candidate.city]),
+      ...(photo.locationResolution?.candidates ?? []).flatMap((candidate) => [candidate.name, candidate.city]),
+    ])
     .map(stripSceneSuffix)
     .find((value) => value && isUsableFinalPlaceName(value));
   return visible ?? placeName;

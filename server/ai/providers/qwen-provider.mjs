@@ -21,7 +21,7 @@ export const qwenProvider = {
     missingInfoInference: true,
     embedding: true,
   },
-  async analyzeImage({ rootDir, secretProvider, fileName, mime, dataUrl, preset, geoContext }) {
+  async analyzeImage({ rootDir, secretProvider, mime, dataUrl, preset, geoContext }) {
     const prompt = await loadPrompt("photoAnalysis");
     const apiKey = readQwenChatApiKey(rootDir, secretProvider);
     const content = await qwenChatCompletion({
@@ -37,12 +37,9 @@ export const qwenProvider = {
           content: [
             {
               type: "text",
-              text: [
-                `分析这张旅行照片，文件名：${fileName}。`,
-                `EXIF/GPS 地理上下文：${JSON.stringify(geoContext ?? { cityHint: preset?.city ?? "未知" })}。`,
-                "请给这张照片起一个简短中文名，并给出 6-10 个中文搜索标签。标签要具体，例如「哈尔施塔特湖畔」「布达佩斯多瑙河」「维也纳街景」「查理大桥」「山间湖泊」「教堂内景」「咖啡馆甜点」「蓝天积云」。",
-                "如果 GPS 城市候选和画面明显冲突，可以保留画面判断，但不要把一个城市标签强行套到另一座城市；caption 里可以写“GPS 位于某地附近”。",
-              ].join("\n"),
+              text: JSON.stringify({
+                exif: geoContext ?? { hasGps: false, cityHint: preset?.city ?? "待确认", countryHint: preset?.country ?? "待确认" },
+              }),
             },
             { type: "image_url", image_url: { url: dataUrl || `data:${mime};base64,` } },
           ],
@@ -76,8 +73,7 @@ export const qwenProvider = {
               type: "text",
               text: [
                 "请根据当前待补照片图像和下方严格分区的 JSON 数据，输出一个待补信息二次推断 JSON。",
-                "注意：neighborContext 只是参考，不能覆盖 currentPhoto 图像证据。",
-                JSON.stringify(inferenceInput, null, 2),
+                JSON.stringify(inferenceInput),
               ].join("\n\n"),
             },
             { type: "image_url", image_url: { url: dataUrl || `data:${mime};base64,` } },

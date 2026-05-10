@@ -24,7 +24,8 @@ export function buildSearchDocuments(state) {
       place?.countryNames?.local,
       photo.locationResolution?.effectiveName,
       ...(ai?.visiblePlaceNames ?? []),
-      ...(ai?.locationCandidates ?? []).map((candidate) => candidate.name),
+      ...(ai?.locationCandidates ?? []).flatMap((candidate) => [candidate.name, candidate.city, candidate.country]),
+      ...locationCandidates.flatMap((candidate) => [candidate.name, candidate.city, candidate.country]),
       ...locationCandidates.flatMap((candidate) => [
         candidate.localizedNames?.zh,
         candidate.localizedNames?.en,

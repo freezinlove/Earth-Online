@@ -36,19 +36,51 @@ export function validatePhotoAnalysisResult(parsed, preset) {
   if (!parsed || typeof parsed !== "object") throw new Error("AI photo analysis did not return an object");
   const caption = String(parsed.caption ?? "").trim();
   if (!caption || !Array.isArray(parsed.tags)) throw new Error("AI photo analysis returned unexpected content");
-  const locationCandidates = Array.isArray(parsed.locationCandidates)
-    ? parsed.locationCandidates
-        .map(normalizeCandidate)
-        .filter((candidate) => candidate.name && candidate.confidence > 0)
-        .slice(0, 5)
-    : [];
+  const rawCandidates = parsed.locationCandidate
+    ? [parsed.locationCandidate]
+    : Array.isArray(parsed.locationCandidates)
+      ? parsed.locationCandidates
+      : [];
+  const locationCandidates = rawCandidates
+    .map(normalizeCandidate)
+    .filter((candidate) => candidate.name && candidate.confidence > 0)
+    .slice(0, 1);
   return {
     title: String(parsed.title ?? "").trim().slice(0, 24) || undefined,
     tags: normalizeTags(parsed.tags, preset),
     caption,
-    visiblePlaceNames: Array.isArray(parsed.visiblePlaceNames) ? parsed.visiblePlaceNames.map((item) => String(item).trim()).filter(Boolean).slice(0, 8) : [],
+    visiblePlaceNames: [],
     locationCandidates,
-    uncertainties: Array.isArray(parsed.uncertainties) ? parsed.uncertainties.map((item) => String(item).trim()).filter(Boolean).slice(0, 8) : [],
+    uncertainties: [],
+  };
+}
+
+function normalizeRewrittenInitialAnalysis(value) {
+  if (!value || typeof value !== "object") return undefined;
+  const caption = String(value.caption ?? "").trim();
+  const tags = Array.isArray(value.tags) ? normalizeTags(value.tags, undefined) : [];
+  const locationCandidate = normalizeCandidate(value.locationCandidate ?? value.locationCandidates?.[0]);
+  if (!caption || tags.length === 0 || !locationCandidate.name || locationCandidate.confidence <= 0) return undefined;
+  return {
+    title: String(value.title ?? "").trim().slice(0, 24) || undefined,
+    tags,
+    caption,
+    locationCandidate,
+  };
+}
+
+function normalizeInferenceTargetCandidate(candidate, fallbackReason) {
+  const raw = candidate && typeof candidate === "object" ? candidate : {};
+  const point = normalizePoint(raw.point ?? raw);
+  return {
+    name: String(raw.name ?? "").trim().slice(0, 80),
+    point,
+    city: raw.city ? String(raw.city).trim().slice(0, 80) : undefined,
+    country: raw.country ? String(raw.country).trim().slice(0, 80) : undefined,
+    confidence: clampConfidence(raw.confidence),
+    source: "ai_context_inference",
+    precision: "estimated",
+    reason: String(raw.reason ?? fallbackReason).trim().slice(0, 240) || fallbackReason,
   };
 }
 
@@ -59,31 +91,29 @@ export function validateMissingInfoInferenceResult(parsed) {
   const action = String(parsed.action ?? "");
   const confidence = clampConfidence(parsed.confidence ?? parsed.candidate?.confidence);
   const reason = String(parsed.reason ?? parsed.candidate?.reason ?? "").trim().slice(0, 240) || "AI 未提供明确理由。";
+  const rewriteInitialAnalysis = Boolean(parsed.rewriteInitialAnalysis);
+  const rewrittenInitialAnalysis = rewriteInitialAnalysis ? normalizeRewrittenInitialAnalysis(parsed.rewrittenInitialAnalysis) : undefined;
 
   if (action === "bind_photos_to_place") {
     return {
       action,
-      targetPlaceId: String(parsed.targetPlaceId ?? "").trim(),
+      targetPlaceId: String(parsed.target?.placeId ?? parsed.targetPlaceId ?? "").trim(),
       confidence,
       reason,
+      rewriteInitialAnalysis,
+      rewrittenInitialAnalysis,
     };
   }
 
   if (action === "create_place_from_candidate") {
-    const candidate = parsed.candidate && typeof parsed.candidate === "object" ? parsed.candidate : {};
-    const point = normalizePoint(candidate.point ?? candidate);
     return {
       action,
-      candidate: {
-        name: String(candidate.name ?? "").trim().slice(0, 80),
-        point,
-        city: candidate.city ? String(candidate.city).trim().slice(0, 80) : undefined,
-        country: candidate.country ? String(candidate.country).trim().slice(0, 80) : undefined,
-        confidence: clampConfidence(candidate.confidence),
-        source: "ai_context_inference",
-        precision: "estimated",
-        reason: String(candidate.reason ?? reason).trim().slice(0, 240) || reason,
-      },
+      candidate: normalizeInferenceTargetCandidate(parsed.target?.locationCandidate ?? parsed.candidate, reason),
+      rewriteInitialAnalysis: true,
+      rewrittenInitialAnalysis: rewrittenInitialAnalysis ?? normalizeRewrittenInitialAnalysis({
+        ...parsed.rewrittenInitialAnalysis,
+        locationCandidate: parsed.rewrittenInitialAnalysis?.locationCandidate ?? parsed.target?.locationCandidate ?? parsed.candidate,
+      }),
     };
   }
 
@@ -91,5 +121,7 @@ export function validateMissingInfoInferenceResult(parsed) {
     action: "keep_pending",
     confidence,
     reason,
+    rewriteInitialAnalysis: false,
+    rewrittenInitialAnalysis: undefined,
   };
 }

@@ -38,7 +38,7 @@ export function createImportServices({
   const storageWriteConcurrency = Number(process.env.EARTH_ONLINE_IMPORT_STORAGE_WRITE_CONCURRENCY ?? 16);
   const aiConcurrency = Number(process.env.EARTH_ONLINE_IMPORT_AI_CONCURRENCY ?? 200);
   const embeddingConcurrency = Number(process.env.EARTH_ONLINE_IMPORT_EMBEDDING_CONCURRENCY ?? 600);
-  const missingInferenceConcurrency = Number(process.env.EARTH_ONLINE_MISSING_INFERENCE_CONCURRENCY ?? 16);
+  const missingInferenceConcurrency = Number(process.env.EARTH_ONLINE_MISSING_INFERENCE_CONCURRENCY ?? 200);
   const failedImportJobRetentionMs = Number(process.env.EARTH_ONLINE_FAILED_IMPORT_JOB_RETENTION_MS ?? 24 * 60 * 60 * 1000);
   const aiImageMaxDimension = Number(process.env.EARTH_ONLINE_AI_IMAGE_MAX_DIMENSION ?? 1200);
   const aiImageJpegQuality = Number(process.env.EARTH_ONLINE_AI_IMAGE_JPEG_QUALITY ?? 82);
@@ -667,7 +667,7 @@ export function createImportServices({
       (item) =>
         batch.pendingItemIds.includes(item.id) &&
         item.status === "open" &&
-        ["missing_gps", "missing_time", "confirm_location_candidate"].includes(item.type) &&
+        ["missing_gps", "confirm_location_candidate"].includes(item.type) &&
         requestedIds.has(item.id),
     );
     return enqueuePendingInferenceJob(makeId("job"), { batchId, pendingIds: pendingItems.map((item) => item.id) });
@@ -876,14 +876,14 @@ export function createImportServices({
     const batch = state.importBatches.find((item) => item.id === batchId);
     const pending = state.pendingItems.find((item) => item.id === pendingId);
     if (!batch || batch.status !== "pending_confirmation" || !pending || !batch.pendingItemIds.includes(pending.id)) return responseState();
-    if (!["missing_gps", "missing_time", "confirm_location_candidate"].includes(pending.type)) return responseState();
+    if (!["missing_gps", "confirm_location_candidate"].includes(pending.type)) return responseState();
 
     const proposal = await buildMissingInfoInferenceProposal(state, batch, pending);
     const latestState = await readState();
     const latestBatch = latestState.importBatches.find((item) => item.id === batchId);
     const latestPending = latestState.pendingItems.find((item) => item.id === pendingId);
     if (!latestBatch || latestBatch.status !== "pending_confirmation" || !latestPending || !latestBatch.pendingItemIds.includes(latestPending.id)) return responseState();
-    if (!["missing_gps", "missing_time", "confirm_location_candidate"].includes(latestPending.type)) return responseState();
+    if (!["missing_gps", "confirm_location_candidate"].includes(latestPending.type)) return responseState();
     const nextPending = applyMissingInfoProposal(latestPending, proposal);
     await writeState({
       ...latestState,
@@ -901,7 +901,7 @@ export function createImportServices({
       (item) =>
         batch.pendingItemIds.includes(item.id) &&
         item.status === "open" &&
-        ["missing_gps", "missing_time", "confirm_location_candidate"].includes(item.type) &&
+        ["missing_gps", "confirm_location_candidate"].includes(item.type) &&
         requestedIds.has(item.id),
     );
     const total = items.length;
@@ -931,7 +931,7 @@ export function createImportServices({
       pendingItems: latestState.pendingItems.map((item) => {
         const proposal = proposalByPendingId.get(item.id);
         if (!proposal || !latestBatch.pendingItemIds.includes(item.id) || item.status !== "open") return item;
-        if (!["missing_gps", "missing_time", "confirm_location_candidate"].includes(item.type)) return item;
+        if (!["missing_gps", "confirm_location_candidate"].includes(item.type)) return item;
         return applyMissingInfoProposal(item, proposal);
       }),
     });
@@ -1400,7 +1400,7 @@ export function createImportServices({
     const photo = state.photos.find((item) => item.id === pending.relatedPhotoIds[0]);
     if (!photo) return keepPending("找不到待补照片。", 0.2);
     const context = buildInferenceContextPhotos(state, batch, photo);
-    const contextPhotos = uniquePhotos([context.previousPhoto, context.nextPhoto, context.previousLocatedPhoto, context.nextLocatedPhoto]);
+    const contextPhotos = uniquePhotos([context.previousPhoto, context.nextPhoto]);
     const contextPlaces = allowedInferencePlaces(state, photo, contextPhotos);
     const imagePayload = await readPhotoImagePayload(photo);
     if (!imagePayload) return keepPending("找不到当前待补照片原图，无法执行二次视觉推断。", 0);
@@ -1461,77 +1461,67 @@ export function createImportServices({
 
   function buildMissingInfoInferenceInput({ photo, context, contextPlaces }) {
     return {
-      task: "missing_info_second_pass",
+      task: "missing_gps_second_pass",
       currentPhoto: {
-        id: photo.id,
-        fileName: photo.fileName,
-        capturedAt: photo.capturedAt,
-        exifStatus: photo.exifStatus,
-        pendingReason: photo.pendingReason,
-        location: photo.location,
-        initialAnalysis: {
-          title: photo.title,
-          caption: photo.aiCaption,
-          tags: photo.tags ?? [],
-          visiblePlaceNames: photo.ai?.visiblePlaceNames ?? [],
-          locationCandidates: photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? [],
-          uncertainties: photo.ai?.uncertainties ?? [],
-          locationResolution: photo.locationResolution,
-        },
+        capturedAt: formatAiTimestamp(photo.capturedAt),
+        initialLocationCandidate: serializeInitialLocationCandidate(photo),
       },
-      neighborContext: {
-        role: "advisory_only",
-        previousPhoto: serializeNeighborPhoto(context.previousPhoto, photo, contextPlaces),
-        nextPhoto: serializeNeighborPhoto(context.nextPhoto, photo, contextPlaces),
-        previousLocatedPhoto: serializeNeighborPhoto(context.previousLocatedPhoto, photo, contextPlaces),
-        nextLocatedPhoto: serializeNeighborPhoto(context.nextLocatedPhoto, photo, contextPlaces),
+      neighbors: {
+        previous: serializeNeighborPhoto(context.previousPhoto, contextPlaces),
+        next: serializeNeighborPhoto(context.nextPhoto, contextPlaces),
       },
       allowedPlaces: contextPlaces.map((place) => ({
         id: place.id,
         name: place.name,
-        displayName: place.displayName,
         city: place.city,
         country: place.country,
-        center: place.center,
-        tripId: place.tripId,
+        lat: place.center?.lat,
+        lng: place.center?.lng,
       })),
-      constraints: {
-        currentPhotoImageIsPrimaryEvidence: true,
-        neighborImagesProvided: false,
-        neighborGpsIsReferenceOnly: true,
-        candidatePointPrecision: "estimated",
-        lowConfidenceThresholdAppliesOnlyToMissingPhoto: missingGpsLowConfidenceThreshold,
-        closeNeighborTimeWindowMinutes: closeNeighborContextMs / 60000,
-        closeNeighborCanConfirmSameAllowedPlaceBelowThreshold: true,
-        strongGeographicOverlapCanConfirmExistingPlaceBelowThreshold: true,
-      },
     };
   }
 
-  function serializeNeighborPhoto(photo, currentPhoto, contextPlaces) {
-    if (!photo) return undefined;
-    const hasReliableGps = hasReadExifGps(photo);
-    const place = hasReliableGps ? contextPlaces.find((item) => item.id === photo.placeNodeId) : undefined;
+  function serializeInitialLocationCandidate(photo) {
+    const candidate = bestPhotoLocationCandidate(photo);
+    if (!candidate) return null;
     return {
-      id: photo.id,
-      capturedAt: photo.capturedAt,
-      timeDeltaMinutes: Number.isFinite(timeDistanceMs(photo.capturedAt, currentPhoto.capturedAt))
-        ? Math.round(timeDistanceMs(photo.capturedAt, currentPhoto.capturedAt) / 60000)
-        : undefined,
-      gps: hasReliableGps ? photo.location : undefined,
-      exifStatus: photo.exifStatus,
-      tripId: photo.tripId,
-      placeNodeId: hasReliableGps ? photo.placeNodeId : undefined,
-      placeName: place?.displayName ?? place?.name,
-      city: place?.city,
-      country: place?.country,
-      title: photo.title,
-      caption: photo.aiCaption,
-      tags: photo.tags ?? [],
-      visiblePlaceNames: photo.ai?.visiblePlaceNames ?? [],
-      locationCandidates: photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? [],
-      uncertainties: photo.ai?.uncertainties ?? [],
+      name: candidate.name,
+      city: candidate.city,
     };
+  }
+
+  function bestPhotoLocationCandidate(photo) {
+    return [...(photo.locationResolution?.candidates ?? []), ...(photo.ai?.locationCandidates ?? [])]
+      .filter((candidate) => candidate?.name)
+      .sort((left, right) => Number(right.confidence ?? 0) - Number(left.confidence ?? 0))[0];
+  }
+
+  function serializeNeighborPhoto(photo, contextPlaces) {
+    if (!photo) {
+      return {
+        capturedAt: null,
+        placeName: null,
+        city: null,
+        hasRealExifGps: false,
+      };
+    }
+    const hasReliableGps = hasReadExifGps(photo);
+    const place = photo.placeNodeId ? contextPlaces.find((item) => item.id === photo.placeNodeId) : undefined;
+    const candidate = bestPhotoLocationCandidate(photo);
+    return {
+      capturedAt: formatAiTimestamp(photo.capturedAt),
+      placeName: place?.displayName ?? place?.name ?? photo.locationResolution?.effectiveName ?? candidate?.name ?? null,
+      city: place?.city ?? candidate?.city ?? null,
+      hasRealExifGps: hasReliableGps,
+    };
+  }
+
+  function formatAiTimestamp(value) {
+    if (!value) return null;
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return String(value).slice(0, 16).replace("T", " ");
+    const pad = (number) => String(number).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
   }
 
   function normalizeMissingInfoAiProposal({ aiResult, photo, context, contextPlaces }) {
@@ -1557,6 +1547,7 @@ export function createImportServices({
           placeId: place.id,
           confidence: aiResult.confidence,
           reason,
+          rewrittenInitialAnalysis: normalizedRewriteForProposal(aiResult.rewrittenInitialAnalysis),
         },
       };
     }
@@ -1588,6 +1579,7 @@ export function createImportServices({
             placeId: mergePlace.id,
             confidence: candidate.confidence,
             reason,
+            rewrittenInitialAnalysis: normalizedRewriteForProposal(aiResult.rewrittenInitialAnalysis),
           },
         };
       }
@@ -1609,6 +1601,7 @@ export function createImportServices({
             source: "ai_context_inference",
             precision: "estimated",
           },
+          rewrittenInitialAnalysis: normalizedRewriteForProposal(aiResult.rewrittenInitialAnalysis),
         },
       };
     }
@@ -1625,6 +1618,24 @@ export function createImportServices({
       }))
       .filter(({ neighbor, distance }) => hasReadExifGps(neighbor) && neighbor.placeNodeId === place.id && distance <= closeNeighborContextMs)
       .sort((left, right) => left.distance - right.distance)[0];
+  }
+
+  function normalizedRewriteForProposal(rewrittenInitialAnalysis) {
+    if (!rewrittenInitialAnalysis?.caption || !Array.isArray(rewrittenInitialAnalysis.tags) || !rewrittenInitialAnalysis.locationCandidate) return undefined;
+    const candidate = rewrittenInitialAnalysis.locationCandidate;
+    return {
+      title: rewrittenInitialAnalysis.title,
+      tags: rewrittenInitialAnalysis.tags,
+      caption: rewrittenInitialAnalysis.caption,
+      locationCandidate: {
+        name: candidate.name,
+        country: candidate.country,
+        city: candidate.city,
+        lat: candidate.lat,
+        lng: candidate.lng,
+        confidence: candidate.confidence,
+      },
+    };
   }
 
   function hasReadExifGps(photo) {

@@ -244,7 +244,7 @@ export function createEditServices({ readState, readVectorIndex, writeState, wri
     const state = await readState();
     const pending = state.pendingItems.find((item) => item.id === id);
     const applied = applyPendingDecision(state, id, { accepted: Boolean(body.accepted) });
-    const rebuilt = body.accepted ? rebuildTripsForPhotos(applied, new Set(pending?.relatedPhotoIds ?? []), { makeId }) : applied;
+    const rebuilt = body.accepted ? rebuildTripsForPhotos(applied, new Set(pending?.relatedPhotoIds ?? []), { makeId, allowExistingPlaceMerge: true }) : applied;
     await writeState(rebuilt);
     return responseState();
   }
