@@ -40,6 +40,8 @@ export function createRouter(handlers, paths) {
       if (req.method === "POST" && importRollback) return send(res, 200, await handlers.rollbackImport(importRollback[1]));
       const importCancelPhotos = pathname.match(/^\/api\/import\/([^/]+)\/cancel-photos$/);
       if (req.method === "POST" && importCancelPhotos) return send(res, 200, await handlers.cancelImportPhotos(importCancelPhotos[1], await readBody(req)));
+      const importPendingInferJob = pathname.match(/^\/api\/import\/([^/]+)\/pending\/infer-locations\/jobs$/);
+      if (req.method === "POST" && importPendingInferJob) return send(res, 202, await handlers.startPendingInferenceJob(importPendingInferJob[1], await readBody(req)));
       const importPendingInfer = pathname.match(/^\/api\/import\/([^/]+)\/pending\/([^/]+)\/infer-location$/);
       if (req.method === "POST" && importPendingInfer) return send(res, 200, await handlers.inferPendingLocation(importPendingInfer[1], importPendingInfer[2]));
       const importAiFailure = pathname.match(/^\/api\/import\/([^/]+)\/ai-failures\/([^/]+)\/resolve$/);

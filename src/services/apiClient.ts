@@ -166,6 +166,11 @@ export const apiClient = {
     request<AppSnapshot>(`/api/import/${batchId}/cancel-photos`, { method: "POST", body: JSON.stringify({ photoIds }) }),
   inferPendingLocation: (batchId: string, pendingId: string) =>
     request<AppSnapshot>(`/api/import/${batchId}/pending/${pendingId}/infer-location`, { method: "POST", body: "{}" }),
+  inferPendingLocations: async (batchId: string, pendingIds: string[], onJobProgress?: (progress: ImportJobProgress) => void) => {
+    const job = await request<ImportJob>(`/api/import/${batchId}/pending/infer-locations/jobs`, { method: "POST", body: JSON.stringify({ pendingIds }) });
+    if (job.progress) onJobProgress?.(job.progress);
+    return pollImportJob(job.id, onJobProgress);
+  },
   resolveImportAiFailure: (batchId: string, pendingId: string, action: "retry_vision" | "retry_embedding" | "retry_both" | "archive_exif") =>
     request<AppSnapshot>(`/api/import/${batchId}/ai-failures/${pendingId}/resolve`, { method: "POST", body: JSON.stringify({ action }) }),
   mergeImportTrips: (batchId: string) => request<AppSnapshot>(`/api/import/${batchId}/merge`, { method: "POST", body: "{}" }),

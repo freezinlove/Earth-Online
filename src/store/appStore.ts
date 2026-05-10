@@ -116,6 +116,7 @@ interface AppState {
   rollbackLatestImport: () => Promise<void>;
   cancelPendingImportPhotos: (photoIds: ID[]) => Promise<void>;
   inferPendingLocation: (pendingId: ID) => Promise<void>;
+  inferPendingLocations: (pendingIds: ID[], onProgress?: (progress: ImportJobProgress) => void) => Promise<void>;
   resolveImportAiFailure: (pendingId: ID, action: "retry_vision" | "retry_embedding" | "retry_both" | "archive_exif") => Promise<void>;
   mergeLatestImportTrips: () => Promise<void>;
   deleteTrip: (tripId: ID) => Promise<void>;
@@ -323,6 +324,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     const latest = batches[batches.length - 1];
     if (!latest || latest.status !== "pending_confirmation") return;
     const snapshot = await apiClient.inferPendingLocation(latest.id, pendingId);
+    set({ ...applySnapshot(snapshot), activePanel: "upload" });
+  },
+  inferPendingLocations: async (pendingIds, onProgress) => {
+    const batches = get().importBatches;
+    const latest = batches[batches.length - 1];
+    if (!latest || latest.status !== "pending_confirmation" || pendingIds.length === 0) return;
+    const snapshot = await apiClient.inferPendingLocations(latest.id, pendingIds, onProgress);
     set({ ...applySnapshot(snapshot), activePanel: "upload" });
   },
   resolveImportAiFailure: async (pendingId, action) => {

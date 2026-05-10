@@ -434,11 +434,14 @@ function ReviewTree({
 
 function MissingSuggestions({
   groups,
+  bulkProgress,
   inferFeedback,
   inferringIds,
+  isBulkInferring,
   acceptingIds,
   selectedPhotoId,
   onAccept,
+  onInferAll,
   onInfer,
   onManual,
   onOpenPreview,
@@ -447,11 +450,14 @@ function MissingSuggestions({
   t,
 }: {
   groups: MissingPreview[];
+  bulkProgress?: ImportJobProgress;
   inferFeedback: Record<string, InferFeedback>;
   inferringIds: Set<string>;
+  isBulkInferring: boolean;
   acceptingIds: Set<string>;
   selectedPhotoId?: string;
   onAccept: (item?: PendingItem) => void;
+  onInferAll: (items: PendingItem[]) => void;
   onInfer: (item?: PendingItem) => void;
   onManual: (item?: PendingItem) => void;
   onOpenPreview: (photo: Photo) => void;
@@ -470,6 +476,17 @@ function MissingSuggestions({
     ).values(),
   );
   const hasInferable = inferableItems.some((item) => !inferringIds.has(item.id));
+  const bulkTotal = bulkProgress?.steps?.ai?.total ?? bulkProgress?.total ?? inferableItems.length;
+  const bulkDone = bulkProgress?.steps?.ai?.done ?? bulkProgress?.done ?? 0;
+  const bulkStep: ImportStep | undefined = isBulkInferring
+    ? {
+        icon: Sparkles,
+        label: t("aiImageUnderstanding"),
+        done: bulkDone,
+        total: bulkTotal,
+        active: true,
+      }
+    : undefined;
 
   return (
     <section className="import-missing" aria-label={t("pendingSuggestions")}>
@@ -481,18 +498,21 @@ function MissingSuggestions({
             <X size={14} />
           </button>
           <button
-            onClick={() => inferableItems.forEach((item) => {
-              if (!inferringIds.has(item.id)) onInfer(item);
-            })}
-            disabled={!hasInferable}
+            onClick={() => onInferAll(inferableItems.filter((item) => !inferringIds.has(item.id)))}
+            disabled={!hasInferable || isBulkInferring}
             aria-label={t("aiSecondInference")}
             type="button"
             data-tooltip={t("aiSecondInference")}
           >
-            <Sparkles size={14} />
+            {isBulkInferring ? <LoaderCircle className="animate-spin" size={14} /> : <Sparkles size={14} />}
           </button>
         </div>
       </div>
+      {bulkStep ? (
+        <div className="import-progress-stack import-progress-stack-inline" aria-label={t("aiSecondInference")}>
+          <ProgressLine step={bulkStep} />
+        </div>
+      ) : null}
       <div className="import-missing-list">
         {groups.map((group) => {
           const isInferring = Boolean(group.pending && inferringIds.has(group.pending.id));
@@ -766,6 +786,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
   const rollbackLatestImport = useAppStore((state) => state.rollbackLatestImport);
   const cancelPendingImportPhotos = useAppStore((state) => state.cancelPendingImportPhotos);
   const inferPendingLocation = useAppStore((state) => state.inferPendingLocation);
+  const inferPendingLocations = useAppStore((state) => state.inferPendingLocations);
   const resolveImportAiFailure = useAppStore((state) => state.resolveImportAiFailure);
   const acknowledgePendingItem = useAppStore((state) => state.acknowledgePendingItem);
   const resolvePendingManually = useAppStore((state) => state.resolvePendingManually);
@@ -780,6 +801,8 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
   const [inferringIds, setInferringIds] = useState<Set<string>>(() => new Set());
   const [acceptingIds, setAcceptingIds] = useState<Set<string>>(() => new Set());
   const [inferFeedback, setInferFeedback] = useState<Record<string, InferFeedback>>({});
+  const [bulkInferProgress, setBulkInferProgress] = useState<ImportJobProgress>();
+  const [isBulkInferring, setIsBulkInferring] = useState(false);
   const [previewPhoto, setPreviewPhoto] = useState<Photo>();
   const [manualPending, setManualPending] = useState<PendingItem>();
   const [isPreviewClosing, setIsPreviewClosing] = useState(false);
@@ -945,6 +968,40 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
     }
   };
 
+  const inferAllPending = async (items: PendingItem[]) => {
+    const ids = items.map((item) => item.id);
+    if (!ids.length || isBulkInferring) return;
+    setIsBulkInferring(true);
+    setBulkInferProgress({ phase: "queued", done: 0, total: ids.length, steps: { ai: { done: 0, total: ids.length } } });
+    setInferFeedback((feedback) => {
+      const next = { ...feedback };
+      for (const id of ids) {
+        next[id] = { status: "running", message: t("readingContext") };
+      }
+      return next;
+    });
+    try {
+      await inferPendingLocations(ids, (progress) => {
+        setBulkInferProgress(progress);
+      });
+      setInferFeedback((feedback) => {
+        const next = { ...feedback };
+        for (const id of ids) delete next[id];
+        return next;
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t("secondInferenceFailed");
+      setInferFeedback((feedback) => {
+        const next = { ...feedback };
+        for (const id of ids) next[id] = { status: "error", message };
+        return next;
+      });
+    } finally {
+      setIsBulkInferring(false);
+      setBulkInferProgress(undefined);
+    }
+  };
+
   const resolveAiFailure = async (item: PendingItem | undefined, action: "retry_vision" | "retry_embedding" | "retry_both" | "archive_exif") => {
     if (!item) return;
     setAcceptingIds((ids) => new Set(ids).add(item.id));
@@ -1046,11 +1103,14 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
 
           <MissingSuggestions
             groups={missingGroups}
+            bulkProgress={bulkInferProgress}
             inferFeedback={inferFeedback}
             inferringIds={inferringIds}
+            isBulkInferring={isBulkInferring}
             acceptingIds={acceptingIds}
             selectedPhotoId={selectedPhotoId}
             onAccept={(item) => void acceptPending(item)}
+            onInferAll={(items) => void inferAllPending(items)}
             onInfer={(item) => void inferPending(item)}
             onManual={(item) => {
               setManualPending(item);

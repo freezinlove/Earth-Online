@@ -38,6 +38,7 @@ export function createImportServices({
   const storageWriteConcurrency = Number(process.env.EARTH_ONLINE_IMPORT_STORAGE_WRITE_CONCURRENCY ?? 16);
   const aiConcurrency = Number(process.env.EARTH_ONLINE_IMPORT_AI_CONCURRENCY ?? 200);
   const embeddingConcurrency = Number(process.env.EARTH_ONLINE_IMPORT_EMBEDDING_CONCURRENCY ?? 600);
+  const missingInferenceConcurrency = Number(process.env.EARTH_ONLINE_MISSING_INFERENCE_CONCURRENCY ?? 16);
   const failedImportJobRetentionMs = Number(process.env.EARTH_ONLINE_FAILED_IMPORT_JOB_RETENTION_MS ?? 24 * 60 * 60 * 1000);
   const aiImageMaxDimension = Number(process.env.EARTH_ONLINE_AI_IMAGE_MAX_DIMENSION ?? 1200);
   const aiImageJpegQuality = Number(process.env.EARTH_ONLINE_AI_IMAGE_JPEG_QUALITY ?? 82);
@@ -655,6 +656,105 @@ export function createImportServices({
     return job;
   }
 
+  async function startPendingInferenceJob(batchId, body = {}) {
+    const state = await readState();
+    const batch = state.importBatches.find((item) => item.id === batchId);
+    if (!batch || batch.status !== "pending_confirmation") {
+      throw new Error("找不到待确认导入批次。");
+    }
+    const requestedIds = new Set(safeArray(body.pendingIds).map(String));
+    const pendingItems = state.pendingItems.filter(
+      (item) =>
+        batch.pendingItemIds.includes(item.id) &&
+        item.status === "open" &&
+        ["missing_gps", "missing_time", "confirm_location_candidate"].includes(item.type) &&
+        requestedIds.has(item.id),
+    );
+    return enqueuePendingInferenceJob(makeId("job"), { batchId, pendingIds: pendingItems.map((item) => item.id) });
+  }
+
+  function enqueuePendingInferenceJob(id, jobPayload) {
+    const total = safeArray(jobPayload.pendingIds).length;
+    const createdAt = new Date().toISOString();
+    const initialProgress = {
+      phase: "queued",
+      done: 0,
+      total,
+      steps: {
+        ai: { done: 0, total },
+      },
+    };
+    const job = {
+      id,
+      status: "queued",
+      createdAt,
+      updatedAt: createdAt,
+      progress: initialProgress,
+      progressEvents: [{ ...initialProgress, sequence: 0, createdAt }],
+      result: undefined,
+      error: undefined,
+    };
+    importJobs.set(id, job);
+    repository.saveImportJob(job);
+    setTimeout(async () => {
+      const current = importJobs.get(id);
+      if (!current) return;
+      current.status = "processing";
+      current.updatedAt = new Date().toISOString();
+      current.progress = {
+        phase: "ai",
+        done: 0,
+        total,
+        steps: {
+          ai: { done: 0, total },
+        },
+      };
+      appendProgressEvent(current);
+      repository.saveImportJob(current);
+      const updateProgress = (next) => {
+        const steps = { ...(current.progress?.steps ?? {}) };
+        steps.ai = {
+          done: next.done ?? steps.ai?.done ?? 0,
+          total: next.total ?? steps.ai?.total ?? total,
+          currentFileName: next.currentFileName,
+        };
+        current.progress = {
+          ...(current.progress ?? {}),
+          ...next,
+          phase: next.phase ?? "ai",
+          total: next.total ?? current.progress?.total ?? total,
+          steps,
+        };
+        current.updatedAt = new Date().toISOString();
+        appendProgressEvent(current);
+        repository.saveImportJob(current);
+      };
+      try {
+        current.result = await inferPendingLocationsBatch(jobPayload, { update: updateProgress });
+        current.status = "completed";
+        current.progress = {
+          ...(current.progress ?? {}),
+          phase: "completed",
+          done: total,
+          total,
+          steps: {
+            ...(current.progress?.steps ?? {}),
+            ai: { done: total, total },
+          },
+        };
+      } catch (error) {
+        current.status = "failed";
+        current.error = error instanceof Error ? error.message : "pending inference job failed";
+        current.progress = { ...(current.progress ?? {}), phase: "failed", total };
+        appendProgressEvent(current);
+      }
+      current.updatedAt = new Date().toISOString();
+      repository.saveImportJob(current);
+      publishJobTerminal(current);
+    }, 0);
+    return job;
+  }
+
   function appendProgressEvent(job) {
     const progress = job.progress;
     if (!progress) return;
@@ -784,8 +884,56 @@ export function createImportServices({
     const latestPending = latestState.pendingItems.find((item) => item.id === pendingId);
     if (!latestBatch || latestBatch.status !== "pending_confirmation" || !latestPending || !latestBatch.pendingItemIds.includes(latestPending.id)) return responseState();
     if (!["missing_gps", "missing_time", "confirm_location_candidate"].includes(latestPending.type)) return responseState();
-    const nextPending = {
-      ...latestPending,
+    const nextPending = applyMissingInfoProposal(latestPending, proposal);
+    await writeState({
+      ...latestState,
+      pendingItems: latestState.pendingItems.map((item) => (item.id === latestPending.id ? nextPending : item)),
+    });
+    return responseState();
+  }
+
+  async function inferPendingLocationsBatch({ batchId, pendingIds }, progress = {}) {
+    const state = await readState();
+    const batch = state.importBatches.find((item) => item.id === batchId);
+    if (!batch || batch.status !== "pending_confirmation") return responseState();
+    const requestedIds = new Set(safeArray(pendingIds).map(String));
+    const items = state.pendingItems.filter(
+      (item) =>
+        batch.pendingItemIds.includes(item.id) &&
+        item.status === "open" &&
+        ["missing_gps", "missing_time", "confirm_location_candidate"].includes(item.type) &&
+        requestedIds.has(item.id),
+    );
+    const total = items.length;
+    let done = 0;
+    progress.update?.({ phase: "ai", done, total });
+    const results = await mapConcurrent(items, missingInferenceConcurrency, async (pending) => {
+      const photo = state.photos.find((item) => pending.relatedPhotoIds.includes(item.id));
+      const proposal = await buildMissingInfoInferenceProposal(state, batch, pending);
+      done += 1;
+      progress.update?.({ phase: "ai", done, total, currentFileName: photo?.fileName });
+      return { pendingId: pending.id, proposal };
+    });
+    const proposalByPendingId = new Map(results.map((item) => [item.pendingId, item.proposal]));
+    const latestState = await readState();
+    const latestBatch = latestState.importBatches.find((item) => item.id === batchId);
+    if (!latestBatch || latestBatch.status !== "pending_confirmation") return responseState();
+    await writeState({
+      ...latestState,
+      pendingItems: latestState.pendingItems.map((item) => {
+        const proposal = proposalByPendingId.get(item.id);
+        if (!proposal || !latestBatch.pendingItemIds.includes(item.id) || item.status !== "open") return item;
+        if (!["missing_gps", "missing_time", "confirm_location_candidate"].includes(item.type)) return item;
+        return applyMissingInfoProposal(item, proposal);
+      }),
+    });
+    progress.update?.({ phase: "completed", done: total, total });
+    return responseState();
+  }
+
+  function applyMissingInfoProposal(pending, proposal) {
+    return {
+      ...pending,
       suggestion: proposal.suggestion,
       reason: proposal.reason,
       proposal: proposal.actionable ? proposal.proposal : undefined,
@@ -799,11 +947,6 @@ export function createImportServices({
         updatedAt: new Date().toISOString(),
       },
     };
-    await writeState({
-      ...latestState,
-      pendingItems: latestState.pendingItems.map((item) => (item.id === latestPending.id ? nextPending : item)),
-    });
-    return responseState();
   }
 
   async function rollbackImport(id) {
@@ -1597,6 +1740,7 @@ export function createImportServices({
     cancelImportPhotos,
     resolveImportAiFailure,
     inferPendingLocation,
+    startPendingInferenceJob,
     mergeImportTrips,
   };
 }
