@@ -215,7 +215,7 @@ export async function inferMissingInfoWithImage({
   try {
     const provider = getAiProvider("missingInfoInference", missingInfoInferenceProviderId);
     if (!provider) throw new Error("no missing info inference provider configured");
-    return provider.inferMissingInfo({ rootDir, secretProvider, dataUrl, mime, inferenceInput });
+    return await provider.inferMissingInfo({ rootDir, secretProvider, dataUrl, mime, inferenceInput });
   } catch (error) {
     return {
       action: "keep_pending",

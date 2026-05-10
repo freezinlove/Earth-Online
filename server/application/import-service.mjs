@@ -909,10 +909,18 @@ export function createImportServices({
     progress.update?.({ phase: "ai", done, total });
     const results = await mapConcurrent(items, missingInferenceConcurrency, async (pending) => {
       const photo = state.photos.find((item) => pending.relatedPhotoIds.includes(item.id));
-      const proposal = await buildMissingInfoInferenceProposal(state, batch, pending);
-      done += 1;
-      progress.update?.({ phase: "ai", done, total, currentFileName: photo?.fileName });
-      return { pendingId: pending.id, proposal };
+      try {
+        const proposal = await buildMissingInfoInferenceProposal(state, batch, pending);
+        return { pendingId: pending.id, proposal };
+      } catch (error) {
+        return {
+          pendingId: pending.id,
+          proposal: keepPending(error instanceof Error ? error.message : "AI 二次推断失败。", 0),
+        };
+      } finally {
+        done += 1;
+        progress.update?.({ phase: "ai", done, total, currentFileName: photo?.fileName });
+      }
     });
     const proposalByPendingId = new Map(results.map((item) => [item.pendingId, item.proposal]));
     const latestState = await readState();
