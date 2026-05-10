@@ -565,6 +565,7 @@ const sceneTagOnlyPhotos = [
 ];
 const sceneTagPlaces = buildPlacesForGroup(sceneTagOnlyPhotos, "trip-norway", { makeId });
 assert.equal(sceneTagPlaces[0].name, "Haugesund");
+assert.equal(sceneTagPlaces[0].names.zh, "海于格松");
 assert.notEqual(sceneTagPlaces[0].name, "山间湖泊");
 assert.notEqual(sceneTagPlaces[0].name, "挪威");
 

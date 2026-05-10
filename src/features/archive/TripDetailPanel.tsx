@@ -1,7 +1,7 @@
-import { ArrowLeft, CalendarDays, Image, MapPin, PencilLine, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { ArrowLeft, CalendarDays, Image, MapPin, PencilLine, Plus, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { capturedDateLabel, capturedTimeLabel, toCapturedDateTimeInput } from "@/domain/datetime";
+import { capturedDateLabel, capturedTimeLabel } from "@/domain/datetime";
 import { placeFocusIntent } from "@/domain/globeIntent";
 import { countryLabel, photoAltText, photoLabel, placeLabel, tripLabel } from "@/domain/labels";
 import { useI18n } from "@/i18n/useI18n";
@@ -52,7 +52,7 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
   const dossierGroups = useAppStore((state) => state.dossierGroups);
   const setActivePanel = useAppStore((state) => state.setActivePanel);
   const updateTripTitle = useAppStore((state) => state.updateTripTitle);
-  const updatePhotoMetadata = useAppStore((state) => state.updatePhotoMetadata);
+  const updatePhotoUserEdits = useAppStore((state) => state.updatePhotoUserEdits);
   const selectPhoto = useAppStore((state) => state.selectPhoto);
   const selectPlace = useAppStore((state) => state.selectPlace);
   const setGlobeViewIntent = useAppStore((state) => state.setGlobeViewIntent);
@@ -69,6 +69,8 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
   const dossier = dossierGroups.find((group) => group.tripId === selectedTripId);
   const photoById = useMemo(() => new Map(photos.map((photo) => [photo.id, photo])), [photos]);
   const placeById = useMemo(() => new Map(places.map((place) => [place.id, place])), [places]);
+  const openPhoto = openPhotoId ? photos.find((photo) => photo.id === openPhotoId) : undefined;
+  const openPhotoPlace = openPhoto?.placeNodeId ? placeById.get(openPhoto.placeNodeId) : undefined;
   const countryGroups = useMemo<CountryGroup[]>(() => {
     return (dossier?.countries ?? []).map((countryGroup) => ({
       country: countryGroup.country,
@@ -97,7 +99,7 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
 
   return (
     <section className="trip-dossier fixed inset-0 z-[70] overflow-y-auto bg-background/94 backdrop-blur-2xl" data-state={isClosing ? "closing" : "open"}>
-      <TripDossierBackButton onBack={() => setActivePanel("archive")} />
+      <TripDossierBackButton isClosing={isClosing} onBack={() => setActivePanel("archive")} />
 
       <header className="trip-dossier-hero">
         <img src={heroPhoto} alt={tripLabel(trip)} className="trip-dossier-hero-image" />
@@ -203,27 +205,28 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
         </div>
       </main>
 
-      {openPhotoId ? (
+      {openPhoto ? (
         <PhotoDetailModal
-          photo={photos.find((photo) => photo.id === openPhotoId)}
+          photo={openPhoto}
+          place={openPhotoPlace}
           editing={editingPhotoId === openPhotoId}
           onClose={() => {
             setOpenPhotoId(undefined);
             setEditingPhotoId(undefined);
           }}
-          onLocate={(photoId) => {
-            selectPhoto(photoId);
-            setOpenPhotoId(undefined);
-            setActivePanel("globe");
-          }}
-          onRemove={(photoId) => {
-            void deletePhoto(photoId);
+          onLocate={(photo) => {
+            const place = photo.placeNodeId ? placeById.get(photo.placeNodeId) : undefined;
+            if (place) {
+              focusPlaceOnGlobe(place);
+            } else {
+              selectPhoto(photo.id);
+              setActivePanel("globe");
+            }
             setOpenPhotoId(undefined);
           }}
           onToggleEdit={(photoId) => setEditingPhotoId(editingPhotoId === photoId ? undefined : photoId)}
-          onSave={(photoId, capturedAt, lat, lng, tags) => {
-            void updatePhotoMetadata(photoId, capturedAt, lat, lng, tags);
-            setEditingPhotoId(undefined);
+          onPatchUserEdits={(photoId, edits) => {
+            void updatePhotoUserEdits(photoId, edits);
           }}
         />
       ) : null}
@@ -231,10 +234,10 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
   );
 }
 
-function TripDossierBackButton({ onBack }: { onBack: () => void }) {
+function TripDossierBackButton({ isClosing, onBack }: { isClosing: boolean; onBack: () => void }) {
   const { t } = useI18n();
   return createPortal(
-    <div className="trip-dossier-actions">
+    <div className="trip-dossier-actions" data-state={isClosing ? "closing" : "open"}>
       <button className="trip-dossier-link" aria-label={t("back")} onClick={onBack} title={t("back")} type="button">
         <ArrowLeft size={30} />
       </button>
@@ -245,35 +248,91 @@ function TripDossierBackButton({ onBack }: { onBack: () => void }) {
 
 function PhotoDetailModal({
   photo,
+  place,
   editing,
   onClose,
   onLocate,
-  onRemove,
   onToggleEdit,
-  onSave,
+  onPatchUserEdits,
 }: {
-  photo?: {
-    id: string;
-    title?: string;
-    fileName: string;
-    storageUrl?: string;
-    thumbnailUrl: string;
-    aiCaption: string;
-    tags: string[];
-    capturedAt?: string;
-    location?: { lat: number; lng: number };
-    exifStatus?: { time: string; gps: string };
-    pendingReason?: string;
-  };
+  photo: Photo;
+  place?: PlaceNode;
   editing: boolean;
   onClose: () => void;
-  onLocate: (photoId: string) => void;
-  onRemove: (photoId: string) => void;
+  onLocate: (photo: Photo) => void;
   onToggleEdit: (photoId: string) => void;
-  onSave: (photoId: string, capturedAt: string, lat: string, lng: string, tags: string) => void;
+  onPatchUserEdits: (photoId: string, edits: { title?: string; caption?: string; tags?: string[] }) => void;
 }) {
   const { t } = useI18n();
-  if (!photo) return null;
+  const [titleDraft, setTitleDraft] = useState("");
+  const [captionDraft, setCaptionDraft] = useState("");
+  const [tagDrafts, setTagDrafts] = useState<string[]>([]);
+  const [addingTag, setAddingTag] = useState(false);
+  const [newTag, setNewTag] = useState("");
+  const titleInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const saveTimerRef = useRef<number>();
+  const displayedTitle = photo.userEdits?.title ?? photo.title ?? photo.fileName;
+  const displayedCaption = photo.userEdits?.caption ?? photo.aiCaption;
+  const displayedTags = photo.userEdits?.tags ?? photo.tags;
+
+  useEffect(() => {
+    setTitleDraft(displayedTitle);
+    setCaptionDraft(displayedCaption);
+    setTagDrafts(displayedTags);
+    setAddingTag(false);
+    setNewTag("");
+  }, [displayedCaption, displayedTags, displayedTitle, photo.id]);
+
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    };
+  }, []);
+
+  const resizeTitleElement = (input?: HTMLTextAreaElement | null) => {
+    if (!input) return;
+    input.style.height = "auto";
+    input.style.height = `${input.scrollHeight}px`;
+  };
+
+  const resizeTitleInput = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      resizeTitleElement(titleInputRef.current);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (editing) resizeTitleInput();
+  }, [editing, resizeTitleInput, titleDraft]);
+
+  const queueSave = (next: { title?: string; caption?: string; tags?: string[] }) => {
+    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(() => onPatchUserEdits(photo.id, next), 420);
+  };
+
+  const updateTitle = (value: string) => {
+    setTitleDraft(value);
+    queueSave({ title: value, caption: captionDraft, tags: tagDrafts });
+    resizeTitleInput();
+  };
+
+  const updateCaption = (value: string) => {
+    setCaptionDraft(value);
+    queueSave({ title: titleDraft, caption: value, tags: tagDrafts });
+  };
+
+  const updateTags = (tags: string[]) => {
+    const cleanTags = Array.from(new Set(tags.map((tag) => tag.trim()).filter(Boolean)));
+    setTagDrafts(cleanTags);
+    queueSave({ title: titleDraft, caption: captionDraft, tags: cleanTags });
+  };
+
+  const commitNewTag = () => {
+    const clean = newTag.trim();
+    if (clean) updateTags([...tagDrafts, clean]);
+    setNewTag("");
+    setAddingTag(false);
+  };
 
   return createPortal(
     <div className="trip-photo-modal" onMouseDown={onClose}>
@@ -288,77 +347,87 @@ function PhotoDetailModal({
           <div className="trip-photo-modal-heading">
             <div>
               <p>{capturedDateLabel(photo.capturedAt)}</p>
-              <h3>{photoLabel(photo)}</h3>
+              {editing ? (
+                <textarea
+                  ref={titleInputRef}
+                  className="trip-photo-modal-title-input"
+                  value={titleDraft}
+                  onChange={(event) => updateTitle(event.target.value)}
+                  onInput={(event) => resizeTitleElement(event.currentTarget)}
+                  aria-label="Photo title"
+                  rows={1}
+                />
+              ) : (
+                <h3>{displayedTitle}</h3>
+              )}
             </div>
             <button className="trip-photo-modal-close" onClick={onClose} type="button" aria-label={t("closePhotoPreview")}>
               <X size={17} />
             </button>
           </div>
 
-          <p className="trip-photo-modal-caption">{photo.aiCaption}</p>
-          <div className="trip-photo-modal-tags">
-            {photo.tags.map((tag) => (
-              <span key={tag}>{tag}</span>
+          {editing ? (
+            <textarea
+              className="trip-photo-modal-caption-input"
+              value={captionDraft}
+              onChange={(event) => updateCaption(event.target.value)}
+              aria-label="Photo description"
+              rows={5}
+            />
+          ) : (
+            <p className="trip-photo-modal-caption">{displayedCaption}</p>
+          )}
+          <div className={`trip-photo-modal-tags${editing ? " trip-photo-modal-tags-editing" : ""}`}>
+            {(editing ? tagDrafts : displayedTags).map((tag) => (
+              <span key={tag} className="trip-photo-modal-tag">
+                {tag}
+                {editing ? (
+                  <button type="button" aria-label={`Remove ${tag}`} onClick={() => updateTags(tagDrafts.filter((item) => item !== tag))}>
+                    <X size={10} />
+                  </button>
+                ) : null}
+              </span>
             ))}
+            {editing ? (
+              addingTag ? (
+                <input
+                  className="trip-photo-modal-tag-input"
+                  autoFocus
+                  value={newTag}
+                  onChange={(event) => setNewTag(event.target.value)}
+                  onBlur={commitNewTag}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      commitNewTag();
+                    }
+                    if (event.key === "Escape") {
+                      setAddingTag(false);
+                      setNewTag("");
+                    }
+                  }}
+                  aria-label="New tag"
+                />
+              ) : (
+                <button className="trip-photo-modal-add-tag" type="button" onClick={() => setAddingTag(true)} aria-label="Add tag">
+                  <Plus size={13} />
+                </button>
+              )
+            ) : null}
             {photo.pendingReason ? <span>{t("pending")}</span> : null}
           </div>
 
           <div className="trip-photo-modal-actions">
-            <button onClick={() => onLocate(photo.id)} type="button">
-              <MapPin size={16} /> {t("locate")}
+            <button onClick={() => onLocate(photo)} type="button" aria-label={t("locate")} title={place ? placeLabel(place) : t("locate")}>
+              <MapPin size={19} />
             </button>
-            <button onClick={() => onRemove(photo.id)} type="button">
-              <Trash2 size={16} /> {t("clear")}
-            </button>
-            <button onClick={() => onToggleEdit(photo.id)} type="button">
-              <PencilLine size={16} /> {t("edit")}
+            <button onClick={() => onToggleEdit(photo.id)} type="button" aria-label={t("edit")} title={t("edit")} data-active={editing || undefined}>
+              <PencilLine size={19} />
             </button>
           </div>
-
-          {editing ? (
-            <PhotoMetadataEditor
-              photo={photo}
-              onSave={(capturedAt, lat, lng, tags) => onSave(photo.id, capturedAt, lat, lng, tags)}
-            />
-          ) : null}
         </div>
       </article>
     </div>,
     document.body,
-  );
-}
-
-function toLocalDateTime(value?: string) {
-  return toCapturedDateTimeInput(value);
-}
-
-function PhotoMetadataEditor({
-  photo,
-  onSave,
-}: {
-  photo: { capturedAt?: string; location?: { lat: number; lng: number }; tags: string[]; exifStatus?: { time: string; gps: string } };
-  onSave: (capturedAt: string, lat: string, lng: string, tags: string) => void;
-}) {
-  const { t } = useI18n();
-  const [capturedAt, setCapturedAt] = useState(toLocalDateTime(photo.capturedAt));
-  const [lat, setLat] = useState(photo.location?.lat.toFixed(6) ?? "");
-  const [lng, setLng] = useState(photo.location?.lng.toFixed(6) ?? "");
-  const [tags, setTags] = useState(photo.tags.join(" "));
-
-  return (
-    <div className="mt-4 border-t border-outline-variant pt-4">
-      <div className="grid gap-2">
-        <input className="soft-input text-xs outline-none" type="datetime-local" value={capturedAt} onChange={(event) => setCapturedAt(event.target.value)} />
-        <div className="grid grid-cols-2 gap-2">
-          <input className="soft-input text-xs outline-none" placeholder="Latitude" value={lat} onChange={(event) => setLat(event.target.value)} />
-          <input className="soft-input text-xs outline-none" placeholder="Longitude" value={lng} onChange={(event) => setLng(event.target.value)} />
-        </div>
-        <input className="soft-input text-xs outline-none" placeholder={t("tagsPlaceholder")} value={tags} onChange={(event) => setTags(event.target.value)} />
-        <p className="text-[11px] text-outline">EXIF: {t("exifTime")} {photo.exifStatus?.time ?? "unknown"} · GPS {photo.exifStatus?.gps ?? "unknown"}</p>
-        <button className="w-fit rounded-full bg-primary px-4 py-2 text-xs font-semibold text-white" onClick={() => onSave(capturedAt, lat, lng, tags)} type="button">
-          {t("savePhotoInfo")}
-        </button>
-      </div>
-    </div>
   );
 }

@@ -1,4 +1,5 @@
 import { inferPreset } from "./geo.mjs";
+import { hasHan, zhPlaceNameOverride } from "./place-name-overrides.mjs";
 
 const GENERIC_PLACE_SUFFIX = /地点\s*\d+$/u;
 const SCENE_WORDS = [
@@ -152,7 +153,9 @@ function cleanNames(names, fallback) {
     const value = cleanPlaceName(names?.[key]);
     if (value) result[key] = value;
   }
-  if (!result.zh && fallbackClean) result.zh = fallbackClean;
+  const zhOverride = [result.zh, result.local, fallbackClean, result.en].map(zhPlaceNameOverride).find(Boolean);
+  if (zhOverride) result.zh = zhOverride;
+  if (!result.zh && fallbackClean && hasHan(fallbackClean)) result.zh = fallbackClean;
   if (!result.en && fallbackClean) result.en = fallbackClean;
   return Object.keys(result).length ? result : undefined;
 }

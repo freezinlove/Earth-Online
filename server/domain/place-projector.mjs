@@ -6,23 +6,28 @@ const SAME_CITY_CLUSTER_RADIUS_KM = 12;
 const SAME_NAME_CLUSTER_RADIUS_KM = 25;
 const MATURITY_PHOTO_THRESHOLD = 4;
 
-export function buildPlacesForGroup(group, tripId, { makeId, existingPlaces = [] }) {
+export function buildPlacesForGroup(group, tripId, { makeId, existingPlaces = [], allowExistingPlaceMerge = false }) {
   const located = group
     .filter((photo) => photo.location)
     .sort((a, b) => (a.capturedAt ?? "").localeCompare(b.capturedAt ?? ""));
   const clusters = [];
   for (const photo of located) {
     const context = photoPlaceContext(photo);
-    const target = findMergeTarget(clusters, photo, context);
+    const target = findExistingPlaceCluster(clusters, photo) ?? (allowExistingPlaceMerge || !photo.placeNodeId ? findMergeTarget(clusters, photo, context) : undefined);
     if (target) addPhotoToCluster(target, photo, context);
     else clusters.push(createCluster(photo, context));
   }
 
+  const usedExistingPlaceIds = new Set();
   return clusters
     .sort((left, right) => (left.photos[0]?.capturedAt ?? "").localeCompare(right.photos[0]?.capturedAt ?? ""))
     .map((cluster) => {
       const center = cluster.center;
-      const existing = findExistingPlaceForCluster(cluster, existingPlaces);
+      const existing = findExistingPlaceForCluster(
+        cluster,
+        existingPlaces.filter((place) => !usedExistingPlaceIds.has(place.id)),
+      );
+      if (existing?.id) usedExistingPlaceIds.add(existing.id);
       const preserveName = shouldPreserveExistingName(existing, cluster.photos) ? existing.name : undefined;
       const description = selectPlaceDescription(cluster.photos, center, { preserveName });
       return {
@@ -48,6 +53,7 @@ function createCluster(photo, context) {
     photos: [photo],
     center: { ...photo.location },
     context,
+    placeNodeId: photo.placeNodeId,
   };
 }
 
@@ -59,6 +65,7 @@ function addPhotoToCluster(cluster, photo, context) {
     lng: (cluster.center.lng * (count - 1) + photo.location.lng) / count,
   };
   cluster.context = mergeContext(cluster.context, context);
+  cluster.placeNodeId = cluster.placeNodeId ?? photo.placeNodeId;
 }
 
 function findMergeTarget(clusters, photo, context) {
@@ -72,6 +79,11 @@ function findMergeTarget(clusters, photo, context) {
     if (!best || score < best.score) best = { cluster, score };
   }
   return best?.cluster;
+}
+
+function findExistingPlaceCluster(clusters, photo) {
+  if (!photo.placeNodeId) return undefined;
+  return clusters.find((cluster) => cluster.placeNodeId === photo.placeNodeId);
 }
 
 function photoPlaceContext(photo) {
@@ -155,9 +167,10 @@ function findExistingPlaceForCluster(cluster, existingPlaces) {
       place,
       overlap: (place.photoIds ?? []).filter((id) => clusterPhotoIds.has(id)).length,
       distance: place.center ? haversineKm(place.center, cluster.center) : Infinity,
+      explicit: cluster.placeNodeId === place.id,
     }))
-    .filter((item) => item.overlap > 0 || item.distance <= DEFAULT_CLUSTER_RADIUS_KM)
-    .sort((left, right) => right.overlap - left.overlap || left.distance - right.distance)[0]?.place;
+    .filter((item) => item.explicit || item.overlap > 0 || item.distance <= DEFAULT_CLUSTER_RADIUS_KM)
+    .sort((left, right) => Number(right.explicit) - Number(left.explicit) || right.overlap - left.overlap || left.distance - right.distance)[0]?.place;
 }
 
 function shouldPreserveExistingName(existing, photos) {

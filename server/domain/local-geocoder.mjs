@@ -3,10 +3,12 @@ import { DatabaseSync } from "node:sqlite";
 import { geodataPath } from "../config/paths.mjs";
 import { haversineKm, isUsableLocation } from "./geo.mjs";
 import { cityPresets } from "./geo-catalog.mjs";
+import { zhPlaceNameOverride } from "./place-name-overrides.mjs";
 
 const SEARCH_RADIUS_KM = 80;
 const RESULT_LIMIT = 5;
 const FORWARD_RESULT_LIMIT = 3;
+const CITY_LEVEL_FEATURES = new Set(["PPLC", "PPLA", "PPLA2", "PPLA3", "PPLA4"]);
 const englishNameOverrides = {
   zurich: "Zurich",
   zuerich: "Zurich",
@@ -54,6 +56,37 @@ function confidenceFor(row, distanceKm) {
   return Math.max(0.35, Math.min(0.96, Number((0.22 + distanceScore + featureWeight(row.feature_code) + populationScore).toFixed(3))));
 }
 
+function cityLevelRank(row) {
+  const population = Number(row.population ?? 0);
+  if (row.feature_code === "PPLC") return 6;
+  if (row.feature_code === "PPLA") return 5;
+  if (row.feature_code === "PPLA2") return 4;
+  if (row.feature_code === "PPLA3") return 3;
+  if (row.feature_code === "PPLA4") return 2;
+  if (population >= 100000) return 3;
+  if (population >= 50000) return 2;
+  if (population >= 20000) return 1;
+  return 0;
+}
+
+function cityLevelScore(row, distanceKm) {
+  const rank = cityLevelRank(row);
+  const population = Number(row.population ?? 0);
+  const populationScore = Math.min(1.4, Math.log10(Math.max(1, population)) / 4);
+  const distancePenalty = (distanceKm / SEARCH_RADIUS_KM) * 2;
+  return rank + populationScore - distancePenalty;
+}
+
+function preferCityLevel(items) {
+  const cityCandidates = items.filter((item) => CITY_LEVEL_FEATURES.has(item.row.feature_code) || Number(item.row.population ?? 0) >= 20000);
+  if (!cityCandidates.length) return items;
+  return cityCandidates.sort((left, right) => {
+    const leftScore = cityLevelScore(left.row, left.distanceKm);
+    const rightScore = cityLevelScore(right.row, right.distanceKm);
+    return rightScore - leftScore || left.distanceKm - right.distanceKm;
+  });
+}
+
 function normalizedText(value) {
   return String(value ?? "")
     .normalize("NFD")
@@ -62,6 +95,8 @@ function normalizedText(value) {
 }
 
 function localizedName(row) {
+  const override = [row.name_zh, row.name, row.ascii_name, row.name_en].map(zhPlaceNameOverride).find(Boolean);
+  if (override) return override;
   if (row.name_zh) return row.name_zh;
   const values = [row.name, row.ascii_name].map(normalizedText);
   const preset = cityPresets.find((item) => values.some((value) => value === normalizedText(item.keyword) || value.includes(normalizedText(item.keyword))));
@@ -180,7 +215,7 @@ export function forwardLocalGeocode({ name, city, country } = {}, { makeId } = {
   return [];
 }
 
-export function reverseLocalGeocode(point, { makeId } = {}) {
+export function reverseLocalGeocode(point, { makeId, preferCity = false } = {}) {
   if (!isUsableLocation(point)) return [];
   const connection = database();
   if (!connection) return [];
@@ -199,18 +234,26 @@ export function reverseLocalGeocode(point, { makeId } = {}) {
     )
     .all(point.lat - latDelta, point.lat + latDelta, point.lng - lngDelta, point.lng + lngDelta);
 
-  return rows
+  const nearby = rows
     .map((row) => {
       const candidatePoint = { lat: Number(row.lat), lng: Number(row.lng) };
       const distanceKm = haversineKm(point, candidatePoint);
       return { row, candidatePoint, distanceKm };
     })
-    .filter((item) => item.distanceKm <= SEARCH_RADIUS_KM)
-    .sort((left, right) => {
-      const leftScore = confidenceFor(left.row, left.distanceKm);
-      const rightScore = confidenceFor(right.row, right.distanceKm);
+    .filter((item) => item.distanceKm <= SEARCH_RADIUS_KM);
+
+  const ranked = (preferCity ? preferCityLevel(nearby) : nearby).sort((left, right) => {
+    if (preferCity) {
+      const leftScore = cityLevelScore(left.row, left.distanceKm);
+      const rightScore = cityLevelScore(right.row, right.distanceKm);
       return rightScore - leftScore || left.distanceKm - right.distanceKm;
-    })
+    }
+    const leftScore = confidenceFor(left.row, left.distanceKm);
+    const rightScore = confidenceFor(right.row, right.distanceKm);
+    return rightScore - leftScore || left.distanceKm - right.distanceKm;
+  });
+
+  return ranked
     .slice(0, RESULT_LIMIT)
     .map(({ row, candidatePoint, distanceKm }, index) => {
       const confidence = confidenceFor(row, distanceKm);

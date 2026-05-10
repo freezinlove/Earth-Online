@@ -1,4 +1,4 @@
-import type { DossierTripGroup, GlobeMarker, ImportBatch, PendingItem, Photo, PlaceNode, Route, SearchDocument, SearchResult, TimelineSegment, Trip } from "@/domain/models";
+import type { DossierTripGroup, GeoPoint, GlobeMarker, ImportBatch, LocationCandidate, PendingItem, Photo, PlaceNode, Route, SearchDocument, SearchResult, TimelineSegment, Trip } from "@/domain/models";
 
 export interface AppSnapshot {
   trips: Trip[];
@@ -126,6 +126,10 @@ async function pollImportJob(jobId: string, onProgress?: (progress: ImportJobPro
 
 export const apiClient = {
   getState: () => request<AppSnapshot>("/api/state"),
+  reverseGeocode: (point: GeoPoint) => {
+    const params = new URLSearchParams({ lat: String(point.lat), lng: String(point.lng) });
+    return request<{ candidates: LocationCandidate[] }>(`/api/geocode/reverse?${params.toString()}`);
+  },
   getLocalAiSettings: () => request<LocalAiSettings>("/api/settings/local-ai"),
   updateLocalAiSettings: (body: Partial<Record<keyof LocalAiSettings, string>>) =>
     request<LocalAiSettings>("/api/settings/local-ai", { method: "PATCH", body: JSON.stringify(body) }),
@@ -162,6 +166,8 @@ export const apiClient = {
     request<AppSnapshot>(`/api/import/${batchId}/cancel-photos`, { method: "POST", body: JSON.stringify({ photoIds }) }),
   inferPendingLocation: (batchId: string, pendingId: string) =>
     request<AppSnapshot>(`/api/import/${batchId}/pending/${pendingId}/infer-location`, { method: "POST", body: "{}" }),
+  resolveImportAiFailure: (batchId: string, pendingId: string, action: "retry_vision" | "retry_embedding" | "retry_both" | "archive_exif") =>
+    request<AppSnapshot>(`/api/import/${batchId}/ai-failures/${pendingId}/resolve`, { method: "POST", body: JSON.stringify({ action }) }),
   mergeImportTrips: (batchId: string) => request<AppSnapshot>(`/api/import/${batchId}/merge`, { method: "POST", body: "{}" }),
   createTrip: (title: string, start: string, end: string) => request<AppSnapshot>("/api/trips", { method: "POST", body: JSON.stringify({ title, start, end }) }),
   updateTrip: (tripId: string, body: { title?: string; dateRange?: { start: string; end: string } }) =>
@@ -174,10 +180,22 @@ export const apiClient = {
     request<AppSnapshot>(`/api/trips/${tripId}/reorder-places`, { method: "POST", body: JSON.stringify({ placeIds }) }),
   movePhoto: (photoId: string, tripId?: string) => request<AppSnapshot>(`/api/photos/${photoId}/move`, { method: "POST", body: JSON.stringify({ tripId }) }),
   deletePhoto: (photoId: string) => request<AppSnapshot>(`/api/photos/${photoId}/delete`, { method: "POST", body: "{}" }),
-  updatePhoto: (photoId: string, body: { capturedAt?: string; location?: { lat?: number | string; lng?: number | string }; tags?: string[] }) =>
+  updatePhoto: (
+    photoId: string,
+    body: {
+      capturedAt?: string;
+      location?: { lat?: number | string; lng?: number | string };
+      tags?: string[];
+      userEdits?: { title?: string; caption?: string; tags?: string[] };
+    },
+  ) =>
     request<AppSnapshot>(`/api/photos/${photoId}`, { method: "PATCH", body: JSON.stringify(body) }),
   bindPhoto: (photoId: string, placeId?: string) => request<AppSnapshot>(`/api/photos/${photoId}/bind-place`, { method: "POST", body: JSON.stringify({ placeId }) }),
   updatePending: (pendingId: string, accepted: boolean) => request<AppSnapshot>(`/api/pending/${pendingId}`, { method: "POST", body: JSON.stringify({ accepted }) }),
+  resolvePendingManually: (
+    pendingId: string,
+    body: { action: "bind_existing_place"; placeId: string } | { action: "create_manual_place"; name: string; lat: number; lng: number } | { action: "archive_unlocated" },
+  ) => request<AppSnapshot>(`/api/pending/${pendingId}/manual`, { method: "POST", body: JSON.stringify(body) }),
   search: (query: string, filters?: { tripId?: string; placeId?: string; date?: string; tag?: string; fileName?: string }) => {
     const params = new URLSearchParams({ q: query });
     Object.entries(filters ?? {}).forEach(([key, value]) => {

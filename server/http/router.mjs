@@ -17,6 +17,7 @@ export function createRouter(handlers, paths) {
       if (req.method === "GET" && pathname === "/api/state") return send(res, 200, await handlers.responseState());
       if (req.method === "GET" && pathname === "/api/settings/local-ai") return send(res, 200, handlers.localAiSettings());
       if (req.method === "PATCH" && pathname === "/api/settings/local-ai") return send(res, 200, handlers.updateLocalAiSettings(await readBody(req)));
+      if (req.method === "GET" && pathname === "/api/geocode/reverse") return send(res, 200, handlers.reverseGeocode(url.searchParams));
       if (req.method === "GET" && pathname === "/api/search") return send(res, 200, await handlers.search(url.searchParams));
       if (req.method === "POST" && pathname === "/api/import/jobs") {
         const contentType = req.headers["content-type"] ?? "";
@@ -41,6 +42,8 @@ export function createRouter(handlers, paths) {
       if (req.method === "POST" && importCancelPhotos) return send(res, 200, await handlers.cancelImportPhotos(importCancelPhotos[1], await readBody(req)));
       const importPendingInfer = pathname.match(/^\/api\/import\/([^/]+)\/pending\/([^/]+)\/infer-location$/);
       if (req.method === "POST" && importPendingInfer) return send(res, 200, await handlers.inferPendingLocation(importPendingInfer[1], importPendingInfer[2]));
+      const importAiFailure = pathname.match(/^\/api\/import\/([^/]+)\/ai-failures\/([^/]+)\/resolve$/);
+      if (req.method === "POST" && importAiFailure) return send(res, 200, await handlers.resolveImportAiFailure(importAiFailure[1], importAiFailure[2], await readBody(req)));
       const importMerge = pathname.match(/^\/api\/import\/([^/]+)\/merge$/);
       if (req.method === "POST" && importMerge) return send(res, 200, await handlers.mergeImportTrips(importMerge[1]));
       if (req.method === "POST" && pathname === "/api/trips") return send(res, 200, await handlers.createTrip(await readBody(req)));
@@ -63,6 +66,8 @@ export function createRouter(handlers, paths) {
       if (req.method === "POST" && photoBind) return send(res, 200, await handlers.bindPhoto(photoBind[1], await readBody(req)));
       const pendingPatch = pathname.match(/^\/api\/pending\/([^/]+)$/);
       if (req.method === "POST" && pendingPatch) return send(res, 200, await handlers.updatePending(pendingPatch[1], await readBody(req)));
+      const pendingManual = pathname.match(/^\/api\/pending\/([^/]+)\/manual$/);
+      if (req.method === "POST" && pendingManual) return send(res, 200, await handlers.resolvePendingManually(pendingManual[1], await readBody(req)));
       const pendingApply = pathname.match(/^\/api\/pending\/([^/]+)\/apply$/);
       if (req.method === "POST" && pendingApply) return send(res, 200, await handlers.updatePending(pendingApply[1], await readBody(req)));
       const photoLocationConfirm = pathname.match(/^\/api\/photos\/([^/]+)\/location\/confirm$/);

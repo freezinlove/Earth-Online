@@ -14,6 +14,7 @@ export interface LocalizedNames {
 export type PendingReason =
   | "missing_gps"
   | "missing_time"
+  | "ai_processing_failed"
   | "confirm_location_candidate"
   | "needs_trip_confirmation"
   | "split_suggestion"
@@ -30,7 +31,20 @@ export interface LocationCandidate {
   localizedCityNames?: LocalizedNames;
   point?: GeoPoint;
   confidence: number;
-  source: "exif" | "ai_vision" | "filename" | "geo_catalog" | "nearby_trip" | "manual" | "ai_context_inference" | "nearby_exif" | "geocode" | "existing_trip_context";
+  source:
+    | "exif"
+    | "ai_vision"
+    | "filename"
+    | "geo_catalog"
+    | "nearby_trip"
+    | "manual"
+    | "ai_context_inference"
+    | "nearby_exif"
+    | "geocode"
+    | "existing_trip_context"
+    | "manual_existing_place"
+    | "manual_new_place"
+    | "manual_archived_unlocated";
   precision?: "confirmed" | "estimated";
   reason: string;
   admin1?: string;
@@ -84,12 +98,25 @@ export interface Photo {
   placeNodeId?: ID;
   tags: string[];
   aiCaption: string;
+  userEdits?: {
+    title?: string;
+    caption?: string;
+    tags?: string[];
+    updatedAt: string;
+  };
   ai?: PhotoAiEvidence;
   locationResolution?: LocationResolution;
   aiProvider?: "qwen" | "qwen-mock" | "mock";
   embeddingProvider?: "qwen" | "deterministic";
   embeddingDimension?: number;
   aiFallbackReason?: string;
+  aiFailure?: {
+    vision?: string;
+    embedding?: string;
+    hasRealExifGps: boolean;
+    hasRealExifTime: boolean;
+    updatedAt: string;
+  };
   exifStatus?: {
     time: "read" | "fallback" | "missing";
     gps: "read" | "fallback" | "missing";
@@ -236,6 +263,10 @@ export type PendingProposal =
       action: "keep_pending";
       confidence: number;
       reason: string;
+    }
+  | {
+      action: "resolve_ai_processing_failed";
+      photoIds: ID[];
     };
 
 export interface GlobeMarker {

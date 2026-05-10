@@ -1,4 +1,4 @@
-import { Check, Circle, Clock3, FileImage, FolderOpen, ImagePlus, LoaderCircle, MapPin, RotateCcw, Sparkles, X } from "lucide-react";
+import { AlertTriangle, Check, Circle, Clock3, FileImage, FolderOpen, ImagePlus, LoaderCircle, MapPin, PencilLine, RotateCcw, Sparkles, X } from "lucide-react";
 import type { ChangeEvent, DragEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -42,6 +42,15 @@ type MissingPreview = {
   pending?: PendingItem;
 };
 
+type AiFailurePreview = {
+  id: string;
+  label: string;
+  error: string;
+  hasRealExifGps: boolean;
+  photo: Photo;
+  pending?: PendingItem;
+};
+
 type MissingTargetDisplay = {
   label: string;
   badge?: string;
@@ -81,6 +90,7 @@ function bestCandidate(photo: Photo) {
 }
 
 function needsGps(photo: Photo) {
+  if (!photo.pendingReason && photo.locationResolution?.source === "manual_archived_unlocated") return false;
   return photo.pendingReason === "missing_gps" || photo.exifStatus?.gps === "missing" || photo.locationResolution?.status === "missing";
 }
 
@@ -92,8 +102,31 @@ function hasMissingInfo(photo: Photo) {
   return needsGps(photo) || needsTime(photo);
 }
 
+function hasAiFailure(photo: Photo) {
+  return Boolean(photo.aiFailure?.vision || photo.aiFailure?.embedding || photo.pendingReason === "ai_processing_failed");
+}
+
 function isMissingInfoPending(item: PendingItem) {
   return item.type === "missing_gps" || item.type === "missing_time" || item.type === "confirm_location_candidate";
+}
+
+function isAiFailurePending(item: PendingItem) {
+  return item.type === "ai_processing_failed";
+}
+
+function aiFailureLabel(photo: Photo, t: (key: MessageKey) => string) {
+  const vision = Boolean(photo.aiFailure?.vision);
+  const embedding = Boolean(photo.aiFailure?.embedding);
+  if (vision && embedding) return t("aiBothFailed");
+  if (vision) return t("aiVisionFailed");
+  if (embedding) return t("embeddingFailed");
+  return t("aiProcessingFailed");
+}
+
+function aiFailureError(photo: Photo) {
+  return [photo.aiFailure?.vision ? `AI Vision: ${photo.aiFailure.vision}` : undefined, photo.aiFailure?.embedding ? `Embedding: ${photo.aiFailure.embedding}` : undefined]
+    .filter(Boolean)
+    .join("；");
 }
 
 function photoSuggestionTarget(photo: Photo) {
@@ -184,7 +217,7 @@ function buildTripPreview({
   if (!batch) return [];
   const importedPhotoIds = new Set(batch.addedPhotoIds);
   const importedPhotos = photos.filter((photo) => importedPhotoIds.has(photo.id));
-  const archivablePhotos = importedPhotos.filter((photo) => !hasMissingInfo(photo));
+  const archivablePhotos = importedPhotos.filter((photo) => !hasMissingInfo(photo) && !hasAiFailure(photo));
   const createdTripIds = new Set(batch.createdTripIds);
   const tripIds = new Set(archivablePhotos.map((photo) => photo.tripId).filter((id): id is string => Boolean(id)));
 
@@ -243,34 +276,46 @@ function groupMissingPreviews(batch: ImportBatch | undefined, photos: Photo[], p
     }
   }
 
-  const groups = new Map<string, MissingPreview>();
-  for (const photo of imported) {
+  return imported
+    .map<MissingPreview | undefined>((photo) => {
     const gps = needsGps(photo);
     const time = needsTime(photo);
-    if (!gps && !time) continue;
+      if (hasAiFailure(photo) || (!gps && !time)) return undefined;
 
     const target = gps && time ? `${photoSuggestionTarget(photo)} · ${shortDate(photo.capturedAt)}` : gps ? photoSuggestionTarget(photo) : shortDate(photo.capturedAt);
     const icon = gps && time ? "⌖◷" : gps ? "⌖" : "◷";
-    const key = `${icon}-${target}`;
     const candidate = bestCandidate(photo);
-    const existing = groups.get(key);
-    if (existing) {
-      existing.photos.push(photo);
-      existing.confidence = Math.max(existing.confidence ?? 0, candidate?.confidence ?? photo.locationResolution?.confidence ?? 0);
-    } else {
-      groups.set(key, {
-        id: key,
+      return {
+        id: photo.id,
         icon,
         label: gps && time ? t("missingGpsTime") : gps ? t("missingGps") : t("missingTime"),
         target,
         photos: [photo],
         confidence: candidate?.confidence ?? photo.locationResolution?.confidence,
         pending: pendingByPhoto.get(photo.id),
-      });
-    }
-  }
+      };
+    })
+    .filter((item): item is MissingPreview => Boolean(item));
+}
 
-  return [...groups.values()];
+function groupAiFailurePreviews(batch: ImportBatch | undefined, photos: Photo[], pendingItems: PendingItem[], t: (key: MessageKey) => string): AiFailurePreview[] {
+  if (!batch) return [];
+  const importedIds = new Set(batch.addedPhotoIds);
+  const pendingByPhoto = new Map<string, PendingItem>();
+  for (const item of pendingItems) {
+    if (!batch.pendingItemIds.includes(item.id) || item.status !== "open" || !isAiFailurePending(item)) continue;
+    for (const photoId of item.relatedPhotoIds) pendingByPhoto.set(photoId, item);
+  }
+  return photos
+    .filter((photo) => importedIds.has(photo.id) && pendingByPhoto.has(photo.id))
+    .map((photo) => ({
+      id: photo.id,
+      label: aiFailureLabel(photo, t),
+      error: aiFailureError(photo) || pendingByPhoto.get(photo.id)?.reason || t("failed"),
+      hasRealExifGps: Boolean(photo.aiFailure?.hasRealExifGps || photo.exifStatus?.gps === "read"),
+      photo,
+      pending: pendingByPhoto.get(photo.id),
+    }));
 }
 
 function PhotoStrip({
@@ -391,9 +436,11 @@ function MissingSuggestions({
   groups,
   inferFeedback,
   inferringIds,
+  acceptingIds,
   selectedPhotoId,
   onAccept,
   onInfer,
+  onManual,
   onOpenPreview,
   onReject,
   onSelectPhoto,
@@ -402,25 +449,53 @@ function MissingSuggestions({
   groups: MissingPreview[];
   inferFeedback: Record<string, InferFeedback>;
   inferringIds: Set<string>;
+  acceptingIds: Set<string>;
   selectedPhotoId?: string;
   onAccept: (item?: PendingItem) => void;
   onInfer: (item?: PendingItem) => void;
+  onManual: (item?: PendingItem) => void;
   onOpenPreview: (photo: Photo) => void;
   onReject: (photoIds: string[]) => void;
   onSelectPhoto: (photoId: string) => void;
   t: (key: MessageKey) => string;
 }) {
   if (!groups.length) return null;
+  const allPhotoIds = groups.flatMap((group) => group.photos.map((photo) => photo.id));
+  const inferableItems = Array.from(
+    new Map(
+      groups
+        .map((group) => group.pending)
+        .filter((item): item is PendingItem => Boolean(item))
+        .map((item) => [item.id, item]),
+    ).values(),
+  );
+  const hasInferable = inferableItems.some((item) => !inferringIds.has(item.id));
 
   return (
     <section className="import-missing" aria-label={t("pendingSuggestions")}>
       <div className="import-missing-heading">
         <span>{t("pendingInfo")}</span>
         <small>{groups.reduce((count, group) => count + group.photos.length, 0)} {t("photoCount")}</small>
+        <div className="import-missing-heading-actions">
+          <button onClick={() => onReject(allPhotoIds)} disabled={!allPhotoIds.length} title={t("cancelImport")} type="button">
+            <X size={14} />
+          </button>
+          <button
+            onClick={() => inferableItems.forEach((item) => {
+              if (!inferringIds.has(item.id)) onInfer(item);
+            })}
+            disabled={!hasInferable}
+            title={t("aiSecondInference")}
+            type="button"
+          >
+            <Sparkles size={14} />
+          </button>
+        </div>
       </div>
       <div className="import-missing-list">
         {groups.map((group) => {
           const isInferring = Boolean(group.pending && inferringIds.has(group.pending.id));
+          const isAccepting = Boolean(group.pending && acceptingIds.has(group.pending.id));
           const actionable = Boolean(group.pending?.proposal && group.pending.proposal.action !== "keep_pending");
           const suggestedTarget = pendingProposalTarget(group.pending, group.target);
           const feedback = group.pending ? inferFeedback[group.pending.id] : undefined;
@@ -451,9 +526,12 @@ function MissingSuggestions({
               <button className="import-inline-infer" onClick={() => onInfer(group.pending)} disabled={!group.pending || isInferring} title={t("aiSecondInference")} type="button" data-tooltip={t("aiSecondInference")}>
                 {isInferring ? <LoaderCircle className="animate-spin" size={13} /> : <Sparkles size={13} />}
               </button>
+              <button className="import-inline-manual" onClick={() => onManual(group.pending)} disabled={!group.pending || isAccepting} title={t("manualResolve")} type="button">
+                <PencilLine size={13} />
+              </button>
               {actionable ? (
-                <button className="import-inline-confirm" onClick={() => onAccept(group.pending)} title={t("confirmSuggestion")} type="button">
-                  <Check size={14} />
+                <button className="import-inline-confirm" onClick={() => onAccept(group.pending)} disabled={isAccepting} title={t("confirmSuggestion")} type="button">
+                  {isAccepting ? <LoaderCircle className="animate-spin" size={13} /> : <Check size={14} />}
                 </button>
               ) : null}
               {feedback?.message ? (
@@ -468,6 +546,207 @@ function MissingSuggestions({
         })}
       </div>
     </section>
+  );
+}
+
+function AiFailureSuggestions({
+  failures,
+  acceptingIds,
+  selectedPhotoId,
+  onManual,
+  onOpenPreview,
+  onReject,
+  onResolve,
+  onSelectPhoto,
+  t,
+}: {
+  failures: AiFailurePreview[];
+  acceptingIds: Set<string>;
+  selectedPhotoId?: string;
+  onManual: (item?: PendingItem) => void;
+  onOpenPreview: (photo: Photo) => void;
+  onReject: (photoIds: string[]) => void;
+  onResolve: (item: PendingItem | undefined, action: "retry_vision" | "retry_embedding" | "retry_both" | "archive_exif") => void;
+  onSelectPhoto: (photoId: string) => void;
+  t: (key: MessageKey) => string;
+}) {
+  if (!failures.length) return null;
+
+  return (
+    <section className="import-missing import-ai-failures" aria-label={t("aiProcessingFailures")}>
+      <div className="import-missing-heading">
+        <span>{t("aiProcessingFailures")}</span>
+        <small>{failures.length} {t("photoCount")}</small>
+      </div>
+      <div className="import-missing-list">
+        {failures.map((failure) => {
+          const isBusy = Boolean(failure.pending && acceptingIds.has(failure.pending.id));
+          const canRetryVision = Boolean(failure.photo.aiFailure?.vision);
+          const canRetryEmbedding = Boolean(failure.photo.aiFailure?.embedding);
+          return (
+            <div key={failure.id} className="import-missing-row" title={failure.error}>
+              <PhotoStrip photos={[failure.photo]} selectedPhotoId={selectedPhotoId} onOpenPreview={onOpenPreview} onSelect={onSelectPhoto} t={t} />
+              <span className="import-missing-field">{failure.label}</span>
+              <span className="import-ai-suggest" data-status={t("failed")}>
+                <AlertTriangle size={13} />
+                {failure.hasRealExifGps ? t("hasRealExifGps") : t("noRealExifGps")}
+              </span>
+              <strong className="import-missing-target">
+                <span>{failure.photo.title ?? failure.photo.fileName}</span>
+                <em>{failure.hasRealExifGps ? "EXIF" : t("undecided")}</em>
+              </strong>
+              <button className="import-inline-cancel" onClick={() => onReject([failure.photo.id])} title={t("cancelImport")} type="button">
+                <X size={13} />
+              </button>
+              {canRetryVision && canRetryEmbedding ? (
+                <button className="import-inline-infer" onClick={() => onResolve(failure.pending, "retry_both")} disabled={!failure.pending || isBusy} title={t("retryBothAi")} type="button">
+                  {isBusy ? <LoaderCircle className="animate-spin" size={13} /> : <Sparkles size={13} />}
+                </button>
+              ) : null}
+              {canRetryVision && !canRetryEmbedding ? (
+                <button className="import-inline-infer" onClick={() => onResolve(failure.pending, "retry_vision")} disabled={!failure.pending || isBusy} title={t("retryAiVision")} type="button">
+                  {isBusy ? <LoaderCircle className="animate-spin" size={13} /> : <Sparkles size={13} />}
+                </button>
+              ) : null}
+              {canRetryEmbedding && !canRetryVision ? (
+                <button className="import-inline-infer" onClick={() => onResolve(failure.pending, "retry_embedding")} disabled={!failure.pending || isBusy} title={t("retryEmbedding")} type="button">
+                  {isBusy ? <LoaderCircle className="animate-spin" size={13} /> : <Circle size={13} />}
+                </button>
+              ) : null}
+              {failure.hasRealExifGps ? (
+                <button className="import-inline-confirm" onClick={() => onResolve(failure.pending, "archive_exif")} disabled={!failure.pending || isBusy} title={t("archiveByExif")} type="button">
+                  <MapPin size={14} />
+                </button>
+              ) : null}
+              <button className="import-inline-manual" onClick={() => onManual(failure.pending)} disabled={!failure.pending || isBusy} title={t("manualResolve")} type="button">
+                <PencilLine size={13} />
+              </button>
+              <span className="import-infer-note" data-status="error">{failure.error}</span>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function ManualPendingResolutionModal({
+  item,
+  locale,
+  photos,
+  places,
+  busy,
+  initialName,
+  initialMode,
+  pickedPoint,
+  onClose,
+  onPickPoint,
+  onSubmit,
+  t,
+}: {
+  item: PendingItem;
+  locale: ReturnType<typeof useI18n>["locale"];
+  photos: Photo[];
+  places: PlaceNode[];
+  busy: boolean;
+  initialName?: string;
+  initialMode?: "bind" | "new" | "archive";
+  pickedPoint?: { lat: number; lng: number; nearestLabel?: string };
+  onClose: () => void;
+  onPickPoint: (pendingId: string, name: string) => void;
+  onSubmit: (body: { action: "bind_existing_place"; placeId: string } | { action: "create_manual_place"; name: string; lat: number; lng: number } | { action: "archive_unlocated" }) => void;
+  t: (key: MessageKey) => string;
+}) {
+  const relatedPhotos = photos.filter((photo) => item.relatedPhotoIds.includes(photo.id));
+  const primaryPhoto = relatedPhotos[0];
+  const tripId = item.relatedTripId ?? primaryPhoto?.tripId;
+  const tripPlaces = places.filter((place) => place.tripId === tripId);
+  const [mode, setMode] = useState<"bind" | "new" | "archive">("bind");
+  const [placeId, setPlaceId] = useState(tripPlaces[0]?.id ?? "");
+  const [name, setName] = useState(initialName ?? primaryPhoto?.title ?? primaryPhoto?.fileName ?? "");
+
+  useEffect(() => {
+    setPlaceId(tripPlaces[0]?.id ?? "");
+    setName(initialName ?? primaryPhoto?.title ?? primaryPhoto?.fileName ?? "");
+    setMode(initialMode ?? (tripPlaces.length ? "bind" : "new"));
+  }, [initialMode, initialName, item.id]);
+
+  const submit = () => {
+    if (mode === "bind") {
+      if (placeId) onSubmit({ action: "bind_existing_place", placeId });
+      return;
+    }
+    if (mode === "new") {
+      if (!pickedPoint) return;
+      onSubmit({ action: "create_manual_place", name, lat: pickedPoint.lat, lng: pickedPoint.lng });
+      return;
+    }
+    onSubmit({ action: "archive_unlocated" });
+  };
+
+  return (
+    <div className="manual-pending-modal" role="dialog" aria-modal="true" onMouseDown={onClose}>
+      <section className="manual-pending-shell" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="manual-pending-media">
+          {primaryPhoto ? <img src={primaryPhoto.storageUrl ?? primaryPhoto.thumbnailUrl} alt={photoAltText(primaryPhoto)} /> : null}
+        </div>
+        <div className="manual-pending-copy">
+          <div className="manual-pending-heading">
+            <h3>{t("manualResolve")}</h3>
+            <button className="manual-pending-close" onClick={onClose} type="button" aria-label={t("closePreview")}>
+              <X size={18} />
+            </button>
+          </div>
+
+          <div className="manual-pending-tabs">
+            <button type="button" data-active={mode === "bind" || undefined} onClick={() => setMode("bind")} disabled={!tripPlaces.length}>{t("manualMergeExisting")}</button>
+            <button type="button" data-active={mode === "new" || undefined} onClick={() => setMode("new")}>{t("manualCreatePlace")}</button>
+            <button type="button" data-active={mode === "archive" || undefined} onClick={() => setMode("archive")}>{t("manualArchiveOnly")}</button>
+          </div>
+
+          {mode === "bind" ? (
+            <label className="manual-pending-field">
+              <span>{t("places")}</span>
+              <select value={placeId} onChange={(event) => setPlaceId(event.target.value)}>
+                {tripPlaces.map((place) => (
+                  <option key={place.id} value={place.id}>{placeLabel(place, locale)}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+
+          {mode === "new" ? (
+            <div className="manual-pending-grid manual-pending-grid-pick">
+              <label className="manual-pending-field">
+                <span>{t("placeName")}</span>
+                <input value={name} onChange={(event) => setName(event.target.value)} />
+              </label>
+              <div className="manual-pending-field">
+                <span>{t("mapPoint")}</span>
+                <button className="manual-pending-pick-button" type="button" onClick={() => onPickPoint(item.id, name)}>
+                  <MapPin size={15} />
+                  {pickedPoint ? t("reselectOnGlobe") : t("pickOnGlobe")}
+                </button>
+              </div>
+              <div className="manual-pending-picked">
+                <span>{pickedPoint ? t("nearestPlace") : t("noMapPointPicked")}</span>
+                <strong>{pickedPoint ? pickedPoint.nearestLabel ?? t("noGeodataPlaceFound") : t("noMapPointPicked")}</strong>
+              </div>
+            </div>
+          ) : null}
+
+          {mode === "archive" ? <p className="manual-pending-note">{t("manualArchiveOnlyNote")}</p> : null}
+
+          <div className="manual-pending-actions">
+            <button type="button" onClick={onClose}>{t("cancel")}</button>
+            <button type="button" onClick={submit} disabled={busy || (mode === "bind" && !placeId) || (mode === "new" && !pickedPoint)}>
+              {busy ? <LoaderCircle className="animate-spin" size={15} /> : <Check size={15} />}
+              {t("save")}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -486,14 +765,22 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
   const rollbackLatestImport = useAppStore((state) => state.rollbackLatestImport);
   const cancelPendingImportPhotos = useAppStore((state) => state.cancelPendingImportPhotos);
   const inferPendingLocation = useAppStore((state) => state.inferPendingLocation);
+  const resolveImportAiFailure = useAppStore((state) => state.resolveImportAiFailure);
   const acknowledgePendingItem = useAppStore((state) => state.acknowledgePendingItem);
+  const resolvePendingManually = useAppStore((state) => state.resolvePendingManually);
+  const manualPlacePick = useAppStore((state) => state.manualPlacePick);
+  const openManualPlacePick = useAppStore((state) => state.openManualPlacePick);
+  const closeManualPlacePick = useAppStore((state) => state.closeManualPlacePick);
+  const startManualPlacePick = useAppStore((state) => state.startManualPlacePick);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [selectedPhotoId, setSelectedPhotoId] = useState<string>();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [inferringIds, setInferringIds] = useState<Set<string>>(() => new Set());
+  const [acceptingIds, setAcceptingIds] = useState<Set<string>>(() => new Set());
   const [inferFeedback, setInferFeedback] = useState<Record<string, InferFeedback>>({});
   const [previewPhoto, setPreviewPhoto] = useState<Photo>();
+  const [manualPending, setManualPending] = useState<PendingItem>();
   const [isPreviewClosing, setIsPreviewClosing] = useState(false);
   const lastBatch = importBatches[importBatches.length - 1];
   const latestBatch = lastBatch?.status === "rolled_back" ? undefined : lastBatch;
@@ -506,10 +793,12 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
   const progressSteps = useMemo(() => buildProgressSteps({ importProgress, isImporting, latestBatch, t }), [importProgress, isImporting, latestBatch, t]);
   const tripPreviews = useMemo(() => buildTripPreview({ batch: latestBatch, photos, placeNodes, trips, locale, t }), [latestBatch, photos, placeNodes, trips, locale, t]);
   const missingGroups = useMemo(() => groupMissingPreviews(latestBatch, photos, pendingItems, t), [latestBatch, pendingItems, photos, t]);
-  const canConfirm = isPendingBatch(latestBatch) && missingGroups.length === 0 && !isSubmitting;
+  const aiFailureGroups = useMemo(() => groupAiFailurePreviews(latestBatch, photos, pendingItems, t), [latestBatch, pendingItems, photos, t]);
+  const canConfirm = isPendingBatch(latestBatch) && missingGroups.length === 0 && aiFailureGroups.length === 0 && !isSubmitting;
   const canRollback = isPendingBatch(latestBatch) && !isSubmitting;
   const summaryTrips = tripPreviews.length;
   const summaryPlaces = tripPreviews.reduce((count, trip) => count + trip.places.length, 0);
+  const activeManualPending = manualPending ?? (manualPlacePick ? pendingItems.find((item) => item.id === manualPlacePick.pendingId) : undefined);
   const openPhotoPreview = useCallback((photo: Photo) => {
     setIsPreviewClosing(false);
     setPreviewPhoto(photo);
@@ -577,7 +866,54 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
 
   const acceptPending = async (item?: PendingItem) => {
     if (!item) return;
-    await acknowledgePendingItem(item.id, true);
+    setAcceptingIds((ids) => new Set(ids).add(item.id));
+    setInferFeedback((feedback) => {
+      const next = { ...feedback };
+      delete next[item.id];
+      return next;
+    });
+    try {
+      await acknowledgePendingItem(item.id, true);
+    } catch (error) {
+      setInferFeedback((feedback) => ({
+        ...feedback,
+        [item.id]: { status: "error", message: error instanceof Error ? error.message : t("failed") },
+      }));
+    } finally {
+      setAcceptingIds((ids) => {
+        const next = new Set(ids);
+        next.delete(item.id);
+        return next;
+      });
+    }
+  };
+
+  const resolveManualPending = async (
+    item: PendingItem,
+    body: { action: "bind_existing_place"; placeId: string } | { action: "create_manual_place"; name: string; lat: number; lng: number } | { action: "archive_unlocated" },
+  ) => {
+    setAcceptingIds((ids) => new Set(ids).add(item.id));
+    setInferFeedback((feedback) => {
+      const next = { ...feedback };
+      delete next[item.id];
+      return next;
+    });
+    try {
+      await resolvePendingManually(item.id, body);
+      setManualPending(undefined);
+      closeManualPlacePick();
+    } catch (error) {
+      setInferFeedback((feedback) => ({
+        ...feedback,
+        [item.id]: { status: "error", message: error instanceof Error ? error.message : t("failed") },
+      }));
+    } finally {
+      setAcceptingIds((ids) => {
+        const next = new Set(ids);
+        next.delete(item.id);
+        return next;
+      });
+    }
   };
 
   const inferPending = async (item?: PendingItem) => {
@@ -601,6 +937,25 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
       }));
     } finally {
       setInferringIds((ids) => {
+        const next = new Set(ids);
+        next.delete(item.id);
+        return next;
+      });
+    }
+  };
+
+  const resolveAiFailure = async (item: PendingItem | undefined, action: "retry_vision" | "retry_embedding" | "retry_both" | "archive_exif") => {
+    if (!item) return;
+    setAcceptingIds((ids) => new Set(ids).add(item.id));
+    try {
+      await resolveImportAiFailure(item.id, action);
+    } catch (error) {
+      setInferFeedback((feedback) => ({
+        ...feedback,
+        [item.id]: { status: "error", message: error instanceof Error ? error.message : t("failed") },
+      }));
+    } finally {
+      setAcceptingIds((ids) => {
         const next = new Set(ids);
         next.delete(item.id);
         return next;
@@ -692,11 +1047,31 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
             groups={missingGroups}
             inferFeedback={inferFeedback}
             inferringIds={inferringIds}
+            acceptingIds={acceptingIds}
             selectedPhotoId={selectedPhotoId}
             onAccept={(item) => void acceptPending(item)}
             onInfer={(item) => void inferPending(item)}
+            onManual={(item) => {
+              setManualPending(item);
+              if (item) openManualPlacePick(item.id, photos.find((photo) => item.relatedPhotoIds.includes(photo.id))?.title ?? photos.find((photo) => item.relatedPhotoIds.includes(photo.id))?.fileName ?? "");
+            }}
             onOpenPreview={openPhotoPreview}
             onReject={(photoIds) => void cancelPendingImportPhotos(photoIds)}
+            onSelectPhoto={setSelectedPhotoId}
+            t={t}
+          />
+
+          <AiFailureSuggestions
+            failures={aiFailureGroups}
+            acceptingIds={acceptingIds}
+            selectedPhotoId={selectedPhotoId}
+            onManual={(item) => {
+              setManualPending(item);
+              if (item) openManualPlacePick(item.id, photos.find((photo) => item.relatedPhotoIds.includes(photo.id))?.title ?? photos.find((photo) => item.relatedPhotoIds.includes(photo.id))?.fileName ?? "");
+            }}
+            onOpenPreview={openPhotoPreview}
+            onReject={(photoIds) => void cancelPendingImportPhotos(photoIds)}
+            onResolve={(item, action) => void resolveAiFailure(item, action)}
             onSelectPhoto={setSelectedPhotoId}
             t={t}
           />
@@ -725,6 +1100,30 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
       </div>
     </section>
     {photoPreview ? createPortal(photoPreview, document.body) : null}
+    {activeManualPending ? createPortal(
+      <ManualPendingResolutionModal
+        item={activeManualPending}
+        locale={locale}
+        photos={photos}
+        places={placeNodes}
+        busy={acceptingIds.has(activeManualPending.id)}
+        initialName={manualPlacePick?.pendingId === activeManualPending.id ? manualPlacePick.name : undefined}
+        initialMode={manualPlacePick?.pendingId === activeManualPending.id ? manualPlacePick.mode : undefined}
+        pickedPoint={
+          manualPlacePick?.pendingId === activeManualPending.id && manualPlacePick.point
+            ? { ...manualPlacePick.point, nearestLabel: manualPlacePick.nearestLabel }
+            : undefined
+        }
+        onClose={() => {
+          setManualPending(undefined);
+          closeManualPlacePick();
+        }}
+        onPickPoint={(pendingId, name) => startManualPlacePick(pendingId, name)}
+        onSubmit={(body) => void resolveManualPending(activeManualPending, body)}
+        t={t}
+      />,
+      document.body,
+    ) : null}
     </>
   );
 }

@@ -25,12 +25,12 @@ export function tripLabel(trip?: Pick<Trip, "title">) {
   return trip?.title ?? "未命名旅行";
 }
 
-export function photoLabel(photo?: Pick<Photo, "fileName" | "title">) {
-  return photo?.title ?? photo?.fileName ?? "未命名照片";
+export function photoLabel(photo?: Pick<Photo, "fileName" | "title" | "userEdits">) {
+  return photo?.userEdits?.title ?? photo?.title ?? photo?.fileName ?? "未命名照片";
 }
 
-export function photoAltText(photo?: Pick<Photo, "aiCaption" | "fileName" | "title">) {
-  return photo?.title ?? photo?.aiCaption ?? photo?.fileName ?? "旅行照片";
+export function photoAltText(photo?: Pick<Photo, "aiCaption" | "fileName" | "title" | "userEdits">) {
+  return photo?.userEdits?.title ?? photo?.title ?? photo?.userEdits?.caption ?? photo?.aiCaption ?? photo?.fileName ?? "旅行照片";
 }
 
 export function searchLocationLabels(document?: Pick<SearchDocument, "locationNames">) {

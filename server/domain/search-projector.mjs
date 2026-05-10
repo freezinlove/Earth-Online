@@ -66,12 +66,12 @@ export function buildSearchDocuments(state) {
       tripId: photo.tripId,
       placeNodeId: photo.placeNodeId,
       capturedAt: photo.capturedAt,
-      tags: photo.tags ?? [],
+      tags: photo.userEdits?.tags ?? photo.tags ?? [],
       locationNames: Array.from(new Set(locationNames)),
       geoKeywords: Array.from(new Set(geoKeywords)),
-      titleText: photo.title ?? "",
-      tagText: (photo.tags ?? []).join(" "),
-      captionText: photo.aiCaption ?? ai?.caption ?? "",
+      titleText: photo.userEdits?.title ?? photo.title ?? "",
+      tagText: (photo.userEdits?.tags ?? photo.tags ?? []).join(" "),
+      captionText: photo.userEdits?.caption ?? photo.aiCaption ?? ai?.caption ?? "",
     };
   });
 }

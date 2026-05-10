@@ -160,6 +160,7 @@ function applyProposal(state, proposal) {
   if (proposal.action === "confirm_trip_assignment") return confirmTripAssignment(state, proposal);
   if (proposal.action === "merge_trips") return mergeTrips(state, proposal);
   if (proposal.action === "keep_pending") return state;
+  if (proposal.action === "resolve_ai_processing_failed") return state;
   return state;
 }
 

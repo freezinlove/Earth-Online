@@ -107,7 +107,15 @@ function inferPhotoCountry(photo, place, trip) {
   if (place?.country && place.country !== "待确认") return place.country;
   const candidateCountry = strongestCandidateCountry(photo, place);
   if (candidateCountry) return candidateCountry;
-  const text = [place?.name, place?.displayName, photo.locationResolution?.effectiveName, photo.title, photo.fileName, photo.aiCaption, ...(photo.tags ?? [])]
+  const text = [
+    place?.name,
+    place?.displayName,
+    photo.locationResolution?.effectiveName,
+    photo.userEdits?.title ?? photo.title,
+    photo.fileName,
+    photo.userEdits?.caption ?? photo.aiCaption,
+    ...(photo.userEdits?.tags ?? photo.tags ?? []),
+  ]
     .filter(Boolean)
     .join(" ");
   const direct = trip.countries?.find((country) => text.includes(country));

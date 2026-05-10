@@ -9,6 +9,7 @@ import { createStateService } from "./application/state-service.mjs";
 import { dataDir, dbPath, distDir, importJobDir, photoDir, port, rootDir, thumbDir, vectorPath } from "./config/paths.mjs";
 import { createSecretProvider } from "./config/secrets.mjs";
 import { createRouter } from "./http/router.mjs";
+import { reverseLocalGeocode } from "./domain/local-geocoder.mjs";
 import { EarthRepository } from "./repository.mjs";
 import { servePhoto, serveStatic } from "./storage/file-storage.mjs";
 const repository = new EarthRepository({ dataDir, dbJsonPath: dbPath });
@@ -53,6 +54,13 @@ const importServices = createImportServices({
 const searchServices = createSearchService({ readState, readVectorIndex, embedSearchQuery, rootDir, secretProvider });
 const settingsServices = createSettingsService({ secretProvider });
 
+function reverseGeocode(params) {
+  const lat = Number(params.get("lat"));
+  const lng = Number(params.get("lng"));
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return { candidates: [] };
+  return { candidates: reverseLocalGeocode({ lat, lng }, { preferCity: true }) };
+}
+
 const server = http.createServer(
   createRouter(
     {
@@ -60,6 +68,7 @@ const server = http.createServer(
       secretProvider,
       ...searchServices,
       ...settingsServices,
+      reverseGeocode,
       ...importServices,
       ...editServices,
       servePhoto,

@@ -185,6 +185,15 @@ export function createEditServices({ readState, readVectorIndex, writeState, wri
     const lat = body.location?.lat === "" || body.location?.lat === undefined ? undefined : Number(body.location.lat);
     const lng = body.location?.lng === "" || body.location?.lng === undefined ? undefined : Number(body.location.lng);
     const hasLocation = Number.isFinite(lat) && Number.isFinite(lng);
+    const userEdits =
+      body.userEdits && typeof body.userEdits === "object"
+        ? {
+            title: typeof body.userEdits.title === "string" ? body.userEdits.title.trim() : undefined,
+            caption: typeof body.userEdits.caption === "string" ? body.userEdits.caption.trim() : undefined,
+            tags: Array.isArray(body.userEdits.tags) ? body.userEdits.tags.map(String).map((tag) => tag.trim()).filter(Boolean) : undefined,
+            updatedAt: new Date().toISOString(),
+          }
+        : undefined;
     const patched = {
       ...state,
       photos: state.photos.map((photo) =>
@@ -194,6 +203,13 @@ export function createEditServices({ readState, readVectorIndex, writeState, wri
               capturedAt: body.capturedAt === "" ? undefined : body.capturedAt ?? photo.capturedAt,
               location: body.location === undefined ? photo.location : hasLocation ? { lat, lng } : undefined,
               tags: Array.isArray(body.tags) ? body.tags.map(String).filter(Boolean) : photo.tags,
+              userEdits:
+                userEdits === undefined
+                  ? photo.userEdits
+                  : {
+                      ...(photo.userEdits ?? {}),
+                      ...userEdits,
+                    },
               pendingReason: hasLocation && (body.capturedAt ?? photo.capturedAt) ? undefined : photo.pendingReason,
             }
           : photo,
@@ -231,6 +247,163 @@ export function createEditServices({ readState, readVectorIndex, writeState, wri
     const rebuilt = body.accepted ? rebuildTripsForPhotos(applied, new Set(pending?.relatedPhotoIds ?? []), { makeId }) : applied;
     await writeState(rebuilt);
     return responseState();
+  }
+
+  async function resolvePendingManually(id, body = {}) {
+    const state = await readState();
+    const pending = state.pendingItems.find((item) => item.id === id);
+    if (!pending || !["missing_gps", "missing_time", "confirm_location_candidate", "ai_processing_failed"].includes(pending.type)) return responseState();
+    const photoIds = pending.relatedPhotoIds ?? [];
+    if (!photoIds.length) return responseState();
+    const photos = state.photos.filter((photo) => photoIds.includes(photo.id));
+    const primaryPhoto = photos[0];
+    const tripId = pending.relatedTripId ?? primaryPhoto?.tripId;
+    if (!primaryPhoto || !tripId) return responseState();
+    const now = new Date().toISOString();
+    let patched = state;
+
+    if (body.action === "bind_existing_place") {
+      const place = state.placeNodes.find((item) => item.id === body.placeId);
+      if (!place) throw new Error("请选择一个已有地点。");
+      patched = {
+        ...state,
+        photos: state.photos.map((photo) =>
+          photoIds.includes(photo.id)
+            ? {
+                ...photo,
+                tripId: place.tripId,
+                placeNodeId: place.id,
+                location: place.center,
+                aiFailure: undefined,
+                pendingReason: undefined,
+                exifStatus: clearManualExifStatus(photo, { gps: "fallback" }),
+                locationResolution: {
+                  ...(photo.locationResolution ?? {}),
+                  status: "confirmed",
+                  effectiveName: place.displayName ?? place.name,
+                  effectivePoint: place.center,
+                  confidence: 1,
+                  source: "manual_existing_place",
+                  candidates: photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? [],
+                  requiresUserAction: false,
+                  updatedAt: now,
+                },
+              }
+            : photo,
+        ),
+        pendingItems: acceptRelatedMissingPendingItems(state.pendingItems, pending, photoIds),
+      };
+      await writeState(rebuildTrips(patched, new Set([tripId, place.tripId].filter(Boolean)), { makeId }));
+      return responseState();
+    }
+
+    if (body.action === "create_manual_place") {
+      const lat = Number(body.lat);
+      const lng = Number(body.lng);
+      const name = String(body.name ?? "").trim();
+      if (!name) throw new Error("请输入地点名。");
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new Error("请输入有效经纬度。");
+      const point = { lat, lng };
+      const placeId = makeId("manual-place");
+      const dates = photos.map((photo) => photo.capturedAt).filter(Boolean).sort();
+      const place = {
+        id: placeId,
+        tripId,
+        name,
+        displayName: name,
+        center: point,
+        coordinatePrecision: "estimated",
+        photoIds,
+        timeRange: { start: dates[0] ?? now, end: dates.at(-1) ?? dates[0] ?? now },
+        pending: false,
+      };
+      patched = {
+        ...state,
+        placeNodes: [...state.placeNodes, place],
+        photos: state.photos.map((photo) =>
+          photoIds.includes(photo.id)
+            ? {
+                ...photo,
+                tripId,
+                placeNodeId: placeId,
+                location: point,
+                aiFailure: undefined,
+                pendingReason: undefined,
+                exifStatus: clearManualExifStatus(photo, { gps: "fallback" }),
+                locationResolution: {
+                  ...(photo.locationResolution ?? {}),
+                  status: "confirmed",
+                  effectiveName: name,
+                  effectivePoint: point,
+                  confidence: 1,
+                  source: "manual_new_place",
+                  precision: "estimated",
+                  candidates: photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? [],
+                  requiresUserAction: false,
+                  updatedAt: now,
+                },
+              }
+            : photo,
+        ),
+        pendingItems: acceptRelatedMissingPendingItems(state.pendingItems, pending, photoIds),
+      };
+      await writeState(rebuildTrips(patched, new Set([tripId]), { makeId }));
+      return responseState();
+    }
+
+    if (body.action === "archive_unlocated") {
+      patched = {
+        ...state,
+        photos: state.photos.map((photo) =>
+          photoIds.includes(photo.id)
+            ? {
+                ...photo,
+                placeNodeId: undefined,
+                location: undefined,
+                aiFailure: undefined,
+                pendingReason: undefined,
+                exifStatus: clearManualExifStatus(photo, { gps: "missing" }),
+                locationResolution: {
+                  ...(photo.locationResolution ?? {}),
+                  status: "rejected",
+                  effectiveName: undefined,
+                  effectivePoint: undefined,
+                  confidence: undefined,
+                  source: "manual_archived_unlocated",
+                  candidates: photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? [],
+                  requiresUserAction: false,
+                  updatedAt: now,
+                },
+              }
+            : photo,
+        ),
+        pendingItems: acceptRelatedMissingPendingItems(state.pendingItems, pending, photoIds),
+      };
+      await writeState(rebuildTripsForPhotos(patched, new Set(photoIds), { makeId }));
+      return responseState();
+    }
+
+    throw new Error("未知的手动处理方式。");
+  }
+
+  function clearManualExifStatus(photo, overrides = {}) {
+    return {
+      ...(photo.exifStatus ?? {}),
+      time: photo.exifStatus?.time ?? (photo.capturedAt ? "read" : "missing"),
+      gps: overrides.gps ?? photo.exifStatus?.gps ?? (photo.location ? "fallback" : "missing"),
+    };
+  }
+
+  function acceptRelatedMissingPendingItems(pendingItems, pending, photoIds) {
+    const relatedPhotoIds = new Set(photoIds);
+    return pendingItems.map((item) =>
+      item.id === pending.id ||
+      (item.status === "open" &&
+        ["missing_gps", "missing_time", "confirm_location_candidate", "ai_processing_failed"].includes(item.type) &&
+        (item.relatedPhotoIds ?? []).some((photoId) => relatedPhotoIds.has(photoId)))
+        ? { ...item, status: "accepted" }
+        : item,
+    );
   }
 
   async function confirmPhotoLocation(photoId, body = {}) {
@@ -324,6 +497,7 @@ export function createEditServices({ readState, readVectorIndex, writeState, wri
     patchPhoto,
     bindPhoto,
     updatePending,
+    resolvePendingManually,
     confirmPhotoLocation,
     rejectPhotoLocation,
     tripProjection,

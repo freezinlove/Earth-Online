@@ -1,4 +1,5 @@
 import type { GlobeMarker, LocalizedNames, PlaceNode, TimelineSegment } from "@/domain/models";
+import { hasHan, zhPlaceNameOverride } from "@/domain/placeNameOverrides";
 import type { Locale } from "@/store/appStore";
 
 const countryEnByZh: Record<string, string> = {
@@ -17,14 +18,16 @@ const countryEnByZh: Record<string, string> = {
   瑞典: "Sweden",
 };
 
-function hasHan(value?: string) {
-  return /[\u4e00-\u9fff]/u.test(value ?? "");
-}
-
 export function localizedName(names: LocalizedNames | undefined, fallback: string | undefined, locale: Locale) {
   const preferred = names?.[locale];
+  if (locale === "zh" && preferred && !hasHan(preferred)) return zhPlaceNameOverride(preferred) ?? preferred;
   if (preferred) return preferred;
-  if (locale === "zh") return names?.en ?? names?.local ?? fallback ?? "未标地点";
+  if (locale === "zh") {
+    const candidates = [names?.local, fallback, names?.en];
+    const translated = candidates.map(zhPlaceNameOverride).find(Boolean);
+    if (translated) return translated;
+    return candidates.find((value) => value && hasHan(value)) ?? candidates.find(Boolean) ?? "未标地点";
+  }
   return names?.local ?? names?.zh ?? fallback ?? "Unmarked place";
 }
 

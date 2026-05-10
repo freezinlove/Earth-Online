@@ -126,8 +126,14 @@ export async function embedTravelImageAnalysis({
         embeddingDimension: result.embedding.length,
         embeddingFallbackReason: undefined,
       };
-    } catch {
-      // fall back below
+    } catch (error) {
+      const embedding = deterministicVector(text);
+      return {
+        embedding,
+        embeddingProvider: "deterministic",
+        embeddingDimension: embedding.length,
+        embeddingFallbackReason: friendlyAiError(error, "embedding provider failed"),
+      };
     }
   }
   const embedding = deterministicVector(text);
@@ -162,8 +168,14 @@ export async function embedTravelImageImage({
         embeddingDimension: result.embedding.length,
         embeddingFallbackReason: undefined,
       };
-    } catch {
-      // fall back below
+    } catch (error) {
+      const embedding = deterministicVector(fallbackText);
+      return {
+        embedding,
+        embeddingProvider: "deterministic",
+        embeddingDimension: embedding.length,
+        embeddingFallbackReason: friendlyAiError(error, "image embedding provider failed"),
+      };
     }
   }
   const embedding = deterministicVector(fallbackText);

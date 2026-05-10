@@ -3,7 +3,6 @@ import { ArchiveDrawer } from "@/features/archive/ArchiveDrawer";
 import { TripDetailPanel } from "@/features/archive/TripDetailPanel";
 import { EarthStage } from "@/features/earth/EarthStage";
 import { UploadPhotosPanel } from "@/features/import/UploadPhotosPanel";
-import { ManualEditorPanel } from "@/features/manual/ManualEditorPanel";
 import { SearchPanel } from "@/features/search/SearchPanel";
 import { SettingsPanel } from "@/features/settings/SettingsPanel";
 import { TimelineDock } from "@/features/timeline/TimelineDock";
@@ -148,7 +147,6 @@ export function App() {
       {shouldRenderUpload ? <UploadPhotosPanel isClosing={isUploadClosing} /> : null}
       {shouldRenderSearch ? <SearchPanel isClosing={isSearchClosing} /> : null}
       {shouldRenderSettings ? <SettingsPanel isClosing={isSettingsClosing} /> : null}
-      {activePanel === "manual" ? <ManualEditorPanel /> : null}
     </MainLayout>
   );
 }

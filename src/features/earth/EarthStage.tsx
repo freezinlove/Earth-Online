@@ -1,7 +1,8 @@
 import { Html, Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Archive, X } from "lucide-react";
-import { Suspense, useEffect, useMemo, useRef, useState, type PointerEvent, type WheelEvent } from "react";
+import { Archive, MapPin, X } from "lucide-react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type WheelEvent } from "react";
+import { createPortal } from "react-dom";
 import * as THREE from "three";
 import ThreeGlobe from "three-globe";
 import type { Line2, LineSegments2, OrbitControls as OrbitControlsImpl } from "three-stdlib";
@@ -271,6 +272,14 @@ function threeGlobeVector(point: GeoPoint, radius = GLOBE_RADIUS, altitude = 0) 
     scaledRadius * Math.cos(phi),
     scaledRadius * Math.sin(phi) * Math.sin(theta),
   );
+}
+
+function vectorToGeoPoint(vector: THREE.Vector3): GeoPoint {
+  const normalized = vector.clone().normalize();
+  const lat = THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(normalized.y, -1, 1)));
+  const theta = Math.atan2(normalized.z, normalized.x);
+  const lng = ((90 - THREE.MathUtils.radToDeg(theta) + 540) % 360) - 180;
+  return { lat, lng };
 }
 
 function focusQuaternion(point?: GeoPoint) {
@@ -608,9 +617,11 @@ function ThreeGlobeLayer() {
 
 function BillboardMarker({
   marker,
+  pointPicking,
   onSelect,
 }: {
   marker: TravelMarker;
+  pointPicking: boolean;
   onSelect: (marker: TravelMarker) => void;
 }) {
   const camera = useThree((state) => state.camera);
@@ -628,9 +639,10 @@ function BillboardMarker({
     if (Math.abs(opacityRef.current - lodOpacity) < 0.008) return;
     opacityRef.current = lodOpacity;
     const isInteractive =
-      marker.kind === "country"
+      !pointPicking &&
+      (marker.kind === "country"
         ? countryOpacity > MARKER_INTERACTIVE_OPACITY
-        : placeOpacity > MARKER_INTERACTIVE_OPACITY && countryOpacity <= PLACE_MARKER_INTERACTIVE_COUNTRY_OPACITY;
+        : placeOpacity > MARKER_INTERACTIVE_OPACITY && countryOpacity <= PLACE_MARKER_INTERACTIVE_COUNTRY_OPACITY);
     element.style.opacity = String(lodOpacity);
     element.style.pointerEvents = isInteractive ? "auto" : "none";
     element.dataset.interactive = String(isInteractive);
@@ -665,6 +677,34 @@ function BillboardMarker({
   );
 }
 
+function GlobePointPicker({ enabled, onPick }: { enabled: boolean; onPick: (point: GeoPoint) => void }) {
+  const pointerStart = useRef<{ x: number; y: number }>();
+
+  if (!enabled) return null;
+
+  return (
+    <mesh
+      renderOrder={30}
+      onPointerDown={(event) => {
+        pointerStart.current = { x: event.clientX, y: event.clientY };
+      }}
+      onPointerUp={(event) => {
+        const start = pointerStart.current;
+        pointerStart.current = undefined;
+        if (!start || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 6) return;
+        event.stopPropagation();
+        onPick(vectorToGeoPoint(event.object.worldToLocal(event.point.clone())));
+      }}
+      onPointerCancel={() => {
+        pointerStart.current = undefined;
+      }}
+    >
+      <sphereGeometry args={[GLOBE_RADIUS * 1.008, 96, 96]} />
+      <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+    </mesh>
+  );
+}
+
 function GlobeScene({
   markers,
   paths,
@@ -674,9 +714,11 @@ function GlobeScene({
   isAnnotationClosing,
   focusPoint,
   viewIntent,
+  pointPicking,
   onManualView,
   onOpenArchive,
   onOpenPhoto,
+  onPickPoint,
   onSelect,
 }: {
   markers: TravelMarker[];
@@ -687,9 +729,11 @@ function GlobeScene({
   isAnnotationClosing: boolean;
   focusPoint?: GeoPoint;
   viewIntent: GlobeViewIntent;
+  pointPicking: boolean;
   onManualView: () => void;
   onOpenArchive: () => void;
   onOpenPhoto: (photo: Photo) => void;
+  onPickPoint: (point: GeoPoint) => void;
   onSelect: (marker: TravelMarker) => void;
 }) {
   const groupRef = useRef<THREE.Group>(null);
@@ -754,8 +798,9 @@ function GlobeScene({
         <AssetLineLayer kind="countryLine" color={COUNTRY_BOUNDARY_LINE} baseOpacity={0.36} renderOrder={6} />
         <AssetLineLayer kind="provinceLine" color={PROVINCE_BOUNDARY_LINE} baseOpacity={0.44} renderOrder={7} />
         <TravelRouteLayer paths={paths} />
+        <GlobePointPicker enabled={pointPicking} onPick={onPickPoint} />
         {markers.map((marker) => (
-          <BillboardMarker key={marker.id} marker={marker} onSelect={onSelect} />
+          <BillboardMarker key={marker.id} marker={marker} pointPicking={pointPicking} onSelect={onSelect} />
         ))}
         <TravelMapAnnotation
           selected={selectedMarker}
@@ -834,6 +879,7 @@ function TravelMapAnnotation({
 
   const handlePhotoStripPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     event.stopPropagation();
+    if ((event.target as HTMLElement | null)?.closest(".travel-photo-thumb")) return;
     const strip = photoStripRef.current;
     if (!strip || strip.scrollWidth <= strip.clientWidth) return;
 
@@ -962,26 +1008,55 @@ function TravelMapAnnotation({
 
 function PhotoLightbox({ photo, placeName, onClose }: { photo?: Photo; placeName?: string; onClose: () => void }) {
   const { t } = useI18n();
+  const imageRef = useRef<HTMLImageElement | null>(null);
+  const [mediaWidth, setMediaWidth] = useState<number>();
+  const syncMediaWidth = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      const width = imageRef.current?.getBoundingClientRect().width;
+      if (width && Number.isFinite(width)) setMediaWidth(Math.ceil(width));
+    });
+  }, []);
+
+  useEffect(() => {
+    setMediaWidth(undefined);
+  }, [photo?.id]);
+
+  useEffect(() => {
+    if (!photo) return undefined;
+    syncMediaWidth();
+    window.addEventListener("resize", syncMediaWidth);
+    return () => window.removeEventListener("resize", syncMediaWidth);
+  }, [photo, syncMediaWidth]);
+
   if (!photo) return null;
 
-  return (
+  return createPortal(
     <div className="travel-lightbox" role="dialog" aria-modal="true" onClick={onClose}>
-      <div className="travel-lightbox-card" onClick={(event) => event.stopPropagation()}>
+      <figure
+        className="travel-lightbox-card"
+        onClick={(event) => event.stopPropagation()}
+        style={mediaWidth ? ({ "--travel-lightbox-width": `${mediaWidth}px` } as CSSProperties) : undefined}
+      >
         <button className="travel-lightbox-close" type="button" aria-label={t("closePhotoPreview")} onClick={onClose}>
-          <X size={18} />
+          <X size={26} />
         </button>
-        <img src={photo.storageUrl ?? photo.thumbnailUrl} alt={photoAltText(photo)} />
-        <div>
-          <p>{formatDate(photo.capturedAt)}</p>
-          <h3>{photoLabel(photo)}</h3>
-          <span>{placeName ?? placeLabel(undefined)}</span>
+        <div className="travel-lightbox-media">
+          <img ref={imageRef} src={photo.storageUrl ?? photo.thumbnailUrl} alt={photoAltText(photo)} onLoad={syncMediaWidth} />
+          <figcaption>
+            <strong>{photoLabel(photo)}</strong>
+            <span>{formatDate(photo.capturedAt)}</span>
+          </figcaption>
         </div>
-      </div>
-    </div>
+        <p className="travel-lightbox-caption">{photo.userEdits?.caption ?? photo.aiCaption}</p>
+        <span className="sr-only">{placeName ?? placeLabel(undefined)}</span>
+      </figure>
+    </div>,
+    document.body,
   );
 }
 
 export function EarthStage() {
+  const { t } = useI18n();
   const locale = useAppStore((state) => state.locale);
   const activePanel = useAppStore((state) => state.activePanel);
   const selectedTripId = useAppStore((state) => state.selectedTripId);
@@ -994,6 +1069,8 @@ export function EarthStage() {
   const setActivePanel = useAppStore((state) => state.setActivePanel);
   const globeViewIntent = useAppStore((state) => state.globeViewIntent);
   const setGlobeViewIntent = useAppStore((state) => state.setGlobeViewIntent);
+  const manualPlacePick = useAppStore((state) => state.manualPlacePick);
+  const finishManualPlacePick = useAppStore((state) => state.finishManualPlacePick);
   const [selectedMapItem, setSelectedMapItem] = useState<SelectedMapItem>();
   const [infoPanelClosing, setInfoPanelClosing] = useState(false);
   const [previewPhoto, setPreviewPhoto] = useState<Photo>();
@@ -1016,6 +1093,14 @@ export function EarthStage() {
   const paths = useMemo(() => routePaths(placeMarkers, activeMarker), [activeMarker, placeMarkers]);
   const previewPlace = previewPhoto?.placeNodeId ? places.find((place) => place.id === previewPhoto.placeNodeId) : undefined;
   const homeState = activePanel === "globe" ? "active" : "covered";
+  const pointPicking = Boolean(manualPlacePick?.isPicking);
+
+  const handlePickPoint = useCallback(
+    (point: GeoPoint) => {
+      void finishManualPlacePick(point);
+    },
+    [finishManualPlacePick],
+  );
 
   const transitionToMapItem = (item: Exclude<SelectedMapItem, undefined>, options: { waitForExit?: boolean } = {}) => {
     window.clearTimeout(infoPanelCloseTimer.current);
@@ -1057,6 +1142,7 @@ export function EarthStage() {
   }, [selectedMapItem?.kind, selectedPlaceId]);
 
   const handleSelect = (marker: TravelMarker) => {
+    if (pointPicking) return;
     if (selectedMapItem?.id === marker.id) {
       closeSelectedMapItem();
       return;
@@ -1069,7 +1155,14 @@ export function EarthStage() {
     <section className="home-earth-layer relative min-h-screen overflow-hidden" data-home-state={homeState}>
       <div className="pointer-events-none fixed left-1/2 top-1/2 h-[76vmin] w-[76vmin] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary-fixed/20 blur-3xl" />
       <div className="three-globe-stage fixed inset-0 z-10 h-screen w-screen">
-        <Canvas camera={{ position: [0, 0, 5.25], fov: 42, near: 0.1, far: 1000 }} dpr={[1, 2]} gl={{ antialias: true, alpha: true }} onPointerMissed={closeSelectedMapItem}>
+        <Canvas
+          camera={{ position: [0, 0, 5.25], fov: 42, near: 0.1, far: 1000 }}
+          dpr={[1, 2]}
+          gl={{ antialias: true, alpha: true }}
+          onPointerMissed={() => {
+            if (!pointPicking) closeSelectedMapItem();
+          }}
+        >
           <Suspense fallback={null}>
             <GlobeScene
               markers={markers}
@@ -1080,14 +1173,23 @@ export function EarthStage() {
               isAnnotationClosing={infoPanelClosing}
               focusPoint={focusPoint}
               viewIntent={globeViewIntent}
+              pointPicking={pointPicking}
               onManualView={() => setGlobeViewIntent({ source: "manual" })}
               onOpenArchive={() => setActivePanel("tripDetail")}
               onOpenPhoto={setPreviewPhoto}
+              onPickPoint={handlePickPoint}
               onSelect={handleSelect}
             />
           </Suspense>
         </Canvas>
       </div>
+      {pointPicking ? (
+        <div className="globe-point-pick-hint">
+          <MapPin size={15} />
+          <strong>{t("pickOnGlobe")}</strong>
+          <span>{t("dragToRotateClickToPick")}</span>
+        </div>
+      ) : null}
       <PhotoLightbox photo={previewPhoto} placeName={placeLabel(previewPlace, locale)} onClose={() => setPreviewPhoto(undefined)} />
     </section>
   );

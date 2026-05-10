@@ -1,9 +1,9 @@
 import { create } from "zustand";
-import { capturedDateLabel, normalizeCapturedDateTimeInput } from "@/domain/datetime";
+import { capturedDateLabel } from "@/domain/datetime";
 import type { DossierTripGroup, GlobeMarker, ID, ImportBatch, PendingItem, Photo, PlaceNode, Route, SearchDocument, SearchResult, TimelineSegment, Trip } from "@/domain/models";
 import { apiClient, type AppSnapshot, type ImportJobProgress } from "@/services/apiClient";
 
-export type AppPanel = "globe" | "archive" | "tripDetail" | "search" | "settings" | "upload" | "manual";
+export type AppPanel = "globe" | "archive" | "tripDetail" | "search" | "settings" | "upload";
 export type TimelineZoom = "global" | "trip" | "day";
 export type Locale = "zh" | "en";
 export type GlobeViewIntent =
@@ -12,6 +12,15 @@ export type GlobeViewIntent =
   | { source: "timeline-place"; point: { lat: number; lng: number }; distance: "near" }
   | { source: "timeline-global" }
   | { source: "manual" };
+
+export type ManualPlacePickSession = {
+  pendingId: ID;
+  name: string;
+  mode: "bind" | "new" | "archive";
+  point?: { lat: number; lng: number };
+  nearestLabel?: string;
+  isPicking: boolean;
+};
 
 function toDateInput(date?: string) {
   return date ? capturedDateLabel(date) : new Date().toISOString().slice(0, 10);
@@ -35,6 +44,13 @@ function applySnapshot(snapshot: AppSnapshot) {
 function initialLocale(): Locale {
   if (typeof window === "undefined") return "zh";
   return window.localStorage.getItem("earth-online-locale") === "en" ? "en" : "zh";
+}
+
+function geocodeLabel(candidate: { name?: string; localizedNames?: { zh?: string; en?: string; local?: string } } | undefined, locale: Locale) {
+  if (!candidate) return undefined;
+  return locale === "en"
+    ? candidate.localizedNames?.en ?? candidate.localizedNames?.local ?? candidate.localizedNames?.zh ?? candidate.name
+    : candidate.localizedNames?.zh ?? candidate.name ?? candidate.localizedNames?.local ?? candidate.localizedNames?.en;
 }
 
 async function rollbackLatestPendingImportIfNeeded(getState: () => AppState, setState: (partial: Partial<AppState>) => void) {
@@ -62,6 +78,7 @@ interface AppState {
   searchQuery: string;
   searchFilters: { tripId?: string; placeId?: string; date?: string; tag?: string; fileName?: string };
   searchResults: SearchResult[];
+  manualPlacePick?: ManualPlacePickSession;
   aiProvider: "qwen" | "mock";
   aiCloudEnabled: boolean;
   isLoading: boolean;
@@ -99,19 +116,21 @@ interface AppState {
   rollbackLatestImport: () => Promise<void>;
   cancelPendingImportPhotos: (photoIds: ID[]) => Promise<void>;
   inferPendingLocation: (pendingId: ID) => Promise<void>;
+  resolveImportAiFailure: (pendingId: ID, action: "retry_vision" | "retry_embedding" | "retry_both" | "archive_exif") => Promise<void>;
   mergeLatestImportTrips: () => Promise<void>;
-  createManualTrip: (title: string, start: string, end: string) => Promise<void>;
   deleteTrip: (tripId: ID) => Promise<void>;
-  addManualPlace: (tripId: ID, name: string, lat: number, lng: number) => Promise<void>;
-  deleteManualPlace: (placeId: ID) => Promise<void>;
-  reorderTripPlaces: (tripId: ID, placeIds: ID[]) => Promise<void>;
   updateTripTitle: (tripId: ID, title: string) => Promise<void>;
-  updateTripDates: (tripId: ID, start: string, end: string) => Promise<void>;
-  updatePhotoMetadata: (photoId: ID, capturedAt: string, lat: string, lng: string, tags: string) => Promise<void>;
-  movePhotoToTrip: (photoId: ID, tripId?: ID) => Promise<void>;
+  updatePhotoUserEdits: (photoId: ID, edits: { title?: string; caption?: string; tags?: string[] }) => Promise<void>;
   deletePhoto: (photoId: ID) => Promise<void>;
-  bindPhotoToPlace: (photoId: ID, placeId?: ID) => Promise<void>;
   acknowledgePendingItem: (pendingId: ID, accepted: boolean) => Promise<void>;
+  resolvePendingManually: (
+    pendingId: ID,
+    body: { action: "bind_existing_place"; placeId: string } | { action: "create_manual_place"; name: string; lat: number; lng: number } | { action: "archive_unlocated" },
+  ) => Promise<void>;
+  openManualPlacePick: (pendingId: ID, name: string) => void;
+  closeManualPlacePick: () => void;
+  startManualPlacePick: (pendingId: ID, name: string) => void;
+  finishManualPlacePick: (point: { lat: number; lng: number }, nearestLabel?: string) => Promise<void>;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -124,6 +143,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   searchQuery: "",
   searchFilters: {},
   searchResults: [],
+  manualPlacePick: undefined,
   aiProvider: "qwen",
   aiCloudEnabled: true,
   isLoading: false,
@@ -301,17 +321,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     const snapshot = await apiClient.inferPendingLocation(latest.id, pendingId);
     set({ ...applySnapshot(snapshot), activePanel: "upload" });
   },
+  resolveImportAiFailure: async (pendingId, action) => {
+    const batches = get().importBatches;
+    const latest = batches[batches.length - 1];
+    if (!latest || latest.status !== "pending_confirmation") return;
+    const snapshot = await apiClient.resolveImportAiFailure(latest.id, pendingId, action);
+    set({ ...applySnapshot(snapshot), activePanel: "upload" });
+  },
   mergeLatestImportTrips: async () => {
     const batches = get().importBatches;
     const latest = batches[batches.length - 1];
     if (!latest || latest.status !== "pending_confirmation") return;
     const snapshot = await apiClient.mergeImportTrips(latest.id);
     set({ ...applySnapshot(snapshot), selectedTripId: latest.createdTripIds[0] ?? get().selectedTripId, activePanel: "upload" });
-  },
-  createManualTrip: async (title, start, end) => {
-    const snapshot = await apiClient.createTrip(title, start, end);
-    const created = snapshot.trips[snapshot.trips.length - 1];
-    set({ ...applySnapshot(snapshot), selectedTripId: created?.id ?? get().selectedTripId, activePanel: "tripDetail" });
   },
   deleteTrip: async (tripId) => {
     const snapshot = await apiClient.deleteTrip(tripId);
@@ -325,52 +347,53 @@ export const useAppStore = create<AppState>((set, get) => ({
       activePanel: "archive",
     });
   },
-  addManualPlace: async (tripId, name, lat, lng) => {
-    const snapshot = await apiClient.createPlace(tripId, name, lat, lng);
-    const created = snapshot.placeNodes[snapshot.placeNodes.length - 1];
-    set({ ...applySnapshot(snapshot), selectedPlaceId: created?.id });
-  },
-  deleteManualPlace: async (placeId) => {
-    const snapshot = await apiClient.deletePlace(placeId);
-    set({ ...applySnapshot(snapshot), selectedPlaceId: undefined });
-  },
-  reorderTripPlaces: async (tripId, placeIds) => {
-    const snapshot = await apiClient.reorderPlaces(tripId, placeIds);
-    set(applySnapshot(snapshot));
-  },
   updateTripTitle: async (tripId, title) => {
     const snapshot = await apiClient.updateTrip(tripId, { title });
     set(applySnapshot(snapshot));
   },
-  updateTripDates: async (tripId, start, end) => {
-    const snapshot = await apiClient.updateTrip(tripId, { dateRange: { start, end } });
-    set(applySnapshot(snapshot));
-  },
-  updatePhotoMetadata: async (photoId, capturedAt, lat, lng, tags) => {
-    const snapshot = await apiClient.updatePhoto(photoId, {
-      capturedAt: normalizeCapturedDateTimeInput(capturedAt),
-      location: { lat, lng },
-      tags: tags
-        .split(/[,\s，、/]+/)
-        .map((tag) => tag.trim())
-        .filter(Boolean),
-    });
-    set(applySnapshot(snapshot));
-  },
-  movePhotoToTrip: async (photoId, tripId) => {
-    const snapshot = await apiClient.movePhoto(photoId, tripId);
+  updatePhotoUserEdits: async (photoId, edits) => {
+    const snapshot = await apiClient.updatePhoto(photoId, { userEdits: edits });
     set(applySnapshot(snapshot));
   },
   deletePhoto: async (photoId) => {
     const snapshot = await apiClient.deletePhoto(photoId);
     set(applySnapshot(snapshot));
   },
-  bindPhotoToPlace: async (photoId, placeId) => {
-    const snapshot = await apiClient.bindPhoto(photoId, placeId);
-    set(applySnapshot(snapshot));
-  },
   acknowledgePendingItem: async (pendingId, accepted) => {
     const snapshot = await apiClient.updatePending(pendingId, accepted);
     set(applySnapshot(snapshot));
+  },
+  resolvePendingManually: async (pendingId, body) => {
+    const snapshot = await apiClient.resolvePendingManually(pendingId, body);
+    set({ ...applySnapshot(snapshot), activePanel: "upload", manualPlacePick: undefined });
+  },
+  openManualPlacePick: (pendingId, name) => set({ manualPlacePick: { pendingId, name, mode: "bind", isPicking: false } }),
+  closeManualPlacePick: () => set({ manualPlacePick: undefined }),
+  startManualPlacePick: (pendingId, name) =>
+    set((state) => ({
+      manualPlacePick: { ...(state.manualPlacePick?.pendingId === pendingId ? state.manualPlacePick : {}), pendingId, name, mode: "new", isPicking: true },
+      activePanel: "globe",
+    })),
+  finishManualPlacePick: async (point, nearestLabel) => {
+    set((state) => ({
+      manualPlacePick: state.manualPlacePick ? { ...state.manualPlacePick, point, nearestLabel, isPicking: false } : undefined,
+      activePanel: "upload",
+      globeViewIntent: { source: "manual" },
+    }));
+    try {
+      const response = await apiClient.reverseGeocode(point);
+      const label = geocodeLabel(response.candidates[0], get().locale);
+      set((state) => ({
+        manualPlacePick: state.manualPlacePick?.point?.lat === point.lat && state.manualPlacePick.point.lng === point.lng
+          ? { ...state.manualPlacePick, nearestLabel: label ?? nearestLabel }
+          : state.manualPlacePick,
+      }));
+    } catch {
+      set((state) => ({
+        manualPlacePick: state.manualPlacePick?.point?.lat === point.lat && state.manualPlacePick.point.lng === point.lng
+          ? { ...state.manualPlacePick, nearestLabel }
+          : state.manualPlacePick,
+      }));
+    }
   },
 }));

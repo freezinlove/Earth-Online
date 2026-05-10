@@ -76,34 +76,44 @@ function findEndOfCentralDirectory(buffer) {
   throw new Error("Invalid zip: missing end of central directory");
 }
 
-function firstFileEntryFromZip(buffer) {
+function fileEntryFromZip(buffer, targetFileName) {
   const eocd = findEndOfCentralDirectory(buffer);
   const centralDirOffset = buffer.readUInt32LE(eocd + 16);
-  const signature = buffer.readUInt32LE(centralDirOffset);
-  if (signature !== 0x02014b50) throw new Error("Invalid zip: missing central directory file header");
+  const centralDirSize = buffer.readUInt32LE(eocd + 12);
+  let offset = centralDirOffset;
+  const end = centralDirOffset + centralDirSize;
 
-  const method = buffer.readUInt16LE(centralDirOffset + 10);
-  const compressedSize = buffer.readUInt32LE(centralDirOffset + 20);
-  const uncompressedSize = buffer.readUInt32LE(centralDirOffset + 24);
-  const fileNameLength = buffer.readUInt16LE(centralDirOffset + 28);
-  const extraLength = buffer.readUInt16LE(centralDirOffset + 30);
-  const commentLength = buffer.readUInt16LE(centralDirOffset + 32);
-  const localHeaderOffset = buffer.readUInt32LE(centralDirOffset + 42);
-  const fileName = buffer.toString("utf8", centralDirOffset + 46, centralDirOffset + 46 + fileNameLength);
+  while (offset < end) {
+    const signature = buffer.readUInt32LE(offset);
+    if (signature !== 0x02014b50) throw new Error("Invalid zip: missing central directory file header");
 
-  const localSignature = buffer.readUInt32LE(localHeaderOffset);
-  if (localSignature !== 0x04034b50) throw new Error(`Invalid zip: missing local header for ${fileName}`);
-  const localFileNameLength = buffer.readUInt16LE(localHeaderOffset + 26);
-  const localExtraLength = buffer.readUInt16LE(localHeaderOffset + 28);
-  const dataStart = localHeaderOffset + 30 + localFileNameLength + localExtraLength;
-  const data = buffer.subarray(dataStart, dataStart + compressedSize);
-  void extraLength;
-  void commentLength;
-  return { fileName, method, data, uncompressedSize };
+    const method = buffer.readUInt16LE(offset + 10);
+    const compressedSize = buffer.readUInt32LE(offset + 20);
+    const uncompressedSize = buffer.readUInt32LE(offset + 24);
+    const fileNameLength = buffer.readUInt16LE(offset + 28);
+    const extraLength = buffer.readUInt16LE(offset + 30);
+    const commentLength = buffer.readUInt16LE(offset + 32);
+    const localHeaderOffset = buffer.readUInt32LE(offset + 42);
+    const fileName = buffer.toString("utf8", offset + 46, offset + 46 + fileNameLength);
+
+    if (!targetFileName || fileName === targetFileName) {
+      const localSignature = buffer.readUInt32LE(localHeaderOffset);
+      if (localSignature !== 0x04034b50) throw new Error(`Invalid zip: missing local header for ${fileName}`);
+      const localFileNameLength = buffer.readUInt16LE(localHeaderOffset + 26);
+      const localExtraLength = buffer.readUInt16LE(localHeaderOffset + 28);
+      const dataStart = localHeaderOffset + 30 + localFileNameLength + localExtraLength;
+      const data = buffer.subarray(dataStart, dataStart + compressedSize);
+      return { fileName, method, data, uncompressedSize };
+    }
+
+    offset += 46 + fileNameLength + extraLength + commentLength;
+  }
+
+  throw new Error(`Invalid zip: missing ${targetFileName}`);
 }
 
-function extractFirstFileFromZip(buffer) {
-  const { fileName, method, data, uncompressedSize } = firstFileEntryFromZip(buffer);
+function extractFileFromZip(buffer, targetFileName) {
+  const { fileName, method, data, uncompressedSize } = fileEntryFromZip(buffer, targetFileName);
   let bytes;
   if (method === 0) bytes = data;
   else if (method === 8) bytes = zlib.inflateRawSync(data);
@@ -116,9 +126,9 @@ function extractFirstFileFromZip(buffer) {
   return bytes.toString("utf8");
 }
 
-async function forEachZipLine(name, onLine) {
+async function forEachZipLine(name, targetFileName, onLine) {
   const buffer = await fs.readFile(path.join(downloadDir, name));
-  const { fileName, method, data } = firstFileEntryFromZip(buffer);
+  const { fileName, method, data } = fileEntryFromZip(buffer, targetFileName);
   let stream = Readable.from(data);
   if (method === 8) stream = stream.pipe(zlib.createInflateRaw());
   else if (method !== 0) throw new Error(`Unsupported zip compression method ${method} for ${fileName}`);
@@ -134,7 +144,7 @@ async function readTextFile(name) {
 
 async function readZipText(name) {
   const buffer = await fs.readFile(path.join(downloadDir, name));
-  return extractFirstFileFromZip(buffer);
+  return extractFileFromZip(buffer);
 }
 
 function loadCountries(text) {
@@ -157,7 +167,7 @@ function chooseAlternateName(record, language) {
 
 async function loadAlternateNames(geonameIds) {
   const names = new Map();
-  await forEachZipLine("alternateNamesV2.zip", (line) => {
+  await forEachZipLine("alternateNamesV2.zip", "alternateNamesV2.txt", (line) => {
     const [, geonameId, language, name] = line.split("\t");
     if (!geonameIds.has(geonameId) || !name) return;
     if (!alternateLanguagePriority.zh.includes(language) && !alternateLanguagePriority.en.includes(language)) return;

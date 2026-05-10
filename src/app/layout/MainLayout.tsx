@@ -1,13 +1,12 @@
-import { Archive, Globe2, MapPinned, Plus, Search, Settings } from "lucide-react";
+import { Archive, Globe2, Plus, Search, Settings } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { clsx } from "clsx";
 import { useI18n } from "@/i18n/useI18n";
 import type { MessageKey } from "@/i18n/messages";
 import { useAppStore, type AppPanel } from "@/store/appStore";
 
-const navItems: Array<{ panel: Exclude<AppPanel, "globe" | "upload" | "tripDetail">; labelKey: MessageKey; icon: typeof Archive }> = [
+const navItems: Array<{ panel: Exclude<AppPanel, "globe" | "upload" | "tripDetail" | "search">; labelKey: MessageKey; icon: typeof Archive }> = [
   { panel: "archive", labelKey: "archiveNav", icon: Archive },
-  { panel: "manual", labelKey: "manual", icon: MapPinned },
   { panel: "settings", labelKey: "settings", icon: Settings },
 ];
 
