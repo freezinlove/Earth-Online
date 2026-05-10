@@ -175,6 +175,47 @@ input {
   opacity: 0;
 }
 
+.primary-nav button[data-tooltip]::after {
+  content: attr(data-tooltip);
+  pointer-events: none;
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  z-index: 2;
+  width: max-content;
+  max-width: 128px;
+  color: #79300e;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  opacity: 0;
+  transform: translate(-50%, 5px);
+  transition:
+    opacity 180ms ease,
+    transform 220ms cubic-bezier(0.18, 0.88, 0.2, 1);
+}
+
+.primary-nav button[data-tooltip]:hover::after,
+.primary-nav button[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+@media (min-width: 768px) {
+  .primary-nav button[data-tooltip]::after {
+    left: calc(100% + 10px);
+    top: 50%;
+    bottom: auto;
+    transform: translate(-5px, -50%);
+  }
+
+  .primary-nav button[data-tooltip]:hover::after,
+  .primary-nav button[data-tooltip]:focus-visible::after {
+    transform: translate(0, -50%);
+  }
+}
+
 .home-chrome {
   transform-origin: center top;
   transition:
@@ -2288,6 +2329,7 @@ input {
 }
 
 .import-missing-heading-actions button {
+  position: relative;
   display: grid;
   width: 30px;
   height: 30px;
@@ -2421,7 +2463,13 @@ input {
   transform: none;
 }
 
-.import-inline-infer::after {
+:is(
+  .import-missing-heading-actions button,
+  .import-inline-confirm,
+  .import-inline-manual,
+  .import-inline-infer,
+  .import-inline-cancel
+)[data-tooltip]::after {
   content: attr(data-tooltip);
   pointer-events: none;
   position: absolute;
@@ -2430,11 +2478,10 @@ input {
   z-index: 8;
   width: max-content;
   max-width: 118px;
-  padding: 5px 7px;
-  border: 1px solid rgba(151, 71, 35, 0.12);
-  border-radius: 999px;
-  background: rgba(255, 250, 246, 0.9);
-  box-shadow: 0 12px 24px rgba(90, 54, 39, 0.1);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
   color: #79300e;
   font-size: 10px;
   font-weight: 800;
@@ -2442,14 +2489,25 @@ input {
   line-height: 1;
   opacity: 0;
   transform: translate(-50%, 5px);
-  backdrop-filter: blur(14px);
   transition:
     opacity 180ms ease,
     transform 220ms cubic-bezier(0.18, 0.88, 0.2, 1);
 }
 
-.import-inline-infer:hover::after,
-.import-inline-infer:focus-visible::after {
+:is(
+  .import-missing-heading-actions button,
+  .import-inline-confirm,
+  .import-inline-manual,
+  .import-inline-infer,
+  .import-inline-cancel
+)[data-tooltip]:hover::after,
+:is(
+  .import-missing-heading-actions button,
+  .import-inline-confirm,
+  .import-inline-manual,
+  .import-inline-infer,
+  .import-inline-cancel
+)[data-tooltip]:focus-visible::after {
   opacity: 1;
   transform: translate(-50%, 0);
 }

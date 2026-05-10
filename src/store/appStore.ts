@@ -7,7 +7,7 @@ export type AppPanel = "globe" | "archive" | "tripDetail" | "search" | "settings
 export type TimelineZoom = "global" | "trip" | "day";
 export type Locale = "zh" | "en";
 export type GlobeViewIntent =
-  | { source: "timeline-trip"; point: { lat: number; lng: number }; distance: "far" }
+  | { source: "timeline-trip"; point: { lat: number; lng: number }; distance: "mid" }
   | { source: "timeline-trip-entry"; point: { lat: number; lng: number }; distance: "mid" }
   | { source: "timeline-place"; point: { lat: number; lng: number }; distance: "near" }
   | { source: "timeline-global" }
@@ -187,6 +187,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       selectedPlaceId: undefined,
       selectedPhotoId: undefined,
       cursorDate: trip?.dateRange.start ?? get().cursorDate,
+      timelineZoom: "trip",
       activePanel: panel,
     });
   },
@@ -196,6 +197,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       selectedPlaceId: placeId,
       selectedTripId: place?.tripId ?? get().selectedTripId,
       cursorDate: place?.timeRange.start.slice(0, 10) ?? get().cursorDate,
+      timelineZoom: "day",
       activePanel: "globe",
     });
   },
@@ -206,6 +208,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       selectedTripId: place?.tripId ?? get().selectedTripId,
       selectedPhotoId: undefined,
       cursorDate: place?.timeRange.start.slice(0, 10) ?? get().cursorDate,
+      timelineZoom: "day",
       activePanel: "globe",
       globeViewIntent: intent,
     });
@@ -217,6 +220,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       selectedTripId: photo?.tripId ?? get().selectedTripId,
       selectedPlaceId: photo?.placeNodeId,
       cursorDate: toDateInput(photo?.capturedAt),
+      timelineZoom: photo?.placeNodeId ? "day" : photo?.tripId ? "trip" : get().timelineZoom,
       activePanel: "globe",
     });
   },

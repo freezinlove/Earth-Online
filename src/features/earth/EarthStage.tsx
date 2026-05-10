@@ -55,7 +55,8 @@ const NEAR_LAND_PARTICLE = "#23abc0";
 const COAST_LINE = "#18899d";
 const COUNTRY_BOUNDARY_LINE = "#0f788d";
 const PROVINCE_BOUNDARY_LINE = "#1598ad";
-const GLOBE_SHELL = "#efe1cf";
+const GLOBE_SHELL = "#e8ded2";
+const GLOBE_RIM = "#79cad6";
 const LAND_PARTICLE_SIZE = 3.05;
 const MEDIUM_LAND_PARTICLE_SIZE = 2.85;
 const NEAR_LAND_PARTICLE_SIZE = 2.35;
@@ -274,6 +275,12 @@ function threeGlobeVector(point: GeoPoint, radius = GLOBE_RADIUS, altitude = 0) 
   );
 }
 
+function isFrontHemisphere(worldPoint: THREE.Vector3, camera: THREE.Camera, globeCenter: THREE.Vector3, threshold = 0.035) {
+  const pointNormal = worldPoint.clone().sub(globeCenter).normalize();
+  const viewNormal = camera.position.clone().sub(globeCenter).normalize();
+  return pointNormal.dot(viewNormal) > threshold;
+}
+
 function vectorToGeoPoint(vector: THREE.Vector3): GeoPoint {
   const normalized = vector.clone().normalize();
   const lat = THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(normalized.y, -1, 1)));
@@ -289,9 +296,16 @@ function focusQuaternion(point?: GeoPoint) {
 
 function cameraTargetForIntent(intent: GlobeViewIntent, fallbackPoint?: GeoPoint) {
   const point = "point" in intent ? intent.point : fallbackPoint;
-  const distance = intent.source === "timeline-place" ? 2.18 : intent.source === "timeline-trip-entry" ? 3.85 : intent.source === "timeline-trip" ? 5.85 : 5.25;
+  const distance =
+    intent.source === "timeline-place"
+      ? 2.18
+      : intent.source === "timeline-trip-entry" || intent.source === "timeline-trip"
+        ? 3.85
+        : intent.source === "timeline-global"
+          ? 6.05
+          : 5.25;
   const latitude = point?.lat ?? 18;
-  const latitudeStrength = intent.source === "timeline-place" ? 1 : intent.source === "timeline-trip-entry" ? 0.82 : 0.58;
+  const latitudeStrength = intent.source === "timeline-place" ? 1 : intent.source === "timeline-trip-entry" || intent.source === "timeline-trip" ? 0.82 : 0.58;
   const latitudeClamp = intent.source === "timeline-place" ? 0.96 : 0.78;
   const y = THREE.MathUtils.clamp(Math.sin(THREE.MathUtils.degToRad(latitude)) * distance * latitudeStrength, -distance * latitudeClamp, distance * latitudeClamp);
   const z = Math.sqrt(Math.max(distance * distance - y * y, 0.4));
@@ -537,7 +551,7 @@ function TravelRouteSegment({
         transparent
         opacity={0}
         depthWrite={false}
-        depthTest={false}
+        depthTest
         renderOrder={12}
       />
       <RouteArrow color={ROUTE_ARROW} directionPoint={line.arrowDirectionPoint} position={line.arrowPosition} />
@@ -566,13 +580,17 @@ function RouteArrow({
     const parent = anchorRef.current?.parent;
     if (!parent || !arrowRef.current) return;
 
-    const screenStart = screenStartRef.current.copy(localStart).applyMatrix4(parent.matrixWorld).project(camera);
-    const screenEnd = screenEndRef.current.copy(localEnd).applyMatrix4(parent.matrixWorld).project(camera);
+    const worldStart = screenStartRef.current.copy(localStart).applyMatrix4(parent.matrixWorld);
+    const worldEnd = screenEndRef.current.copy(localEnd).applyMatrix4(parent.matrixWorld);
+    const globeCenter = parent.localToWorld(new THREE.Vector3(0, 0, 0));
+    const isFrontFacing = isFrontHemisphere(worldStart, camera, globeCenter);
+    const screenStart = worldStart.project(camera);
+    const screenEnd = worldEnd.project(camera);
     const dx = screenEnd.x - screenStart.x;
     const dy = screenStart.y - screenEnd.y;
     if (Math.hypot(dx, dy) < 0.0001) return;
     const arrowOpacity = smoothstep(0.68, 0.84, zoomProgress(camera));
-    arrowRef.current.style.opacity = arrowOpacity > 0.02 ? String(arrowOpacity) : "0";
+    arrowRef.current.style.opacity = isFrontFacing && arrowOpacity > 0.02 ? String(arrowOpacity) : "0";
     arrowRef.current.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
   });
 
@@ -600,12 +618,12 @@ function ThreeGlobeLayer() {
 
     const material = new THREE.MeshStandardMaterial({
       color: GLOBE_SHELL,
-      roughness: 0.76,
+      roughness: 0.82,
       metalness: 0.03,
-      emissive: "#e3d2bc",
-      emissiveIntensity: 0.24,
+      emissive: "#d8c8b9",
+      emissiveIntensity: 0.18,
       transparent: true,
-      opacity: 0.7,
+      opacity: 0.86,
       depthWrite: false,
     });
 
@@ -613,6 +631,67 @@ function ThreeGlobeLayer() {
   }, [globe]);
 
   return <primitive object={globe} />;
+}
+
+function GlobeRimLayer() {
+  const materialRef = useRef<THREE.ShaderMaterial>(null);
+  const camera = useThree((state) => state.camera);
+
+  useFrame(() => {
+    if (!materialRef.current) return;
+    const zoom = zoomProgress(camera);
+    materialRef.current.uniforms.uOpacity.value = THREE.MathUtils.lerp(0.28, 0.18, smoothstep(0.25, 0.9, zoom));
+  });
+
+  return (
+    <mesh renderOrder={8}>
+      <sphereGeometry args={[GLOBE_RADIUS * 1.006, 96, 96]} />
+      <shaderMaterial
+        ref={materialRef}
+        transparent
+        depthWrite={false}
+        depthTest={false}
+        blending={THREE.NormalBlending}
+        uniforms={{
+          uColor: { value: new THREE.Color(GLOBE_RIM) },
+          uOpacity: { value: 0.24 },
+        }}
+        vertexShader={`
+          varying vec3 vNormal;
+          varying vec3 vWorldPosition;
+
+          void main() {
+            vNormal = normalize(mat3(modelMatrix) * normal);
+            vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+            vWorldPosition = worldPosition.xyz;
+            gl_Position = projectionMatrix * viewMatrix * worldPosition;
+          }
+        `}
+        fragmentShader={`
+          uniform vec3 uColor;
+          uniform float uOpacity;
+          varying vec3 vNormal;
+          varying vec3 vWorldPosition;
+
+          void main() {
+            vec3 viewDirection = normalize(cameraPosition - vWorldPosition);
+            float rim = 1.0 - max(dot(normalize(vNormal), viewDirection), 0.0);
+            float alpha = smoothstep(0.28, 0.78, rim) * uOpacity;
+            gl_FragColor = vec4(uColor, alpha);
+          }
+        `}
+      />
+    </mesh>
+  );
+}
+
+function GlobeRouteOcclusionLayer() {
+  return (
+    <mesh renderOrder={11}>
+      <sphereGeometry args={[GLOBE_RADIUS * 1.002, 96, 96]} />
+      <meshBasicMaterial colorWrite={false} depthTest depthWrite />
+    </mesh>
+  );
 }
 
 function BillboardMarker({
@@ -625,20 +704,27 @@ function BillboardMarker({
   onSelect: (marker: TravelMarker) => void;
 }) {
   const camera = useThree((state) => state.camera);
+  const anchorRef = useRef<THREE.Group>(null);
   const markerRef = useRef<HTMLButtonElement>(null);
   const opacityRef = useRef(-1);
-  const position = useMemo(() => threeGlobeVector(marker.center, GLOBE_RADIUS, MARKER_ALTITUDE).toArray(), [marker.center]);
+  const localPosition = useMemo(() => threeGlobeVector(marker.center, GLOBE_RADIUS, MARKER_ALTITUDE), [marker.center]);
+  const position = useMemo(() => localPosition.toArray(), [localPosition]);
 
   useFrame(() => {
     const element = markerRef.current;
     if (!element) return;
+    const parent = anchorRef.current?.parent;
+    const globeCenter = parent?.localToWorld(new THREE.Vector3(0, 0, 0));
+    const worldPosition = parent ? localPosition.clone().applyMatrix4(parent.matrixWorld) : localPosition;
+    const isFacingCamera = globeCenter ? isFrontHemisphere(worldPosition, camera, globeCenter) : true;
     const zoom = zoomProgress(camera);
     const countryOpacity = 1 - smoothstep(0.28, 0.56, zoom);
     const placeOpacity = smoothstep(0.28, 0.56, zoom);
-    const lodOpacity = marker.kind === "country" ? countryOpacity : placeOpacity;
+    const lodOpacity = isFacingCamera ? (marker.kind === "country" ? countryOpacity : placeOpacity) : 0;
     if (Math.abs(opacityRef.current - lodOpacity) < 0.008) return;
     opacityRef.current = lodOpacity;
     const isInteractive =
+      isFacingCamera &&
       !pointPicking &&
       (marker.kind === "country"
         ? countryOpacity > MARKER_INTERACTIVE_OPACITY
@@ -649,6 +735,7 @@ function BillboardMarker({
   });
 
   return (
+    <group ref={anchorRef}>
     <Html
       center
       className="travel-marker-anchor"
@@ -674,6 +761,7 @@ function BillboardMarker({
         {marker.kind === "country" ? null : <span className="travel-marker-dot" />}
       </button>
     </Html>
+    </group>
   );
 }
 
@@ -791,12 +879,14 @@ function GlobeScene({
       <pointLight position={[-4, -2, 3]} color="#ff7aa8" intensity={1.55} />
       <group ref={groupRef} scale={GLOBE_SCALE}>
         <ThreeGlobeLayer />
+        <GlobeRimLayer />
         <LandParticleLayer />
         <MediumLandParticleLayer />
         <NearLandParticleLayer />
         <AssetLineLayer kind="coastLine" color={COAST_LINE} baseOpacity={0.5} renderOrder={5} />
         <AssetLineLayer kind="countryLine" color={COUNTRY_BOUNDARY_LINE} baseOpacity={0.36} renderOrder={6} />
         <AssetLineLayer kind="provinceLine" color={PROVINCE_BOUNDARY_LINE} baseOpacity={0.44} renderOrder={7} />
+        <GlobeRouteOcclusionLayer />
         <TravelRouteLayer paths={paths} />
         <GlobePointPicker enabled={pointPicking} onPick={onPickPoint} />
         {markers.map((marker) => (
@@ -844,10 +934,14 @@ function TravelMapAnnotation({
 }) {
   const { t } = useI18n();
   const photoStripRef = useRef<HTMLDivElement | null>(null);
+  const anchorRef = useRef<THREE.Group>(null);
+  const noteRef = useRef<HTMLElement | null>(null);
   const photoDragRef = useRef({ isDragging: false, lastX: 0, moved: false, pointerId: -1, startX: 0 });
   const photoStripTimer = useRef<number | undefined>(undefined);
   const [showPhotoStrip, setShowPhotoStrip] = useState(false);
-  const position = useMemo(() => (selected ? threeGlobeVector(selected.center, GLOBE_RADIUS, MARKER_ALTITUDE).toArray() : undefined), [selected]);
+  const camera = useThree((state) => state.camera);
+  const localPosition = useMemo(() => (selected ? threeGlobeVector(selected.center, GLOBE_RADIUS, MARKER_ALTITUDE) : undefined), [selected]);
+  const position = useMemo(() => localPosition?.toArray(), [localPosition]);
 
   useEffect(() => {
     window.clearTimeout(photoStripTimer.current);
@@ -857,6 +951,16 @@ function TravelMapAnnotation({
     photoStripTimer.current = window.setTimeout(() => setShowPhotoStrip(true), 520);
     return () => window.clearTimeout(photoStripTimer.current);
   }, [isClosing, selected?.id]);
+
+  useFrame(() => {
+    if (!localPosition || !noteRef.current) return;
+    const parent = anchorRef.current?.parent;
+    const globeCenter = parent?.localToWorld(new THREE.Vector3(0, 0, 0));
+    const worldPosition = parent ? localPosition.clone().applyMatrix4(parent.matrixWorld) : localPosition;
+    const isFacingCamera = globeCenter ? isFrontHemisphere(worldPosition, camera, globeCenter) : true;
+    noteRef.current.style.visibility = isFacingCamera ? "visible" : "hidden";
+    noteRef.current.style.pointerEvents = isFacingCamera ? "auto" : "none";
+  });
 
   if (!selected || !trip || !position) return null;
 
@@ -926,8 +1030,10 @@ function TravelMapAnnotation({
   };
 
   return (
+    <group ref={anchorRef}>
     <Html center position={position} zIndexRange={[72, 44]} transform={false}>
       <aside
+        ref={noteRef}
         className="travel-map-note"
         data-kind={selected.kind}
         data-state={isClosing ? "closing" : "open"}
@@ -1003,6 +1109,7 @@ function TravelMapAnnotation({
         </div>
       </aside>
     </Html>
+    </group>
   );
 }
 
@@ -1061,10 +1168,12 @@ export function EarthStage() {
   const activePanel = useAppStore((state) => state.activePanel);
   const selectedTripId = useAppStore((state) => state.selectedTripId);
   const selectedPlaceId = useAppStore((state) => state.selectedPlaceId);
+  const timelineZoom = useAppStore((state) => state.timelineZoom);
   const trips = useAppStore((state) => state.trips);
   const placeNodes = useAppStore((state) => state.placeNodes);
   const photos = useAppStore((state) => state.photos);
   const globeMarkers = useAppStore((state) => state.globeMarkers);
+  const selectTrip = useAppStore((state) => state.selectTrip);
   const selectPlace = useAppStore((state) => state.selectPlace);
   const setActivePanel = useAppStore((state) => state.setActivePanel);
   const globeViewIntent = useAppStore((state) => state.globeViewIntent);
@@ -1076,13 +1185,28 @@ export function EarthStage() {
   const [previewPhoto, setPreviewPhoto] = useState<Photo>();
   const infoPanelCloseTimer = useRef<number | undefined>(undefined);
 
+  const shouldShowAllTrips = timelineZoom === "global";
+  const visibleTripId = shouldShowAllTrips ? undefined : selectedTripId;
   const trip = trips.find((item) => item.id === selectedTripId);
-  const places = useMemo(() => placeNodes.filter((place) => place.tripId === selectedTripId), [placeNodes, selectedTripId]);
-  const tripPhotos = useMemo(() => photos.filter((photo) => photo.tripId === selectedTripId), [photos, selectedTripId]);
-  const projectedMarkers = useMemo(() => globeMarkers.filter((marker) => marker.tripId === selectedTripId).map((marker) => toTravelMarker(marker, locale)), [globeMarkers, locale, selectedTripId]);
-  const placeMarkers = useMemo(() => applyRouteRoles(projectedMarkers.filter((marker) => marker.kind === "place")), [projectedMarkers]);
+  const places = useMemo(() => (visibleTripId ? placeNodes.filter((place) => place.tripId === visibleTripId) : placeNodes), [placeNodes, visibleTripId]);
+  const tripPhotos = useMemo(() => (visibleTripId ? photos.filter((photo) => photo.tripId === visibleTripId) : photos), [photos, visibleTripId]);
+  const projectedMarkers = useMemo(
+    () => globeMarkers.filter((marker) => !visibleTripId || marker.tripId === visibleTripId).map((marker) => toTravelMarker(marker, locale)),
+    [globeMarkers, locale, visibleTripId],
+  );
+  const placeMarkers = useMemo(() => {
+    const byTrip = new Map<string, TravelMarker[]>();
+    for (const marker of projectedMarkers) {
+      if (marker.kind !== "place") continue;
+      const tripMarkers = byTrip.get(marker.tripId) ?? [];
+      tripMarkers.push(marker);
+      byTrip.set(marker.tripId, tripMarkers);
+    }
+    return Array.from(byTrip.values()).flatMap((tripMarkers) => applyRouteRoles(tripMarkers));
+  }, [projectedMarkers]);
   const countryMarkers = useMemo(() => projectedMarkers.filter((marker) => marker.kind === "country"), [projectedMarkers]);
   const selectedMarker = [...countryMarkers, ...placeMarkers].find((marker) => marker.id === selectedMapItem?.id);
+  const annotationTrip = selectedMarker ? trips.find((item) => item.id === selectedMarker.tripId) : trip;
   const markers = useMemo(
     () => [...countryMarkers, ...placeMarkers].map((marker) => ({ ...marker, active: marker.id === selectedMapItem?.id || marker.active })),
     [countryMarkers, placeMarkers, selectedMapItem?.id],
@@ -1090,7 +1214,15 @@ export function EarthStage() {
   const activeMarker = markers.find((marker) => marker.id === selectedMapItem?.id) ?? markers.find((marker) => marker.active);
   const tripFocusPoint = useMemo(() => (placeMarkers.length ? centerOf(placeMarkers.map((place) => place.center)) : undefined), [placeMarkers]);
   const focusPoint = "point" in globeViewIntent ? globeViewIntent.point : activeMarker?.center ?? tripFocusPoint ?? placeMarkers[0]?.center;
-  const paths = useMemo(() => routePaths(placeMarkers, activeMarker), [activeMarker, placeMarkers]);
+  const paths = useMemo(() => {
+    const byTrip = new Map<string, TravelMarker[]>();
+    for (const marker of placeMarkers) {
+      const tripMarkers = byTrip.get(marker.tripId) ?? [];
+      tripMarkers.push(marker);
+      byTrip.set(marker.tripId, tripMarkers);
+    }
+    return Array.from(byTrip.values()).flatMap((tripMarkers) => routePaths(tripMarkers, activeMarker));
+  }, [activeMarker, placeMarkers]);
   const previewPlace = previewPhoto?.placeNodeId ? places.find((place) => place.id === previewPhoto.placeNodeId) : undefined;
   const homeState = activePanel === "globe" ? "active" : "covered";
   const pointPicking = Boolean(manualPlacePick?.isPicking);
@@ -1151,6 +1283,15 @@ export function EarthStage() {
     if (marker.kind === "place" && marker.placeIds?.[0]) selectPlace(marker.placeIds[0]);
   };
 
+  const handleOpenArchive = () => {
+    if (selectedMarker?.tripId) {
+      selectTrip(selectedMarker.tripId, "tripDetail");
+      return;
+    }
+
+    setActivePanel("tripDetail");
+  };
+
   return (
     <section className="home-earth-layer relative min-h-screen overflow-hidden" data-home-state={homeState}>
       <div className="pointer-events-none fixed left-1/2 top-1/2 h-[76vmin] w-[76vmin] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary-fixed/20 blur-3xl" />
@@ -1168,14 +1309,14 @@ export function EarthStage() {
               markers={markers}
               paths={paths}
               selectedMarker={selectedMarker}
-              trip={trip}
+              trip={annotationTrip}
               photos={tripPhotos}
               isAnnotationClosing={infoPanelClosing}
               focusPoint={focusPoint}
               viewIntent={globeViewIntent}
               pointPicking={pointPicking}
               onManualView={() => setGlobeViewIntent({ source: "manual" })}
-              onOpenArchive={() => setActivePanel("tripDetail")}
+              onOpenArchive={handleOpenArchive}
               onOpenPhoto={setPreviewPhoto}
               onPickPoint={handlePickPoint}
               onSelect={handleSelect}

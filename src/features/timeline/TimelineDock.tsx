@@ -13,7 +13,6 @@ import {
   formatCompactDateRange,
   percentInDomain,
   segmentBounds,
-  type TimelineLevel,
   type TimeIncisionSegment,
   type TimeIncisionTick,
 } from "@/features/timeline/timelineModel";
@@ -72,10 +71,9 @@ function TimeTick({ tick, left }: { tick: TimeIncisionTick; left: number }) {
 export function TimelineDock() {
   const { t } = useI18n();
   const activePanel = useAppStore((state) => state.activePanel);
-  const [level, setLevel] = useState<TimelineLevel>("global");
-  const [primedTripId, setPrimedTripId] = useState<string>();
   const selectedTripId = useAppStore((state) => state.selectedTripId);
   const selectedPlaceId = useAppStore((state) => state.selectedPlaceId);
+  const timelineZoom = useAppStore((state) => state.timelineZoom);
   const locale = useAppStore((state) => state.locale);
   const segments = useAppStore((state) => state.timelineSegments);
   const trips = useAppStore((state) => state.trips);
@@ -83,21 +81,23 @@ export function TimelineDock() {
   const selectTrip = useAppStore((state) => state.selectTrip);
   const focusPlaceOnGlobe = useAppStore((state) => state.focusPlaceOnGlobe);
   const clearPlaceSelection = useAppStore((state) => state.clearPlaceSelection);
+  const setTimelineZoom = useAppStore((state) => state.setTimelineZoom);
   const setGlobeViewIntent = useAppStore((state) => state.setGlobeViewIntent);
   const homeState = activePanel === "globe" ? "active" : "covered";
 
+  const level = timelineZoom === "global" ? "global" : "trip";
   const selectedTrip = trips.find((trip) => trip.id === selectedTripId);
   const domain = useMemo(() => (level === "global" ? buildGlobalDomain(trips) : buildTripDomain(selectedTrip)), [level, selectedTrip, trips]);
   const visibleSegments = useMemo(
     () =>
       level === "global"
-        ? buildTripSegments(segments, selectedTripId, locale)
+        ? buildTripSegments(segments, timelineZoom === "global" ? "" : selectedTripId, locale)
         : buildProjectedPlaceSegments(
             segments.filter((segment) => placeNodes.some((place) => place.tripId === selectedTripId && place.id === segment.relatedId)),
             selectedPlaceId,
             locale,
           ),
-    [level, segments, selectedPlaceId, selectedTripId, placeNodes, locale],
+    [level, segments, selectedPlaceId, selectedTripId, placeNodes, locale, timelineZoom],
   );
   const ticks = useMemo(() => (level === "global" ? buildGlobalTicks(domain) : buildTripTicks(domain)), [domain, level]);
 
@@ -110,30 +110,35 @@ export function TimelineDock() {
         }
       : undefined;
 
-    if (level === "global" && primedTripId === tripId) {
-      setLevel("trip");
-      setPrimedTripId(undefined);
-      const entryPlace = places[0];
-      if (entryPlace) setGlobeViewIntent({ source: "timeline-trip-entry", point: entryPlace.center, distance: "mid" });
-      return;
-    }
-
     selectTrip(tripId);
-    setPrimedTripId(tripId);
-    if (focusPoint) setGlobeViewIntent({ source: "timeline-trip", point: focusPoint, distance: "far" });
+    setTimelineZoom("trip");
+    if (focusPoint) setGlobeViewIntent({ source: "timeline-trip", point: focusPoint, distance: "mid" });
   };
 
   const focusPlace = (placeId: string) => {
     const place = placeNodes.find((item) => item.id === placeId);
     if (!place) return;
-    setPrimedTripId(undefined);
+    setTimelineZoom("day");
     focusPlaceOnGlobe(place.id, placeFocusIntent(place));
   };
 
-  const backToGlobal = () => {
+  const backOneLevel = () => {
+    if (timelineZoom === "day") {
+      clearPlaceSelection();
+      setTimelineZoom("trip");
+      const places = placeNodes.filter((place) => place.tripId === selectedTripId);
+      const focusPoint = places.length
+        ? {
+            lat: places.reduce((sum, place) => sum + place.center.lat, 0) / places.length,
+            lng: places.reduce((sum, place) => sum + place.center.lng, 0) / places.length,
+          }
+        : undefined;
+      if (focusPoint) setGlobeViewIntent({ source: "timeline-trip", point: focusPoint, distance: "mid" });
+      return;
+    }
+
     clearPlaceSelection();
-    setLevel("global");
-    setPrimedTripId(undefined);
+    setTimelineZoom("global");
     setGlobeViewIntent({ source: "timeline-global" });
   };
 
@@ -159,8 +164,8 @@ export function TimelineDock() {
           );
         })}
       </div>
-      {level === "trip" ? (
-        <button className="time-incision-back" type="button" aria-label={t("backToGlobalTimeline")} title={t("back")} onClick={backToGlobal}>
+      {timelineZoom !== "global" ? (
+        <button className="time-incision-back" type="button" aria-label={t("backToGlobalTimeline")} title={t("back")} onClick={backOneLevel}>
           <Undo2 size={16} strokeWidth={1.7} />
         </button>
       ) : null}

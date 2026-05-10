@@ -112,7 +112,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
             "group relative grid h-11 w-11 place-items-center rounded-full text-primary transition active:scale-95",
           )}
           aria-label={t("importPhotos")}
-          title={t("importPhotos")}
+          data-tooltip={t("importPhotos")}
           onClick={() => togglePanel("upload")}
           type="button"
         >
@@ -134,7 +134,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
           )}
           onClick={() => moveToPanel("globe")}
           aria-label={t("home")}
-          title={t("home")}
+          data-tooltip={t("home")}
           type="button"
         >
           <Globe2 className={clsx("transition-transform group-hover:scale-110", activePanel === "globe" && "nav-icon-pop")} size={20} strokeWidth={1.9} />
@@ -161,7 +161,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
               )}
               onClick={() => togglePanel(item.panel)}
               aria-label={label}
-              title={label}
+              data-tooltip={label}
               type="button"
             >
               <Icon className={clsx("transition-transform group-hover:scale-110", isActive && "nav-icon-pop")} size={20} strokeWidth={1.9} />
@@ -174,9 +174,6 @@ export function MainLayout({ children }: { children: ReactNode }) {
               {indicatorMotion?.from === item.panel ? (
                 <span key={`${indicatorMotion.id}-${item.panel}-exit`} className={clsx("nav-indicator", `nav-indicator-exit-${indicatorMotion.direction}`)} />
               ) : null}
-              <span className="pointer-events-none absolute left-14 hidden whitespace-nowrap rounded-full bg-on-surface px-3 py-1.5 text-xs text-white opacity-0 shadow-soft transition group-hover:opacity-100 md:block">
-                {label}
-              </span>
             </button>
           );
         })}

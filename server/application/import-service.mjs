@@ -39,6 +39,8 @@ export function createImportServices({
   const aiConcurrency = Number(process.env.EARTH_ONLINE_IMPORT_AI_CONCURRENCY ?? 200);
   const embeddingConcurrency = Number(process.env.EARTH_ONLINE_IMPORT_EMBEDDING_CONCURRENCY ?? 600);
   const failedImportJobRetentionMs = Number(process.env.EARTH_ONLINE_FAILED_IMPORT_JOB_RETENTION_MS ?? 24 * 60 * 60 * 1000);
+  const aiImageMaxDimension = Number(process.env.EARTH_ONLINE_AI_IMAGE_MAX_DIMENSION ?? 1200);
+  const aiImageJpegQuality = Number(process.env.EARTH_ONLINE_AI_IMAGE_JPEG_QUALITY ?? 82);
   const missingGpsLowConfidenceThreshold = 0.55;
   const closeNeighborContextMs = 15 * 60 * 1000;
 
@@ -103,9 +105,26 @@ export function createImportServices({
     }
   }
 
-  async function readImageDataUrl(fullPath, mime) {
-    const buffer = await fs.readFile(fullPath);
-    return `data:${mime};base64,${buffer.toString("base64")}`;
+  async function readAiImagePayloadFromFile(fullPath, mime) {
+    const maxDimension = Number.isFinite(aiImageMaxDimension) && aiImageMaxDimension > 0 ? aiImageMaxDimension : 1200;
+    const quality = Number.isFinite(aiImageJpegQuality) && aiImageJpegQuality > 0 && aiImageJpegQuality <= 100 ? aiImageJpegQuality : 82;
+    try {
+      const buffer = await sharp(fullPath, { failOn: "none" })
+        .rotate()
+        .resize({ width: maxDimension, height: maxDimension, fit: "inside", withoutEnlargement: true })
+        .jpeg({ quality })
+        .toBuffer();
+      return {
+        mime: "image/jpeg",
+        dataUrl: `data:image/jpeg;base64,${buffer.toString("base64")}`,
+      };
+    } catch {
+      const buffer = await fs.readFile(fullPath);
+      return {
+        mime,
+        dataUrl: `data:${mime};base64,${buffer.toString("base64")}`,
+      };
+    }
   }
 
   async function cleanupStaleImportJobDirs() {
@@ -193,14 +212,15 @@ export function createImportServices({
           const existingPhoto = duplicatePhoto;
           if (existingPhoto) {
             const parsedLocation = isUsableLocation(exif.location) ? exif.location : existingPhoto.location;
+            const aiImagePayload = allowCloud ? readAiImagePayloadFromFile(fullPath, mime) : Promise.resolve(undefined);
             downstreamTasks.push(
               Promise.all([
                 visionLimit(async () => {
-                  const dataUrl = allowCloud ? await readImageDataUrl(fullPath, mime) : undefined;
+                  const imagePayload = await aiImagePayload;
                   const ai = await analyzePhotoVision({
                     fileName,
-                    mime,
-                    dataUrl,
+                    mime: imagePayload?.mime ?? mime,
+                    dataUrl: imagePayload?.dataUrl,
                     preset: inferPreset(fileName, parsedLocation),
                     location: parsedLocation,
                     allowCloud,
@@ -210,8 +230,8 @@ export function createImportServices({
                   return ai;
                 }),
                 embeddingLimit(async () => {
-                  const dataUrl = allowCloud ? await readImageDataUrl(fullPath, mime) : undefined;
-                  const embedding = await embedPhotoImage({ fileName, mime, dataUrl, allowCloud });
+                  const imagePayload = await aiImagePayload;
+                  const embedding = await embedPhotoImage({ fileName, mime: imagePayload?.mime ?? mime, dataUrl: imagePayload?.dataUrl, allowCloud });
                   recordEmbeddingStats(embedding, aiStats);
                   markEmbeddingDone(fileName);
                   return embedding;
@@ -276,6 +296,7 @@ export function createImportServices({
         hasExifLocation,
         hasExifTime: Boolean(exif.capturedAt),
       };
+      const aiImagePayload = allowCloud ? readAiImagePayloadFromFile(fullPath, mime) : Promise.resolve(undefined);
       downstreamTasks.push(
         Promise.all([
           storageLimit(async () => {
@@ -286,11 +307,11 @@ export function createImportServices({
             return thumbName;
           }),
           visionLimit(async () => {
-            const dataUrl = allowCloud ? await readImageDataUrl(fullPath, mime) : undefined;
+            const imagePayload = await aiImagePayload;
             const ai = await analyzePhotoVision({
               fileName,
-              mime,
-              dataUrl,
+              mime: imagePayload?.mime ?? mime,
+              dataUrl: imagePayload?.dataUrl,
               preset,
               location,
               allowCloud,
@@ -300,8 +321,8 @@ export function createImportServices({
             return ai;
           }),
           embeddingLimit(async () => {
-            const dataUrl = allowCloud ? await readImageDataUrl(fullPath, mime) : undefined;
-            const embedding = await embedPhotoImage({ fileName, mime, dataUrl, allowCloud });
+            const imagePayload = await aiImagePayload;
+            const embedding = await embedPhotoImage({ fileName, mime: imagePayload?.mime ?? mime, dataUrl: imagePayload?.dataUrl, allowCloud });
             recordEmbeddingStats(embedding, aiStats);
             markEmbeddingDone(fileName);
             return embedding;
@@ -1282,14 +1303,9 @@ export function createImportServices({
     if (!photo.storageUrl) return undefined;
     const fileName = path.basename(photo.storageUrl);
     const fullPath = path.join(paths.photoDir, fileName);
-    const buffer = await fs.readFile(fullPath).catch(() => undefined);
-    if (!buffer) return undefined;
     const ext = path.extname(fileName).toLowerCase();
     const mime = photo.mime || (ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : ext === ".heic" ? "image/heic" : "image/jpeg");
-    return {
-      mime,
-      dataUrl: `data:${mime};base64,${buffer.toString("base64")}`,
-    };
+    return fs.access(fullPath).then(() => readAiImagePayloadFromFile(fullPath, mime)).catch(() => undefined);
   }
 
   function buildMissingInfoInferenceInput({ photo, context, contextPlaces }) {

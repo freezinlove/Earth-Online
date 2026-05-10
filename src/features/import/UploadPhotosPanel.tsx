@@ -477,7 +477,7 @@ function MissingSuggestions({
         <span>{t("pendingInfo")}</span>
         <small>{groups.reduce((count, group) => count + group.photos.length, 0)} {t("photoCount")}</small>
         <div className="import-missing-heading-actions">
-          <button onClick={() => onReject(allPhotoIds)} disabled={!allPhotoIds.length} title={t("cancelImport")} type="button">
+          <button onClick={() => onReject(allPhotoIds)} disabled={!allPhotoIds.length} aria-label={t("cancelImport")} type="button" data-tooltip={t("cancelImport")}>
             <X size={14} />
           </button>
           <button
@@ -485,8 +485,9 @@ function MissingSuggestions({
               if (!inferringIds.has(item.id)) onInfer(item);
             })}
             disabled={!hasInferable}
-            title={t("aiSecondInference")}
+            aria-label={t("aiSecondInference")}
             type="button"
+            data-tooltip={t("aiSecondInference")}
           >
             <Sparkles size={14} />
           </button>
@@ -520,17 +521,17 @@ function MissingSuggestions({
                 <span>{suggestedTarget.label}</span>
                 {suggestedTarget.badge ? <em>{suggestedTarget.badge}</em> : null}
               </strong>
-              <button className="import-inline-cancel" onClick={() => onReject(group.photos.map((photo) => photo.id))} title={t("cancelImport")} type="button">
+              <button className="import-inline-cancel" onClick={() => onReject(group.photos.map((photo) => photo.id))} aria-label={t("cancelImport")} type="button" data-tooltip={t("cancelImport")}>
                 <X size={13} />
               </button>
-              <button className="import-inline-infer" onClick={() => onInfer(group.pending)} disabled={!group.pending || isInferring} title={t("aiSecondInference")} type="button" data-tooltip={t("aiSecondInference")}>
+              <button className="import-inline-infer" onClick={() => onInfer(group.pending)} disabled={!group.pending || isInferring} aria-label={t("aiSecondInference")} type="button" data-tooltip={t("aiSecondInference")}>
                 {isInferring ? <LoaderCircle className="animate-spin" size={13} /> : <Sparkles size={13} />}
               </button>
-              <button className="import-inline-manual" onClick={() => onManual(group.pending)} disabled={!group.pending || isAccepting} title={t("manualResolve")} type="button">
+              <button className="import-inline-manual" onClick={() => onManual(group.pending)} disabled={!group.pending || isAccepting} aria-label={t("manualResolve")} type="button" data-tooltip={t("manualResolve")}>
                 <PencilLine size={13} />
               </button>
               {actionable ? (
-                <button className="import-inline-confirm" onClick={() => onAccept(group.pending)} disabled={isAccepting} title={t("confirmSuggestion")} type="button">
+                <button className="import-inline-confirm" onClick={() => onAccept(group.pending)} disabled={isAccepting} aria-label={t("confirmSuggestion")} type="button" data-tooltip={t("confirmSuggestion")}>
                   {isAccepting ? <LoaderCircle className="animate-spin" size={13} /> : <Check size={14} />}
                 </button>
               ) : null}
@@ -595,30 +596,30 @@ function AiFailureSuggestions({
                 <span>{failure.photo.title ?? failure.photo.fileName}</span>
                 <em>{failure.hasRealExifGps ? "EXIF" : t("undecided")}</em>
               </strong>
-              <button className="import-inline-cancel" onClick={() => onReject([failure.photo.id])} title={t("cancelImport")} type="button">
+              <button className="import-inline-cancel" onClick={() => onReject([failure.photo.id])} aria-label={t("cancelImport")} type="button" data-tooltip={t("cancelImport")}>
                 <X size={13} />
               </button>
               {canRetryVision && canRetryEmbedding ? (
-                <button className="import-inline-infer" onClick={() => onResolve(failure.pending, "retry_both")} disabled={!failure.pending || isBusy} title={t("retryBothAi")} type="button">
+                <button className="import-inline-infer" onClick={() => onResolve(failure.pending, "retry_both")} disabled={!failure.pending || isBusy} aria-label={t("retryBothAi")} type="button" data-tooltip={t("retryBothAi")}>
                   {isBusy ? <LoaderCircle className="animate-spin" size={13} /> : <Sparkles size={13} />}
                 </button>
               ) : null}
               {canRetryVision && !canRetryEmbedding ? (
-                <button className="import-inline-infer" onClick={() => onResolve(failure.pending, "retry_vision")} disabled={!failure.pending || isBusy} title={t("retryAiVision")} type="button">
+                <button className="import-inline-infer" onClick={() => onResolve(failure.pending, "retry_vision")} disabled={!failure.pending || isBusy} aria-label={t("retryAiVision")} type="button" data-tooltip={t("retryAiVision")}>
                   {isBusy ? <LoaderCircle className="animate-spin" size={13} /> : <Sparkles size={13} />}
                 </button>
               ) : null}
               {canRetryEmbedding && !canRetryVision ? (
-                <button className="import-inline-infer" onClick={() => onResolve(failure.pending, "retry_embedding")} disabled={!failure.pending || isBusy} title={t("retryEmbedding")} type="button">
+                <button className="import-inline-infer" onClick={() => onResolve(failure.pending, "retry_embedding")} disabled={!failure.pending || isBusy} aria-label={t("retryEmbedding")} type="button" data-tooltip={t("retryEmbedding")}>
                   {isBusy ? <LoaderCircle className="animate-spin" size={13} /> : <Circle size={13} />}
                 </button>
               ) : null}
               {failure.hasRealExifGps ? (
-                <button className="import-inline-confirm" onClick={() => onResolve(failure.pending, "archive_exif")} disabled={!failure.pending || isBusy} title={t("archiveByExif")} type="button">
+                <button className="import-inline-confirm" onClick={() => onResolve(failure.pending, "archive_exif")} disabled={!failure.pending || isBusy} aria-label={t("archiveByExif")} type="button" data-tooltip={t("archiveByExif")}>
                   <MapPin size={14} />
                 </button>
               ) : null}
-              <button className="import-inline-manual" onClick={() => onManual(failure.pending)} disabled={!failure.pending || isBusy} title={t("manualResolve")} type="button">
+              <button className="import-inline-manual" onClick={() => onManual(failure.pending)} disabled={!failure.pending || isBusy} aria-label={t("manualResolve")} type="button" data-tooltip={t("manualResolve")}>
                 <PencilLine size={13} />
               </button>
               <span className="import-infer-note" data-status="error">{failure.error}</span>
@@ -660,7 +661,7 @@ function ManualPendingResolutionModal({
   const relatedPhotos = photos.filter((photo) => item.relatedPhotoIds.includes(photo.id));
   const primaryPhoto = relatedPhotos[0];
   const tripId = item.relatedTripId ?? primaryPhoto?.tripId;
-  const tripPlaces = places.filter((place) => place.tripId === tripId);
+  const tripPlaces = useMemo(() => places.filter((place) => place.tripId === tripId), [places, tripId]);
   const [mode, setMode] = useState<"bind" | "new" | "archive">("bind");
   const [placeId, setPlaceId] = useState(tripPlaces[0]?.id ?? "");
   const [name, setName] = useState(initialName ?? primaryPhoto?.title ?? primaryPhoto?.fileName ?? "");
@@ -669,7 +670,7 @@ function ManualPendingResolutionModal({
     setPlaceId(tripPlaces[0]?.id ?? "");
     setName(initialName ?? primaryPhoto?.title ?? primaryPhoto?.fileName ?? "");
     setMode(initialMode ?? (tripPlaces.length ? "bind" : "new"));
-  }, [initialMode, initialName, item.id]);
+  }, [initialMode, initialName, item.id, primaryPhoto?.fileName, primaryPhoto?.title, tripPlaces]);
 
   const submit = () => {
     if (mode === "bind") {
@@ -1053,7 +1054,10 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
             onInfer={(item) => void inferPending(item)}
             onManual={(item) => {
               setManualPending(item);
-              if (item) openManualPlacePick(item.id, photos.find((photo) => item.relatedPhotoIds.includes(photo.id))?.title ?? photos.find((photo) => item.relatedPhotoIds.includes(photo.id))?.fileName ?? "");
+              if (item) {
+                const photo = photos.find((photo) => item.relatedPhotoIds.includes(photo.id));
+                openManualPlacePick(item.id, photo?.title ?? photo?.fileName ?? "");
+              }
             }}
             onOpenPreview={openPhotoPreview}
             onReject={(photoIds) => void cancelPendingImportPhotos(photoIds)}
@@ -1067,7 +1071,10 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
             selectedPhotoId={selectedPhotoId}
             onManual={(item) => {
               setManualPending(item);
-              if (item) openManualPlacePick(item.id, photos.find((photo) => item.relatedPhotoIds.includes(photo.id))?.title ?? photos.find((photo) => item.relatedPhotoIds.includes(photo.id))?.fileName ?? "");
+              if (item) {
+                const photo = photos.find((photo) => item.relatedPhotoIds.includes(photo.id));
+                openManualPlacePick(item.id, photo?.title ?? photo?.fileName ?? "");
+              }
             }}
             onOpenPreview={openPhotoPreview}
             onReject={(photoIds) => void cancelPendingImportPhotos(photoIds)}
