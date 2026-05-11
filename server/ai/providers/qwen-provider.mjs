@@ -4,10 +4,42 @@ import { loadPrompt } from "../prompt-registry.mjs";
 import { qwenChatCompletion, qwenMultimodalEmbedding } from "../qwen-client.mjs";
 
 function parseJsonObject(text) {
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) return undefined;
+  const trimmed = String(text ?? "").trim();
   try {
-    return JSON.parse(match[0]);
+    const direct = JSON.parse(trimmed);
+    if (direct && typeof direct === "object" && !Array.isArray(direct)) return direct;
+    if (Array.isArray(direct)) return direct.find((item) => item && typeof item === "object" && !Array.isArray(item));
+  } catch {
+    // Fall through to extracting the first balanced object from wrapped text.
+  }
+  const start = trimmed.indexOf("{");
+  if (start < 0) return undefined;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < trimmed.length; index += 1) {
+    const char = trimmed[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === "\"") inString = false;
+      continue;
+    }
+    if (char === "\"") inString = true;
+    else if (char === "{") depth += 1;
+    else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          return JSON.parse(trimmed.slice(start, index + 1));
+        } catch {
+          return undefined;
+        }
+      }
+    }
+  }
+  try {
+    return JSON.parse(trimmed.slice(start));
   } catch {
     return undefined;
   }
@@ -21,8 +53,8 @@ export const qwenProvider = {
     missingInfoInference: true,
     embedding: true,
   },
-  async analyzeImage({ rootDir, secretProvider, mime, dataUrl, preset, geoContext }) {
-    const prompt = await loadPrompt("photoAnalysis");
+  async analyzeImage({ rootDir, secretProvider, mime, dataUrl, preset, geoContext, locale }) {
+    const prompt = await loadPrompt("photoAnalysis", locale);
     const apiKey = readQwenChatApiKey(rootDir, secretProvider);
     const content = await qwenChatCompletion({
       rootDir,
@@ -48,15 +80,19 @@ export const qwenProvider = {
     });
     const parsed = parseJsonObject(typeof content === "string" ? content : JSON.stringify(content));
     return {
-      ...validatePhotoAnalysisResult(parsed, preset),
+      ...validatePhotoAnalysisResult(parsed, prompt.locale === "en" ? undefined : preset, { locale: prompt.locale }),
       provider: this.id,
       promptId: prompt.id,
       promptVersion: prompt.version,
     };
   },
-  async inferMissingInfo({ rootDir, secretProvider, dataUrl, mime, inferenceInput }) {
-    const prompt = await loadPrompt("missingInfoInference");
+  async inferMissingInfo({ rootDir, secretProvider, dataUrl, mime, inferenceInput, locale }) {
+    const prompt = await loadPrompt("missingInfoInference", locale);
     const apiKey = readQwenChatApiKey(rootDir, secretProvider);
+    const userInstruction =
+      prompt.locale === "en"
+        ? "Use the current missing-GPS photo image and the strictly sectioned JSON data below. Output one second-pass missing-information inference JSON."
+        : "请根据当前待补照片图像和下方严格分区的 JSON 数据，输出一个待补信息二次推断 JSON。";
     const content = await qwenChatCompletion({
       rootDir,
       apiKey,
@@ -72,7 +108,7 @@ export const qwenProvider = {
             {
               type: "text",
               text: [
-                "请根据当前待补照片图像和下方严格分区的 JSON 数据，输出一个待补信息二次推断 JSON。",
+                userInstruction,
                 JSON.stringify(inferenceInput),
               ].join("\n\n"),
             },
@@ -83,7 +119,7 @@ export const qwenProvider = {
     });
     const parsed = parseJsonObject(typeof content === "string" ? content : JSON.stringify(content));
     return {
-      ...validateMissingInfoInferenceResult(parsed),
+      ...validateMissingInfoInferenceResult(parsed, { locale: prompt.locale }),
       provider: this.id,
       promptId: prompt.id,
       promptVersion: prompt.version,

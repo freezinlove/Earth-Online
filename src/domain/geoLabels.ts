@@ -1,5 +1,5 @@
 import type { GlobeMarker, LocalizedNames, PlaceNode, TimelineSegment } from "@/domain/models";
-import { hasHan, zhPlaceNameOverride } from "@/domain/placeNameOverrides";
+import { enPlaceNameOverride, hasHan, zhPlaceNameOverride } from "@/domain/placeNameOverrides";
 import type { Locale } from "@/store/appStore";
 
 const countryEnByZh: Record<string, string> = {
@@ -21,14 +21,21 @@ const countryEnByZh: Record<string, string> = {
 export function localizedName(names: LocalizedNames | undefined, fallback: string | undefined, locale: Locale) {
   const preferred = names?.[locale];
   if (locale === "zh" && preferred && !hasHan(preferred)) return zhPlaceNameOverride(preferred) ?? preferred;
-  if (preferred) return preferred;
+  if (locale === "en" && preferred && hasHan(preferred)) {
+    const mapped = enPlaceNameOverride(preferred) ?? enPlaceNameOverride(names?.zh) ?? enPlaceNameOverride(fallback);
+    if (mapped) return mapped;
+  } else if (preferred) {
+    return preferred;
+  }
   if (locale === "zh") {
     const candidates = [names?.local, fallback, names?.en];
     const translated = candidates.map(zhPlaceNameOverride).find(Boolean);
     if (translated) return translated;
     return candidates.find((value) => value && hasHan(value)) ?? candidates.find(Boolean) ?? "未标地点";
   }
-  return names?.local ?? names?.zh ?? fallback ?? "Unmarked place";
+  const mapped = enPlaceNameOverride(names?.zh) ?? enPlaceNameOverride(fallback) ?? enPlaceNameOverride(names?.local);
+  if (mapped) return mapped;
+  return [names?.local, fallback, names?.zh].find((value) => value && !hasHan(value)) ?? "Unmarked place";
 }
 
 export function placeLabel(place: Pick<PlaceNode, "name" | "names"> | undefined, locale: Locale) {

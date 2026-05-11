@@ -4,7 +4,7 @@ import sharp from "sharp";
 import { safeArray } from "../domain/arrays.mjs";
 import { toDateInput } from "../domain/dates.mjs";
 import { parseExif } from "../domain/exif-parser.mjs";
-import { geoContextFor, haversineKm, inferPreset, isUsableLocation } from "../domain/geo.mjs";
+import { geoContextFor, haversineKm, inferPreset, isUsableLocation, localizedGeoHint, normalizeLocale } from "../domain/geo.mjs";
 import { forwardLocalGeocode, reverseLocalGeocode } from "../domain/local-geocoder.mjs";
 import { mergeLocationCandidates, resolveImportedLocation, toAiEvidence } from "../domain/location-resolver.mjs";
 import { cleanPlaceName } from "../domain/place-name-selector.mjs";
@@ -149,6 +149,7 @@ export function createImportServices({
     const vectorIndex = await readVectorIndex();
     const now = new Date();
     const files = safeArray(payload.files).slice(0, 1000);
+    const locale = normalizeLocale(payload.locale);
     if (files.length === 0) throw new Error("没有收到可导入图片。");
 
     const batchId = makeId("batch");
@@ -225,6 +226,7 @@ export function createImportServices({
                     preset: inferPreset(fileName, parsedLocation),
                     location: parsedLocation,
                     allowCloud,
+                    locale,
                   });
                   recordVisionStats(ai, aiStats);
                   markAiDone(fileName);
@@ -316,6 +318,7 @@ export function createImportServices({
               preset,
               location,
               allowCloud,
+              locale,
             });
             recordVisionStats(ai, aiStats);
             markAiDone(fileName);
@@ -387,7 +390,7 @@ export function createImportServices({
       const end = toDateInput(group.at(-1)?.capturedAt);
       const adjacentTrip = findAdjacentTrip({ ...state, trips: workingTrips }, group);
       const tripId = adjacentTrip?.id ?? makeId("trip");
-      const title = `${start.slice(0, 7)} ${preset.city}旅行${groups.length > 1 ? ` ${groupIndex + 1}` : ""}`;
+      const title = importTripTitle({ month: start.slice(0, 7), city: preset.city, groupIndex, groupCount: groups.length, locale });
       let trip = adjacentTrip;
       if (!trip) {
         trip = {
@@ -429,7 +432,13 @@ export function createImportServices({
         item.id === tripId
           ? {
               ...item,
-              title: adjacentTrip ? `${toDateInput(tripDates[0]).slice(0, 7)} ${geoSummary.cities.length > 1 ? "欧洲多城" : geoSummary.cities[0]}旅行` : item.title,
+              title: createdTrips.some((createdTrip) => createdTrip.id === tripId)
+                ? importTripTitle({
+                    month: toDateInput(tripDates[0]).slice(0, 7),
+                    city: geoSummary.cities.length > 1 ? importTripMultiCityLabel(locale) : geoSummary.cities[0],
+                    locale,
+                  })
+                : item.title,
               dateRange: { start: toDateInput(tripDates[0] ?? start), end: toDateInput(tripDates.at(-1) ?? end) },
               countries: geoSummary.countries.length ? geoSummary.countries : item.countries,
               cities: geoSummary.cities,
@@ -670,7 +679,7 @@ export function createImportServices({
         ["missing_gps", "confirm_location_candidate"].includes(item.type) &&
         requestedIds.has(item.id),
     );
-    return enqueuePendingInferenceJob(makeId("job"), { batchId, pendingIds: pendingItems.map((item) => item.id) });
+    return enqueuePendingInferenceJob(makeId("job"), { batchId, pendingIds: pendingItems.map((item) => item.id), locale: normalizeLocale(body.locale) });
   }
 
   function enqueuePendingInferenceJob(id, jobPayload) {
@@ -871,14 +880,14 @@ export function createImportServices({
     return responseState();
   }
 
-  async function inferPendingLocation(batchId, pendingId) {
+  async function inferPendingLocation(batchId, pendingId, body = {}) {
     const state = await readState();
     const batch = state.importBatches.find((item) => item.id === batchId);
     const pending = state.pendingItems.find((item) => item.id === pendingId);
     if (!batch || batch.status !== "pending_confirmation" || !pending || !batch.pendingItemIds.includes(pending.id)) return responseState();
     if (!["missing_gps", "confirm_location_candidate"].includes(pending.type)) return responseState();
 
-    const proposal = await buildMissingInfoInferenceProposal(state, batch, pending);
+    const proposal = await buildMissingInfoInferenceProposal(state, batch, pending, { locale: normalizeLocale(body.locale) });
     const latestState = await readState();
     const latestBatch = latestState.importBatches.find((item) => item.id === batchId);
     const latestPending = latestState.pendingItems.find((item) => item.id === pendingId);
@@ -892,8 +901,9 @@ export function createImportServices({
     return responseState();
   }
 
-  async function inferPendingLocationsBatch({ batchId, pendingIds }, progress = {}) {
+  async function inferPendingLocationsBatch({ batchId, pendingIds, locale: rawLocale }, progress = {}) {
     const state = await readState();
+    const locale = normalizeLocale(rawLocale);
     const batch = state.importBatches.find((item) => item.id === batchId);
     if (!batch || batch.status !== "pending_confirmation") return responseState();
     const requestedIds = new Set(safeArray(pendingIds).map(String));
@@ -910,12 +920,12 @@ export function createImportServices({
     const results = await mapConcurrent(items, missingInferenceConcurrency, async (pending) => {
       const photo = state.photos.find((item) => pending.relatedPhotoIds.includes(item.id));
       try {
-        const proposal = await buildMissingInfoInferenceProposal(state, batch, pending);
+        const proposal = await buildMissingInfoInferenceProposal(state, batch, pending, { locale });
         return { pendingId: pending.id, proposal };
       } catch (error) {
         return {
           pendingId: pending.id,
-          proposal: keepPending(error instanceof Error ? error.message : "AI 二次推断失败。", 0),
+          proposal: keepPending(error instanceof Error ? error.message : missingInferenceText(locale, "secondInferenceFailed"), 0, locale),
         };
       } finally {
         done += 1;
@@ -1061,7 +1071,7 @@ export function createImportServices({
     if (!photo) return responseState();
 
     if (body.action === "archive_exif") return archiveAiFailureWithExif(state, batch, pending, photo);
-    if (body.action === "retry_vision" || body.action === "retry_embedding" || body.action === "retry_both") return retryImportAiFailure(state, batch, pending, photo, body.action);
+    if (body.action === "retry_vision" || body.action === "retry_embedding" || body.action === "retry_both") return retryImportAiFailure(state, batch, pending, photo, body.action, { locale: normalizeLocale(body.locale) });
     throw new Error("未知的 AI 失败处理方式。");
   }
 
@@ -1084,7 +1094,7 @@ export function createImportServices({
     return responseState();
   }
 
-  async function retryImportAiFailure(state, batch, pending, photo, action) {
+  async function retryImportAiFailure(state, batch, pending, photo, action, { locale = "zh" } = {}) {
     const imagePayload = await readPhotoImagePayload(photo);
     if (!imagePayload) throw new Error("找不到原图，无法重跑初次导入 AI。");
     const retryVision = action === "retry_vision" || action === "retry_both";
@@ -1117,6 +1127,7 @@ export function createImportServices({
         preset: inferPreset(photo.fileName, photo.location),
         location: photo.location,
         allowCloud: true,
+        locale,
       });
     }
     if (!ai) throw new Error("照片缺少可用的初次导入分析结果。");
@@ -1168,7 +1179,7 @@ export function createImportServices({
       batch,
       patchedPhoto,
     );
-    await writeState(rebuildTripsForImportedPhoto(nextState, patchedPhoto, batch));
+    await writeState(rebuildTripsForImportedPhoto(nextState, patchedPhoto, batch, { allowExistingPlaceMerge: true }));
     return responseState();
   }
 
@@ -1206,7 +1217,7 @@ export function createImportServices({
 
   function failureReasonText(photo) {
     return [
-      photo.aiFailure?.hasRealExifGps ? "包含真实 EXIF GPS" : "没有真实 EXIF GPS",
+      photo.aiFailure?.hasRealExifGps ? "真实GPS" : "无GPS",
       photo.aiFailure?.vision ? `AI Vision：${photo.aiFailure.vision}` : undefined,
       photo.aiFailure?.embedding ? `Embedding：${photo.aiFailure.embedding}` : undefined,
     ]
@@ -1254,7 +1265,7 @@ export function createImportServices({
     return responseState();
   }
 
-  async function analyzePhotoVision({ fileName, mime, dataUrl, preset, location, allowCloud }) {
+  async function analyzePhotoVision({ fileName, mime, dataUrl, preset, location, allowCloud, locale = "zh" }) {
     return analyzeTravelImageVision({
       rootDir: paths.rootDir,
       secretProvider,
@@ -1262,9 +1273,20 @@ export function createImportServices({
       mime,
       dataUrl,
       preset,
-      geoContext: geoContextFor(preset, location),
+      geoContext: geoContextFor(preset, location, locale),
       allowCloud,
+      locale,
     });
+  }
+
+  function importTripTitle({ month, city, groupIndex = 0, groupCount = 1, locale = "zh" }) {
+    const suffix = groupCount > 1 ? ` ${groupIndex + 1}` : "";
+    if (normalizeLocale(locale) === "en") return `${month} ${localizedGeoHint(city, locale)} trip${suffix}`;
+    return `${month} ${city}旅行${suffix}`;
+  }
+
+  function importTripMultiCityLabel(locale = "zh") {
+    return normalizeLocale(locale) === "en" ? "Europe multi-city" : "欧洲多城";
   }
 
   async function embedPhotoAnalysis({ fileName, analysis, allowCloud }) {
@@ -1370,7 +1392,7 @@ export function createImportServices({
   function addAiFailurePendingItems(imported, pendingItems) {
     for (const photo of imported.filter(hasAiProcessingFailure)) {
       const failedParts = [photo.aiFailure?.vision ? "AI Vision" : undefined, photo.aiFailure?.embedding ? "Embedding" : undefined].filter(Boolean).join(" / ");
-      const gpsLabel = photo.aiFailure?.hasRealExifGps ? "包含真实 EXIF GPS" : "没有真实 EXIF GPS";
+      const gpsLabel = photo.aiFailure?.hasRealExifGps ? "真实GPS" : "无GPS";
       pendingItems.push({
         id: makeId("pending"),
         type: "ai_processing_failed",
@@ -1396,15 +1418,15 @@ export function createImportServices({
     return photo.pendingReason === "missing_gps" || photo.pendingReason === "missing_time" || photo.exifStatus?.gps === "missing" || photo.exifStatus?.time !== "read";
   }
 
-  async function buildMissingInfoInferenceProposal(state, batch, pending) {
+  async function buildMissingInfoInferenceProposal(state, batch, pending, { locale = "zh" } = {}) {
     const photo = state.photos.find((item) => item.id === pending.relatedPhotoIds[0]);
-    if (!photo) return keepPending("找不到待补照片。", 0.2);
+    if (!photo) return keepPending(missingInferenceText(locale, "photoNotFound"), 0.2, locale);
     const context = buildInferenceContextPhotos(state, batch, photo);
     const contextPhotos = uniquePhotos([context.previousPhoto, context.nextPhoto]);
     const contextPlaces = allowedInferencePlaces(state, photo, contextPhotos);
     const imagePayload = await readPhotoImagePayload(photo);
-    if (!imagePayload) return keepPending("找不到当前待补照片原图，无法执行二次视觉推断。", 0);
-    const inferenceInput = buildMissingInfoInferenceInput({ photo, context, contextPlaces });
+    if (!imagePayload) return keepPending(missingInferenceText(locale, "imageMissing"), 0, locale);
+    const inferenceInput = buildMissingInfoInferenceInput({ photo, context, contextPlaces, locale });
     const aiResult = await inferMissingInfoWithImage({
       rootDir: paths.rootDir,
       secretProvider,
@@ -1412,8 +1434,9 @@ export function createImportServices({
       mime: imagePayload.mime,
       inferenceInput,
       allowCloud: true,
+      locale,
     });
-    return normalizeMissingInfoAiProposal({ aiResult, photo, context, contextPlaces });
+    return normalizeMissingInfoAiProposal({ aiResult, photo, context, contextPlaces, locale });
   }
 
   function buildInferenceContextPhotos(state, batch, photo) {
@@ -1459,7 +1482,7 @@ export function createImportServices({
     return fs.access(fullPath).then(() => readAiImagePayloadFromFile(fullPath, mime)).catch(() => undefined);
   }
 
-  function buildMissingInfoInferenceInput({ photo, context, contextPlaces }) {
+  function buildMissingInfoInferenceInput({ photo, context, contextPlaces, locale = "zh" }) {
     return {
       task: "missing_gps_second_pass",
       currentPhoto: {
@@ -1467,14 +1490,14 @@ export function createImportServices({
         initialLocationCandidate: serializeInitialLocationCandidate(photo),
       },
       neighbors: {
-        previous: serializeNeighborPhoto(context.previousPhoto, contextPlaces),
-        next: serializeNeighborPhoto(context.nextPhoto, contextPlaces),
+        previous: serializeNeighborPhoto(context.previousPhoto, contextPlaces, locale),
+        next: serializeNeighborPhoto(context.nextPhoto, contextPlaces, locale),
       },
       allowedPlaces: contextPlaces.map((place) => ({
         id: place.id,
-        name: place.name,
-        city: place.city,
-        country: place.country,
+        name: localizedPlaceValue(place, "name", locale),
+        city: localizedPlaceValue(place, "city", locale),
+        country: localizedPlaceValue(place, "country", locale),
         lat: place.center?.lat,
         lng: place.center?.lng,
       })),
@@ -1496,7 +1519,7 @@ export function createImportServices({
       .sort((left, right) => Number(right.confidence ?? 0) - Number(left.confidence ?? 0))[0];
   }
 
-  function serializeNeighborPhoto(photo, contextPlaces) {
+  function serializeNeighborPhoto(photo, contextPlaces, locale = "zh") {
     if (!photo) {
       return {
         capturedAt: null,
@@ -1510,10 +1533,22 @@ export function createImportServices({
     const candidate = bestPhotoLocationCandidate(photo);
     return {
       capturedAt: formatAiTimestamp(photo.capturedAt),
-      placeName: place?.displayName ?? place?.name ?? photo.locationResolution?.effectiveName ?? candidate?.name ?? null,
-      city: place?.city ?? candidate?.city ?? null,
+      placeName: place ? localizedPlaceValue(place, "displayName", locale) : (photo.locationResolution?.effectiveName ?? candidate?.name ?? null),
+      city: place ? localizedPlaceValue(place, "city", locale) : (candidate?.city ?? null),
       hasRealExifGps: hasReliableGps,
     };
+  }
+
+  function localizedPlaceValue(place, field, locale = "zh") {
+    if (!place) return null;
+    if (normalizeLocale(locale) !== "en") {
+      if (field === "displayName") return place.displayName ?? place.name ?? null;
+      return place[field] ?? null;
+    }
+    if (field === "name" || field === "displayName") return place.names?.en ?? place.displayName ?? place.name ?? null;
+    if (field === "city") return place.cityNames?.en ?? place.city ?? null;
+    if (field === "country") return place.countryNames?.en ?? place.country ?? null;
+    return place[field] ?? null;
   }
 
   function formatAiTimestamp(value) {
@@ -1524,22 +1559,22 @@ export function createImportServices({
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
   }
 
-  function normalizeMissingInfoAiProposal({ aiResult, photo, context, contextPlaces }) {
+  function normalizeMissingInfoAiProposal({ aiResult, photo, context, contextPlaces, locale = "zh" }) {
     if (aiResult.action === "bind_photos_to_place") {
       const place = contextPlaces.find((item) => item.id === aiResult.targetPlaceId);
-      if (!place) return keepPending("AI 建议的目标地点不在后端允许的地点列表中。", aiResult.confidence ?? 0);
+      if (!place) return keepPending(missingInferenceText(locale, "targetNotAllowed"), aiResult.confidence ?? 0, locale);
       const closeNeighbor = closeNeighborForPlace(photo, context, place);
       if (isMissingGpsPhoto(photo) && Number(aiResult.confidence ?? 0) < missingGpsLowConfidenceThreshold && !closeNeighbor) {
-        return keepPending(aiResult.reason || "待补照片地点置信度不足。", aiResult.confidence ?? 0);
+        return keepPending(aiResult.reason || missingInferenceText(locale, "lowConfidence"), aiResult.confidence ?? 0, locale);
       }
-      const reason = withCloseNeighborReason(aiResult.reason, closeNeighbor);
+      const reason = withCloseNeighborReason(aiResult.reason, closeNeighbor, locale);
       return {
         actionable: true,
         confidence: aiResult.confidence,
-        displayTarget: `合并 ${place.displayName ?? place.name}`,
+        displayTarget: `${missingInferenceText(locale, "mergeBadge")} ${place.displayName ?? place.name}`,
         displayTargetLabel: place.displayName ?? place.name,
-        displayTargetBadge: "合并",
-        suggestion: `合并 ${place.displayName ?? place.name}`,
+        displayTargetBadge: missingInferenceText(locale, "mergeBadge"),
+        suggestion: `${missingInferenceText(locale, "mergeBadge")} ${place.displayName ?? place.name}`,
         reason,
         proposal: {
           action: "bind_photos_to_place",
@@ -1553,25 +1588,29 @@ export function createImportServices({
     }
 
     if (aiResult.action === "create_place_from_candidate") {
-      const candidate = completeCandidatePoint(aiResult.candidate);
-      if (!candidate?.name) return keepPending(candidate?.reason || "AI 未给出可创建地点的合法名称。", candidate?.confidence ?? 0);
-      if (!candidate.point) return keepPending(candidate.reason || "AI 给出了地点名，但本地地名库无法估计可用坐标，仍需手动补点。", candidate.confidence ?? 0);
+      const candidate = completeCandidatePoint(aiResult.candidate, locale);
+      if (!candidate?.name) return keepPending(candidate?.reason || missingInferenceText(locale, "invalidPlaceName"), candidate?.confidence ?? 0, locale);
+      if (!candidate.point) return keepPending(candidate.reason || missingInferenceText(locale, "noGeocode"), candidate.confidence ?? 0, locale);
       const mergePlace = findMergeableContextPlace(candidate, contextPlaces);
       if (mergePlace) {
         const closeNeighbor = closeNeighborForPlace(photo, context, mergePlace);
         const strongOverlap = hasStrongGeographicOverlap(candidate, mergePlace);
         if (isMissingGpsPhoto(photo) && Number(candidate.confidence ?? 0) < missingGpsLowConfidenceThreshold && !closeNeighbor && !strongOverlap) {
-          return keepPending(candidate.reason || "待补照片地点置信度不足。", candidate.confidence ?? 0);
+          return keepPending(candidate.reason || missingInferenceText(locale, "lowConfidence"), candidate.confidence ?? 0, locale);
         }
         const placeName = mergePlace.displayName ?? mergePlace.name;
-        const reason = withInferenceSupportReason(`${candidate.reason || "AI 给出了明确地点。"} 已匹配到同一行程中的现有地点：${placeName}。`, { closeNeighbor, strongOverlap });
+        const reason = withInferenceSupportReason(
+          `${candidate.reason || missingInferenceText(locale, "clearPlace")} ${missingInferenceText(locale, "matchedExistingPlace")}: ${placeName}.`,
+          { closeNeighbor, strongOverlap },
+          locale,
+        );
         return {
           actionable: true,
           confidence: candidate.confidence,
-          displayTarget: `合并 ${placeName}`,
+          displayTarget: `${missingInferenceText(locale, "mergeBadge")} ${placeName}`,
           displayTargetLabel: placeName,
-          displayTargetBadge: "合并",
-          suggestion: `合并 ${placeName}`,
+          displayTargetBadge: missingInferenceText(locale, "mergeBadge"),
+          suggestion: `${missingInferenceText(locale, "mergeBadge")} ${placeName}`,
           reason,
           proposal: {
             action: "bind_photos_to_place",
@@ -1583,14 +1622,14 @@ export function createImportServices({
           },
         };
       }
-      if (isMissingGpsPhoto(photo) && Number(candidate.confidence ?? 0) < missingGpsLowConfidenceThreshold) return keepPending(candidate.reason || "待补照片地点置信度不足。", candidate.confidence ?? 0);
+      if (isMissingGpsPhoto(photo) && Number(candidate.confidence ?? 0) < missingGpsLowConfidenceThreshold) return keepPending(candidate.reason || missingInferenceText(locale, "lowConfidence"), candidate.confidence ?? 0, locale);
       return {
         actionable: true,
         confidence: candidate.confidence,
-        displayTarget: `新地点 ${candidate.name}`,
+        displayTarget: `${missingInferenceText(locale, "newPlaceBadge")} ${candidate.name}`,
         displayTargetLabel: candidate.name,
-        displayTargetBadge: "新地点",
-        suggestion: `新地点 ${candidate.name}`,
+        displayTargetBadge: missingInferenceText(locale, "newPlaceBadge"),
+        suggestion: `${missingInferenceText(locale, "newPlaceBadge")} ${candidate.name}`,
         reason: candidate.reason,
         proposal: {
           action: "create_place_from_candidate",
@@ -1606,7 +1645,7 @@ export function createImportServices({
       };
     }
 
-    return keepPending(aiResult.reason || "AI 认为当前照片仍无法可靠判断地点。", aiResult.confidence ?? 0);
+    return keepPending(aiResult.reason || missingInferenceText(locale, "noAutoArchive"), aiResult.confidence ?? 0, locale);
   }
 
   function closeNeighborForPlace(photo, context, place) {
@@ -1651,16 +1690,18 @@ export function createImportServices({
     });
   }
 
-  function withCloseNeighborReason(reason, closeNeighbor) {
+  function withCloseNeighborReason(reason, closeNeighbor, locale = "zh") {
     if (!closeNeighbor) return reason;
     const minutes = Math.max(1, Math.round(closeNeighbor.distance / 60000));
-    const baseReason = reason || "AI 给出了可绑定到同一地点的建议。";
-    return `${baseReason} 与相邻已定位照片仅相隔 ${minutes} 分钟，且目标地点一致，已允许低置信度近时间上下文通过。`;
+    const baseReason = reason || missingInferenceText(locale, "bindablePlace");
+    return normalizeLocale(locale) === "en"
+      ? `${baseReason} A neighboring geotagged photo is only ${minutes} minutes away and matches the target place, so the low-confidence nearby context is allowed.`
+      : `${baseReason} 与相邻已定位照片仅相隔 ${minutes} 分钟，且目标地点一致，已允许低置信度近时间上下文通过。`;
   }
 
-  function withInferenceSupportReason(reason, { closeNeighbor, strongOverlap }) {
+  function withInferenceSupportReason(reason, { closeNeighbor, strongOverlap }, locale = "zh") {
     if (strongOverlap) return reason;
-    return withCloseNeighborReason(reason, closeNeighbor);
+    return withCloseNeighborReason(reason, closeNeighbor, locale);
   }
 
   function hasStrongGeographicOverlap(candidate, place) {
@@ -1701,7 +1742,7 @@ export function createImportServices({
       .sort((left, right) => Number(right.sameName) - Number(left.sameName) || Number(right.sameCity) - Number(left.sameCity) || left.distance - right.distance)[0]?.place;
   }
 
-  function completeCandidatePoint(candidate) {
+  function completeCandidatePoint(candidate, locale = "zh") {
     if (!candidate?.name) return candidate;
     if (candidate.point) return candidate;
     const fallback = forwardLocalGeocode(
@@ -1721,7 +1762,10 @@ export function createImportServices({
       localizedNames: candidate.localizedNames ?? fallback.localizedNames,
       localizedCountryNames: candidate.localizedCountryNames ?? fallback.localizedCountryNames,
       confidence: Math.max(Number(candidate.confidence ?? 0), Math.min(0.72, Number(fallback.confidence ?? 0.6))),
-      reason: `${candidate.reason || "AI 给出了明确地点名。"} 已用本地地名库补入估计坐标：${fallback.name}。`,
+      reason:
+        normalizeLocale(locale) === "en"
+          ? `${candidate.reason || "AI provided a clear place name."} Local gazetteer coordinates were added from ${fallback.name}.`
+          : `${candidate.reason || "AI 给出了明确地点名。"} 已用本地地名库补入估计坐标：${fallback.name}。`,
     };
   }
 
@@ -1729,14 +1773,37 @@ export function createImportServices({
     return photo.pendingReason === "missing_gps" || photo.exifStatus?.gps === "missing" || !isUsableLocation(photo.location);
   }
 
-  function keepPending(reason, confidence) {
+  function missingInferenceText(locale, key) {
+    const english = normalizeLocale(locale) === "en";
+    const messages = {
+      photoNotFound: english ? "The pending photo could not be found." : "找不到待补照片。",
+      imageMissing: english ? "The original image for this pending photo could not be found, so second-pass visual inference cannot run." : "找不到当前待补照片原图，无法执行二次视觉推断。",
+      secondInferenceFailed: english ? "AI second-pass inference failed." : "AI 二次推断失败。",
+      targetNotAllowed: english ? "AI suggested a target place that is not in the backend allowed-place list." : "AI 建议的目标地点不在后端允许的地点列表中。",
+      lowConfidence: english ? "The inferred location confidence is too low for this pending photo." : "待补照片地点置信度不足。",
+      invalidPlaceName: english ? "AI did not provide a valid place name that can be created." : "AI 未给出可创建地点的合法名称。",
+      noGeocode: english ? "AI provided a place name, but the local gazetteer could not estimate usable coordinates, so manual placement is still required." : "AI 给出了地点名，但本地地名库无法估计可用坐标，仍需手动补点。",
+      noAutoArchive: english ? "AI still cannot determine a reliable location for this photo." : "AI 认为当前照片仍无法可靠判断地点。",
+      clearPlace: english ? "AI provided a clear place." : "AI 给出了明确地点。",
+      matchedExistingPlace: english ? "It matched an existing place in the same trip" : "已匹配到同一行程中的现有地点",
+      bindablePlace: english ? "AI suggested a place that can be bound to the same location." : "AI 给出了可绑定到同一地点的建议。",
+      mergeBadge: english ? "Merge" : "合并",
+      newPlaceBadge: english ? "New place" : "新地点",
+      pendingTarget: english ? "Still pending" : "仍待确认",
+      pendingLabel: english ? "Pending" : "待确认",
+      keepPendingSuggestion: english ? "AI does not recommend automatic archiving yet. Manual handling is still required." : "AI 暂不建议自动归档，仍需手动处理。",
+    };
+    return messages[key] ?? messages.noAutoArchive;
+  }
+
+  function keepPending(reason, confidence, locale = "zh") {
     return {
       actionable: false,
       confidence,
-      displayTarget: "仍待确认",
-      displayTargetLabel: "待确认",
-      displayTargetBadge: "待确认",
-      suggestion: "AI 暂不建议自动归档，仍需手动处理。",
+      displayTarget: missingInferenceText(locale, "pendingTarget"),
+      displayTargetLabel: missingInferenceText(locale, "pendingLabel"),
+      displayTargetBadge: missingInferenceText(locale, "pendingLabel"),
+      suggestion: missingInferenceText(locale, "keepPendingSuggestion"),
       reason,
       proposal: { action: "keep_pending", confidence, reason },
     };

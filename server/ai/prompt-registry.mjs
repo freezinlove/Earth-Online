@@ -8,20 +8,34 @@ const promptDefinitions = {
   photoAnalysis: {
     id: "photo-analysis",
     version: "1.0.0",
-    path: path.join(__dirname, "prompts", "photo-analysis.v1.zh.md"),
+    paths: {
+      zh: path.join(__dirname, "prompts", "photo-analysis.v1.zh.md"),
+      en: path.join(__dirname, "prompts", "photo-analysis.v1.en.md"),
+    },
   },
   missingInfoInference: {
     id: "missing-info-inference",
     version: "1.0.0",
-    path: path.join(__dirname, "prompts", "missing-info-inference.v1.zh.md"),
+    paths: {
+      zh: path.join(__dirname, "prompts", "missing-info-inference.v1.zh.md"),
+      en: path.join(__dirname, "prompts", "missing-info-inference.v1.en.md"),
+    },
   },
 };
 
-export async function loadPrompt(name) {
+function normalizeLocale(locale) {
+  return locale === "en" ? "en" : "zh";
+}
+
+export async function loadPrompt(name, locale = "zh") {
   const definition = promptDefinitions[name];
   if (!definition) throw new Error(`Unknown AI prompt: ${name}`);
+  const normalizedLocale = normalizeLocale(locale);
   return {
-    ...definition,
-    content: await fs.readFile(definition.path, "utf8"),
+    id: definition.id,
+    version: definition.version,
+    locale: normalizedLocale,
+    path: definition.paths[normalizedLocale],
+    content: await fs.readFile(definition.paths[normalizedLocale], "utf8"),
   };
 }

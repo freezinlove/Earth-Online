@@ -256,7 +256,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
     try {
       await rollbackLatestPendingImportIfNeeded(get, set);
-      const snapshot = await apiClient.importFiles(files, get().aiCloudEnabled, (done, total) => {
+      const snapshot = await apiClient.importFiles(files, get().aiCloudEnabled, get().locale, (done, total) => {
         set({ importProgress: { done, total, phase: "reading", steps: { reading: { done, total } } } });
       }, (progress) => {
         set({ importProgress: progress });
@@ -323,21 +323,21 @@ export const useAppStore = create<AppState>((set, get) => ({
     const batches = get().importBatches;
     const latest = batches[batches.length - 1];
     if (!latest || latest.status !== "pending_confirmation") return;
-    const snapshot = await apiClient.inferPendingLocation(latest.id, pendingId);
+    const snapshot = await apiClient.inferPendingLocation(latest.id, pendingId, get().locale);
     set({ ...applySnapshot(snapshot), activePanel: "upload" });
   },
   inferPendingLocations: async (pendingIds, onProgress) => {
     const batches = get().importBatches;
     const latest = batches[batches.length - 1];
     if (!latest || latest.status !== "pending_confirmation" || pendingIds.length === 0) return;
-    const snapshot = await apiClient.inferPendingLocations(latest.id, pendingIds, onProgress);
+    const snapshot = await apiClient.inferPendingLocations(latest.id, pendingIds, get().locale, onProgress);
     set({ ...applySnapshot(snapshot), activePanel: "upload" });
   },
   resolveImportAiFailure: async (pendingId, action) => {
     const batches = get().importBatches;
     const latest = batches[batches.length - 1];
     if (!latest || latest.status !== "pending_confirmation") return;
-    const snapshot = await apiClient.resolveImportAiFailure(latest.id, pendingId, action);
+    const snapshot = await apiClient.resolveImportAiFailure(latest.id, pendingId, action, get().locale);
     set({ ...applySnapshot(snapshot), activePanel: "upload" });
   },
   mergeLatestImportTrips: async () => {

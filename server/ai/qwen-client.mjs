@@ -37,7 +37,10 @@ export async function qwenChatCompletion({
   if (!response.ok) throw new Error(`qwen chat failed: ${response.status}`);
 
   const json = await response.json();
-  return json.choices?.[0]?.message?.content ?? "";
+  const content = json.choices?.[0]?.message?.content;
+  if (typeof content === "string" && content.trim()) return content;
+  const upstreamMessage = json.error?.message || json.message || json.choices?.[0]?.finish_reason;
+  throw new Error(`qwen chat returned empty content${upstreamMessage ? `: ${upstreamMessage}` : ""}`);
 }
 
 export async function qwenMultimodalEmbedding({

@@ -800,6 +800,7 @@ function GlobeScene({
   trip,
   photos,
   isAnnotationClosing,
+  locale,
   focusPoint,
   viewIntent,
   pointPicking,
@@ -815,6 +816,7 @@ function GlobeScene({
   trip?: Trip;
   photos: Photo[];
   isAnnotationClosing: boolean;
+  locale: Locale;
   focusPoint?: GeoPoint;
   viewIntent: GlobeViewIntent;
   pointPicking: boolean;
@@ -897,6 +899,7 @@ function GlobeScene({
           trip={trip}
           photos={photos}
           isClosing={isAnnotationClosing}
+          locale={locale}
           onOpenArchive={onOpenArchive}
           onOpenPhoto={onOpenPhoto}
         />
@@ -922,6 +925,7 @@ function TravelMapAnnotation({
   trip,
   photos,
   isClosing,
+  locale,
   onOpenArchive,
   onOpenPhoto,
 }: {
@@ -929,6 +933,7 @@ function TravelMapAnnotation({
   trip?: Trip;
   photos: Photo[];
   isClosing: boolean;
+  locale: Locale;
   onOpenArchive: () => void;
   onOpenPhoto: (photo: Photo) => void;
 }) {
@@ -1037,7 +1042,7 @@ function TravelMapAnnotation({
         className="travel-map-note"
         data-kind={selected.kind}
         data-state={isClosing ? "closing" : "open"}
-        aria-label={selected.kind === "country" ? countryLabel(selected.countryName) : markerLabel(selected)}
+        aria-label={selected.kind === "country" ? countryLabel(undefined, selected.countryName, locale) : selected.label}
       >
         <span className="travel-map-note-line travel-map-note-line-diagonal" aria-hidden="true" />
         <span className="travel-map-note-line travel-map-note-line-horizontal" aria-hidden="true" />
@@ -1045,7 +1050,7 @@ function TravelMapAnnotation({
         <div className="travel-map-note-body">
           {selected.kind === "country" ? (
             <div className="travel-map-note-country-row">
-              <h2>{countryLabel(selected.countryName)}</h2>
+              <h2>{countryLabel(undefined, selected.countryName, locale)}</h2>
               <button
                 className="travel-map-note-action"
                 type="button"
@@ -1062,7 +1067,7 @@ function TravelMapAnnotation({
           ) : (
             <>
               <div className="travel-map-note-title-row">
-                <h2>{markerLabel(selected)}</h2>
+                <h2>{selected.label}</h2>
                 <button
                   className="travel-map-note-action"
                   type="button"
@@ -1315,6 +1320,7 @@ export function EarthStage() {
               focusPoint={focusPoint}
               viewIntent={globeViewIntent}
               pointPicking={pointPicking}
+              locale={locale}
               onManualView={() => setGlobeViewIntent({ source: "manual" })}
               onOpenArchive={handleOpenArchive}
               onOpenPhoto={setPreviewPhoto}

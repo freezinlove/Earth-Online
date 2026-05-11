@@ -32,7 +32,17 @@ function normalizePoint(point) {
   return { lat, lng };
 }
 
-export function validatePhotoAnalysisResult(parsed, preset) {
+function normalizeLocale(locale) {
+  return locale === "en" ? "en" : "zh";
+}
+
+function normalizeTitle(value, locale = "zh") {
+  const title = String(value ?? "").trim();
+  if (!title) return undefined;
+  return title.slice(0, normalizeLocale(locale) === "en" ? 80 : 24);
+}
+
+export function validatePhotoAnalysisResult(parsed, preset, { locale = "zh" } = {}) {
   if (!parsed || typeof parsed !== "object") throw new Error("AI photo analysis did not return an object");
   const caption = String(parsed.caption ?? "").trim();
   if (!caption || !Array.isArray(parsed.tags)) throw new Error("AI photo analysis returned unexpected content");
@@ -46,7 +56,7 @@ export function validatePhotoAnalysisResult(parsed, preset) {
     .filter((candidate) => candidate.name && candidate.confidence > 0)
     .slice(0, 1);
   return {
-    title: String(parsed.title ?? "").trim().slice(0, 24) || undefined,
+    title: normalizeTitle(parsed.title, locale),
     tags: normalizeTags(parsed.tags, preset),
     caption,
     visiblePlaceNames: [],
@@ -55,14 +65,14 @@ export function validatePhotoAnalysisResult(parsed, preset) {
   };
 }
 
-function normalizeRewrittenInitialAnalysis(value) {
+function normalizeRewrittenInitialAnalysis(value, { locale = "zh" } = {}) {
   if (!value || typeof value !== "object") return undefined;
   const caption = String(value.caption ?? "").trim();
   const tags = Array.isArray(value.tags) ? normalizeTags(value.tags, undefined) : [];
   const locationCandidate = normalizeCandidate(value.locationCandidate ?? value.locationCandidates?.[0]);
   if (!caption || tags.length === 0 || !locationCandidate.name || locationCandidate.confidence <= 0) return undefined;
   return {
-    title: String(value.title ?? "").trim().slice(0, 24) || undefined,
+    title: normalizeTitle(value.title, locale),
     tags,
     caption,
     locationCandidate,
@@ -84,15 +94,16 @@ function normalizeInferenceTargetCandidate(candidate, fallbackReason) {
   };
 }
 
-export function validateMissingInfoInferenceResult(parsed) {
+export function validateMissingInfoInferenceResult(parsed, { locale = "zh" } = {}) {
+  const english = normalizeLocale(locale) === "en";
   if (!parsed || typeof parsed !== "object") {
-    return { action: "keep_pending", confidence: 0, reason: "AI 未返回可解析的二次推断结果。" };
+    return { action: "keep_pending", confidence: 0, reason: english ? "AI did not return a parseable second-pass inference result." : "AI 未返回可解析的二次推断结果。" };
   }
   const action = String(parsed.action ?? "");
   const confidence = clampConfidence(parsed.confidence ?? parsed.candidate?.confidence);
-  const reason = String(parsed.reason ?? parsed.candidate?.reason ?? "").trim().slice(0, 240) || "AI 未提供明确理由。";
+  const reason = String(parsed.reason ?? parsed.candidate?.reason ?? "").trim().slice(0, 240) || (english ? "AI did not provide a clear reason." : "AI 未提供明确理由。");
   const rewriteInitialAnalysis = Boolean(parsed.rewriteInitialAnalysis);
-  const rewrittenInitialAnalysis = rewriteInitialAnalysis ? normalizeRewrittenInitialAnalysis(parsed.rewrittenInitialAnalysis) : undefined;
+  const rewrittenInitialAnalysis = rewriteInitialAnalysis ? normalizeRewrittenInitialAnalysis(parsed.rewrittenInitialAnalysis, { locale }) : undefined;
 
   if (action === "bind_photos_to_place") {
     return {
@@ -113,7 +124,7 @@ export function validateMissingInfoInferenceResult(parsed) {
       rewrittenInitialAnalysis: rewrittenInitialAnalysis ?? normalizeRewrittenInitialAnalysis({
         ...parsed.rewrittenInitialAnalysis,
         locationCandidate: parsed.rewrittenInitialAnalysis?.locationCandidate ?? parsed.target?.locationCandidate ?? parsed.candidate,
-      }),
+      }, { locale }),
     };
   }
 

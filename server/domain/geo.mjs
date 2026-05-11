@@ -35,19 +35,63 @@ export function inferPreset(name, location) {
   return broadPresets.unknown;
 }
 
-export function geoContextFor(preset, location) {
+const englishGeoNames = {
+  京都: "Kyoto",
+  日本: "Japan",
+  大阪: "Osaka",
+  奈良: "Nara",
+  成都: "Chengdu",
+  中国: "China",
+  理塘: "Litang",
+  巴黎: "Paris",
+  法国: "France",
+  佛罗伦萨: "Florence",
+  意大利: "Italy",
+  布拉格: "Prague",
+  捷克: "Czechia",
+  维也纳: "Vienna",
+  奥地利: "Austria",
+  哈尔施塔特: "Hallstatt",
+  萨尔茨堡: "Salzburg",
+  布达佩斯: "Budapest",
+  匈牙利: "Hungary",
+  柏林: "Berlin",
+  德国: "Germany",
+  慕尼黑: "Munich",
+  苏黎世: "Zurich",
+  瑞士: "Switzerland",
+  "加米施-帕滕基兴": "Garmisch-Partenkirchen",
+  艾布湖: "Eibsee",
+  罗马: "Rome",
+  伦敦: "London",
+  英国: "United Kingdom",
+  欧洲待确认地点: "Unknown European place",
+  待确认地点: "Unknown place",
+  待确认: "Unknown",
+};
+
+export function normalizeLocale(locale) {
+  return locale === "en" ? "en" : "zh";
+}
+
+export function localizedGeoHint(value, locale = "zh") {
+  if (normalizeLocale(locale) !== "en") return value;
+  return englishGeoNames[value] ?? value;
+}
+
+export function geoContextFor(preset, location, locale = "zh") {
   if (!isUsableLocation(location)) {
     return {
       hasGps: false,
-      cityHint: preset.city,
-      countryHint: preset.country,
+      cityHint: localizedGeoHint(preset.city, locale),
+      countryHint: localizedGeoHint(preset.country, locale),
     };
   }
   return {
     hasGps: true,
     lat: Number(location.lat.toFixed(6)),
     lng: Number(location.lng.toFixed(6)),
-    cityHint: preset.city,
-    countryHint: preset.country,
+    cityHint: localizedGeoHint(preset.city, locale),
+    countryHint: localizedGeoHint(preset.country, locale),
   };
 }

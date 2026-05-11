@@ -2,23 +2,37 @@ import path from "node:path";
 import { deterministicVector } from "../domain/vectors.mjs";
 import { getAiProvider, listAiProviders } from "./provider-registry.mjs";
 
-function inferTags(fileName, preset) {
+function normalizeLocale(locale) {
+  return locale === "en" ? "en" : "zh";
+}
+
+function inferTags(fileName, preset, locale = "zh") {
   const lower = fileName.toLowerCase();
   const sceneTags = [];
-  if (/night|夜|evening|dusk|sunset|黄昏|日落/.test(lower)) sceneTags.push("夜景", "日落");
-  if (/food|meal|cafe|餐|饭|coffee/.test(lower)) sceneTags.push("美食", "餐厅");
-  if (/sea|beach|lake|海|湖|river/.test(lower)) sceneTags.push("海边");
-  if (/temple|shrine|church|寺|社/.test(lower)) sceneTags.push("寺庙", "建筑");
-  if (/rain|雨/.test(lower)) sceneTags.push("雨天");
-  if (/road|street|街|路/.test(lower)) sceneTags.push("街道");
-  if (/mountain|snow|山|雪/.test(lower)) sceneTags.push("山", "雪景");
+  const english = normalizeLocale(locale) === "en";
+  if (/night|夜|evening|dusk|sunset|黄昏|日落/.test(lower)) sceneTags.push(...(english ? ["Night", "Sunset"] : ["夜景", "日落"]));
+  if (/food|meal|cafe|餐|饭|coffee/.test(lower)) sceneTags.push(...(english ? ["Food", "Cafe"] : ["美食", "餐厅"]));
+  if (/sea|beach|lake|海|湖|river/.test(lower)) sceneTags.push(english ? "Waterfront" : "海边");
+  if (/temple|shrine|church|寺|社/.test(lower)) sceneTags.push(...(english ? ["Temple", "Architecture"] : ["寺庙", "建筑"]));
+  if (/rain|雨/.test(lower)) sceneTags.push(english ? "Rainy day" : "雨天");
+  if (/road|street|街|路/.test(lower)) sceneTags.push(english ? "Street" : "街道");
+  if (/mountain|snow|山|雪/.test(lower)) sceneTags.push(...(english ? ["Mountain", "Snow"] : ["山", "雪景"]));
   return Array.from(new Set([...(preset?.tags ?? []), ...sceneTags])).slice(0, 8);
 }
 
-function fallbackPhotoAnalysis({ fileName, preset }) {
-  const fallbackTags = inferTags(fileName, preset);
-  const fallbackTitle = preset?.city && !preset.city.includes("待确认") ? `${preset.city}记忆` : path.basename(fileName, path.extname(fileName));
-  const fallbackCaption = `${preset?.city ?? "未知地点"}附近的旅行照片，系统已根据 GPS/文件名生成「${fallbackTags.slice(0, 3).join(" / ")}」等搜索标签，画面细节需要云端 AI 进一步确认。`;
+function fallbackPhotoAnalysis({ fileName, preset, locale = "zh" }) {
+  const english = normalizeLocale(locale) === "en";
+  const fallbackTags = inferTags(fileName, preset, locale);
+  const fallbackTitle = english
+    ? preset?.city && !preset.city.includes("待确认")
+      ? `${preset.city} memory`
+      : path.basename(fileName, path.extname(fileName))
+    : preset?.city && !preset.city.includes("待确认")
+      ? `${preset.city}记忆`
+      : path.basename(fileName, path.extname(fileName));
+  const fallbackCaption = english
+    ? `A travel photo near ${preset?.city ?? "an unknown place"}; cloud AI can refine the scene details later.`
+    : `${preset?.city ?? "未知地点"}附近的旅行照片，系统已根据 GPS/文件名生成「${fallbackTags.slice(0, 3).join(" / ")}」等搜索标签，画面细节需要云端 AI 进一步确认。`;
 
   return {
     provider: "qwen-mock",
@@ -64,10 +78,10 @@ function withoutEmbeddingFields(analysis) {
   return result;
 }
 
-function friendlyAiError(error, fallback = "AI provider failed") {
+function friendlyAiError(error, fallback = "AI provider failed", locale = "zh") {
   const message = error instanceof Error ? error.message : String(error || fallback);
   const name = error instanceof Error ? error.name : "";
-  if (/abort|timeout/i.test(`${name} ${message}`)) return "AI 请求超时，稍后重试通常可恢复。";
+  if (/abort|timeout/i.test(`${name} ${message}`)) return normalizeLocale(locale) === "en" ? "AI request timed out. Retrying later usually recovers." : "AI 请求超时，稍后重试通常可恢复。";
   return message || fallback;
 }
 
@@ -83,8 +97,10 @@ export async function analyzeTravelImageVision({
   preset,
   geoContext,
   allowCloud = true,
+  locale = "zh",
 }) {
-  const fallback = fallbackPhotoAnalysis({ fileName, preset });
+  const normalizedLocale = normalizeLocale(locale);
+  const fallback = fallbackPhotoAnalysis({ fileName, preset, locale: normalizedLocale });
 
   if (!allowCloud) {
     return withoutEmbeddingFields(fallback);
@@ -93,13 +109,13 @@ export async function analyzeTravelImageVision({
     const imageProvider = getAiProvider("imageAnalysis", imageAnalysisProviderId);
     if (!imageProvider) throw new Error("no image analysis provider configured");
 
-    const vision = await imageProvider.analyzeImage({ rootDir, secretProvider, fileName, mime, dataUrl, preset, geoContext });
+    const vision = await imageProvider.analyzeImage({ rootDir, secretProvider, fileName, mime, dataUrl, preset, geoContext, locale: normalizedLocale });
     return mergeVisionWithFallback(vision, fallback, imageProvider.id);
   } catch (error) {
     const visionFallback = withoutEmbeddingFields(fallback);
     return {
       ...visionFallback,
-      fallbackReason: friendlyAiError(error),
+      fallbackReason: friendlyAiError(error, "AI provider failed", normalizedLocale),
     };
   }
 }
@@ -111,6 +127,7 @@ export async function embedTravelImageAnalysis({
   fileName,
   analysis,
   allowCloud = true,
+  locale = "zh",
 }) {
   const text = embeddingText({ fileName, ...analysis });
   if (allowCloud) {
@@ -201,12 +218,14 @@ export async function inferMissingInfoWithImage({
   mime,
   inferenceInput,
   allowCloud = true,
+  locale = "zh",
 }) {
+  const normalizedLocale = normalizeLocale(locale);
   if (!allowCloud) {
     return {
       action: "keep_pending",
       confidence: 0,
-      reason: "云端 AI 未启用，无法执行当前照片二次视觉推断。",
+      reason: normalizedLocale === "en" ? "Cloud AI is disabled, so second-pass visual inference cannot run." : "云端 AI 未启用，无法执行当前照片二次视觉推断。",
       provider: "mock",
       promptId: "missing-info-inference",
       promptVersion: "fallback",
@@ -215,12 +234,12 @@ export async function inferMissingInfoWithImage({
   try {
     const provider = getAiProvider("missingInfoInference", missingInfoInferenceProviderId);
     if (!provider) throw new Error("no missing info inference provider configured");
-    return await provider.inferMissingInfo({ rootDir, secretProvider, dataUrl, mime, inferenceInput });
+    return await provider.inferMissingInfo({ rootDir, secretProvider, dataUrl, mime, inferenceInput, locale: normalizedLocale });
   } catch (error) {
     return {
       action: "keep_pending",
       confidence: 0,
-      reason: friendlyAiError(error, "AI 二次推断失败。"),
+      reason: friendlyAiError(error, normalizedLocale === "en" ? "AI second-pass inference failed." : "AI 二次推断失败。", normalizedLocale),
       provider: "mock",
       promptId: "missing-info-inference",
       promptVersion: "fallback",

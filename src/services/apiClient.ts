@@ -136,6 +136,7 @@ export const apiClient = {
   importFiles: async (
     files: FileList | File[],
     allowCloudAi: boolean,
+    locale: "zh" | "en" = "zh",
     onProgress?: (done: number, total: number) => void,
     onJobProgress?: (progress: ImportJobProgress) => void,
   ) => {
@@ -143,6 +144,7 @@ export const apiClient = {
     const form = new FormData();
     for (const file of uploadFiles) form.append("files", file, file.name);
     form.append("allowCloudAi", String(allowCloudAi));
+    form.append("locale", locale);
     form.append(
       "fileMeta",
       JSON.stringify(uploadFiles.map((file) => ({ name: file.name, type: file.type, size: file.size, lastModified: file.lastModified }))),
@@ -164,15 +166,15 @@ export const apiClient = {
   rollbackImport: (batchId: string) => request<AppSnapshot>(`/api/import/${batchId}/rollback`, { method: "POST", body: "{}" }),
   cancelImportPhotos: (batchId: string, photoIds: string[]) =>
     request<AppSnapshot>(`/api/import/${batchId}/cancel-photos`, { method: "POST", body: JSON.stringify({ photoIds }) }),
-  inferPendingLocation: (batchId: string, pendingId: string) =>
-    request<AppSnapshot>(`/api/import/${batchId}/pending/${pendingId}/infer-location`, { method: "POST", body: "{}" }),
-  inferPendingLocations: async (batchId: string, pendingIds: string[], onJobProgress?: (progress: ImportJobProgress) => void) => {
-    const job = await request<ImportJob>(`/api/import/${batchId}/pending/infer-locations/jobs`, { method: "POST", body: JSON.stringify({ pendingIds }) });
+  inferPendingLocation: (batchId: string, pendingId: string, locale: "zh" | "en" = "zh") =>
+    request<AppSnapshot>(`/api/import/${batchId}/pending/${pendingId}/infer-location`, { method: "POST", body: JSON.stringify({ locale }) }),
+  inferPendingLocations: async (batchId: string, pendingIds: string[], locale: "zh" | "en" = "zh", onJobProgress?: (progress: ImportJobProgress) => void) => {
+    const job = await request<ImportJob>(`/api/import/${batchId}/pending/infer-locations/jobs`, { method: "POST", body: JSON.stringify({ pendingIds, locale }) });
     if (job.progress) onJobProgress?.(job.progress);
     return pollImportJob(job.id, onJobProgress);
   },
-  resolveImportAiFailure: (batchId: string, pendingId: string, action: "retry_vision" | "retry_embedding" | "retry_both" | "archive_exif") =>
-    request<AppSnapshot>(`/api/import/${batchId}/ai-failures/${pendingId}/resolve`, { method: "POST", body: JSON.stringify({ action }) }),
+  resolveImportAiFailure: (batchId: string, pendingId: string, action: "retry_vision" | "retry_embedding" | "retry_both" | "archive_exif", locale: "zh" | "en" = "zh") =>
+    request<AppSnapshot>(`/api/import/${batchId}/ai-failures/${pendingId}/resolve`, { method: "POST", body: JSON.stringify({ action, locale }) }),
   mergeImportTrips: (batchId: string) => request<AppSnapshot>(`/api/import/${batchId}/merge`, { method: "POST", body: "{}" }),
   createTrip: (title: string, start: string, end: string) => request<AppSnapshot>("/api/trips", { method: "POST", body: JSON.stringify({ title, start, end }) }),
   updateTrip: (tripId: string, body: { title?: string; dateRange?: { start: string; end: string } }) =>

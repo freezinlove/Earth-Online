@@ -43,7 +43,7 @@ export function createRouter(handlers, paths) {
       const importPendingInferJob = pathname.match(/^\/api\/import\/([^/]+)\/pending\/infer-locations\/jobs$/);
       if (req.method === "POST" && importPendingInferJob) return send(res, 202, await handlers.startPendingInferenceJob(importPendingInferJob[1], await readBody(req)));
       const importPendingInfer = pathname.match(/^\/api\/import\/([^/]+)\/pending\/([^/]+)\/infer-location$/);
-      if (req.method === "POST" && importPendingInfer) return send(res, 200, await handlers.inferPendingLocation(importPendingInfer[1], importPendingInfer[2]));
+      if (req.method === "POST" && importPendingInfer) return send(res, 200, await handlers.inferPendingLocation(importPendingInfer[1], importPendingInfer[2], await readBody(req)));
       const importAiFailure = pathname.match(/^\/api\/import\/([^/]+)\/ai-failures\/([^/]+)\/resolve$/);
       if (req.method === "POST" && importAiFailure) return send(res, 200, await handlers.resolveImportAiFailure(importAiFailure[1], importAiFailure[2], await readBody(req)));
       const importMerge = pathname.match(/^\/api\/import\/([^/]+)\/merge$/);

@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, Circle, Clock3, FileImage, FolderOpen, ImagePlus, LoaderCircle, MapPin, PencilLine, RotateCcw, Sparkles, X } from "lucide-react";
+import { Check, Circle, Clock3, FileImage, FolderOpen, ImagePlus, LoaderCircle, MapPin, PencilLine, RotateCcw, Sparkles, X } from "lucide-react";
 import type { ChangeEvent, DragEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -144,6 +144,45 @@ function pendingProposalTarget(item: PendingItem | undefined, fallback: string):
     label: item?.inference?.displayTargetLabel ?? item?.inference?.displayTarget ?? fallback,
     badge: item?.inference?.displayTargetBadge,
   };
+}
+
+function hasActionableMissingProposal(item?: PendingItem) {
+  return Boolean(item?.proposal && item.proposal.action !== "keep_pending");
+}
+
+function missingPreviewTime(group: MissingPreview) {
+  return group.photos
+    .map((photo) => photo.capturedAt)
+    .filter(Boolean)
+    .sort()[0];
+}
+
+function compareMissingPreviews(left: MissingPreview, right: MissingPreview) {
+  const leftActionable = hasActionableMissingProposal(left.pending);
+  const rightActionable = hasActionableMissingProposal(right.pending);
+  if (leftActionable !== rightActionable) return leftActionable ? -1 : 1;
+
+  const leftTime = missingPreviewTime(left) ?? "9999-12-31T23:59:59.999Z";
+  const rightTime = missingPreviewTime(right) ?? "9999-12-31T23:59:59.999Z";
+  const timeOrder = leftTime.localeCompare(rightTime);
+  if (timeOrder !== 0) return timeOrder;
+
+  return left.id.localeCompare(right.id);
+}
+
+function sortMissingPreviews(groups: MissingPreview[]) {
+  return [...groups].sort(compareMissingPreviews);
+}
+
+function orderMissingPreviews(groups: MissingPreview[], lockedOrderIds?: string[]) {
+  if (!lockedOrderIds?.length) return sortMissingPreviews(groups);
+  const order = new Map(lockedOrderIds.map((id, index) => [id, index]));
+  return [...groups].sort((left, right) => {
+    const leftOrder = order.get(left.id);
+    const rightOrder = order.get(right.id);
+    if (leftOrder !== undefined || rightOrder !== undefined) return (leftOrder ?? Number.MAX_SAFE_INTEGER) - (rightOrder ?? Number.MAX_SAFE_INTEGER);
+    return compareMissingPreviews(left, right);
+  });
 }
 
 function buildProgressSteps({
@@ -517,7 +556,7 @@ function MissingSuggestions({
         {groups.map((group) => {
           const isInferring = Boolean(group.pending && inferringIds.has(group.pending.id));
           const isAccepting = Boolean(group.pending && acceptingIds.has(group.pending.id));
-          const actionable = Boolean(group.pending?.proposal && group.pending.proposal.action !== "keep_pending");
+          const actionable = hasActionableMissingProposal(group.pending);
           const suggestedTarget = pendingProposalTarget(group.pending, group.target);
           const feedback = group.pending ? inferFeedback[group.pending.id] : undefined;
           const statusLabel =
@@ -609,7 +648,6 @@ function AiFailureSuggestions({
               <PhotoStrip photos={[failure.photo]} selectedPhotoId={selectedPhotoId} onOpenPreview={onOpenPreview} onSelect={onSelectPhoto} t={t} />
               <span className="import-missing-field">{failure.label}</span>
               <span className="import-ai-suggest" data-status={t("failed")}>
-                <AlertTriangle size={13} />
                 {failure.hasRealExifGps ? t("hasRealExifGps") : t("noRealExifGps")}
               </span>
               <strong className="import-missing-target">
@@ -803,6 +841,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
   const [inferFeedback, setInferFeedback] = useState<Record<string, InferFeedback>>({});
   const [bulkInferProgress, setBulkInferProgress] = useState<ImportJobProgress>();
   const [isBulkInferring, setIsBulkInferring] = useState(false);
+  const [lockedMissingOrderIds, setLockedMissingOrderIds] = useState<string[]>();
   const [previewPhoto, setPreviewPhoto] = useState<Photo>();
   const [manualPending, setManualPending] = useState<PendingItem>();
   const [isPreviewClosing, setIsPreviewClosing] = useState(false);
@@ -816,7 +855,8 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
   );
   const progressSteps = useMemo(() => buildProgressSteps({ importProgress, isImporting, latestBatch, t }), [importProgress, isImporting, latestBatch, t]);
   const tripPreviews = useMemo(() => buildTripPreview({ batch: latestBatch, photos, placeNodes, trips, locale, t }), [latestBatch, photos, placeNodes, trips, locale, t]);
-  const missingGroups = useMemo(() => groupMissingPreviews(latestBatch, photos, pendingItems, t), [latestBatch, pendingItems, photos, t]);
+  const rawMissingGroups = useMemo(() => groupMissingPreviews(latestBatch, photos, pendingItems, t), [latestBatch, pendingItems, photos, t]);
+  const missingGroups = useMemo(() => orderMissingPreviews(rawMissingGroups, lockedMissingOrderIds), [lockedMissingOrderIds, rawMissingGroups]);
   const aiFailureGroups = useMemo(() => groupAiFailurePreviews(latestBatch, photos, pendingItems, t), [latestBatch, pendingItems, photos, t]);
   const canConfirm = isPendingBatch(latestBatch) && missingGroups.length === 0 && aiFailureGroups.length === 0 && !isSubmitting;
   const canRollback = isPendingBatch(latestBatch) && !isSubmitting;
@@ -860,6 +900,10 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
   useEffect(() => {
     if (!selectedPhotoId && importedPhotos[0]) setSelectedPhotoId(importedPhotos[0].id);
   }, [importedPhotos, selectedPhotoId]);
+
+  useEffect(() => {
+    setLockedMissingOrderIds(undefined);
+  }, [latestBatch?.id]);
 
   useEffect(() => {
     if (!previewPhoto) return;
@@ -942,6 +986,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
 
   const inferPending = async (item?: PendingItem) => {
     if (!item) return;
+    setLockedMissingOrderIds(missingGroups.map((group) => group.id));
     setInferringIds((ids) => new Set(ids).add(item.id));
     setInferFeedback((feedback) => ({
       ...feedback,
@@ -971,6 +1016,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
   const inferAllPending = async (items: PendingItem[]) => {
     const ids = items.map((item) => item.id);
     if (!ids.length || isBulkInferring) return;
+    setLockedMissingOrderIds(undefined);
     setIsBulkInferring(true);
     setBulkInferProgress({ phase: "queued", done: 0, total: ids.length, steps: { ai: { done: 0, total: ids.length } } });
     setInferFeedback((feedback) => {
