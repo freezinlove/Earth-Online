@@ -7,7 +7,6 @@ data/**
 !data/README.md
 test-results
 .playwright-cli/
-external/cobe
 external/geodata/*.sqlite
 external/geodata/*.sqlite-*
 external/geodata/downloads/
