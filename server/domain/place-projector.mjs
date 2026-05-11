@@ -1,7 +1,7 @@
 import { haversineKm, inferPreset } from "./geo.mjs";
 import { bestDisplayName, candidateLocalityKey, cleanPlaceName, collectLocationCandidates, isWeakPlaceName, selectPlaceDescription } from "./place-name-selector.mjs";
 
-const DEFAULT_CLUSTER_RADIUS_KM = 2.5;
+const DEFAULT_CLUSTER_RADIUS_KM = 12;
 const SAME_CITY_CLUSTER_RADIUS_KM = 12;
 const SAME_NAME_CLUSTER_RADIUS_KM = 25;
 const MATURITY_PHOTO_THRESHOLD = 4;

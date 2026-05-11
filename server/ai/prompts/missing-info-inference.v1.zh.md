@@ -7,17 +7,18 @@
 - currentPhoto：当前缺 GPS 的待补照片，是核心证据。你会收到当前照片图像。
 - currentPhoto.capturedAt：当前照片拍摄时间，格式通常为 YYYY-MM-DD HH:mm。
 - currentPhoto.initialLocationCandidate：当前照片在上次缺乏前后照片信息时，独立推断出的地点候选，只包含 name 和 city。
-- neighbors.previous / neighbors.next：时间上前一张和后一张照片，只是参考信息，不会提供前后照片图像。
+- neighbors.previous / neighbors.next：时间上前一张和后一张照片，只是参考信息，不会提供前后照片图像。邻居有 placeId 时，placeId 表示相邻照片所在的 PlaceNode。
 - neighbors.*.hasRealExifGps：邻居地点是否有真实 EXIF GPS 支撑。false 时不能作为强定位证据。
-- allowedPlaces：后端允许绑定的已有地点列表。它只限制 bind_photos_to_place，不限制创建新地点。
+- allowedPlaces：只包含前后相邻照片所在的已有地点。它只限制 bind_photos_to_place，不限制创建新地点。
 
 核心优先级：
 
 1. 当前照片图像是最高优先级证据。
 2. 当前照片 initialLocationCandidate 是第二优先级证据。
 3. neighbors 只能作为时间和已归档地点的参考，不能覆盖当前照片图像中的明确地标或城市线索。
-4. 不要因为前后照片在某地，就强行把当前照片绑定到同一地点。
-5. 如果当前照片与前/后照片拍摄时间相隔很近，且邻居 hasRealExifGps 为 true，其地点可作为“可能在附近”的辅助线索，但不能覆盖当前照片图像中的明确冲突。
+4. 如果当前照片没有明确显示不同地点证据，应优先绑定到 allowedPlaces 中相邻照片的 placeId。
+5. 如果当前图像出现明确冲突的地标、城市线索、招牌或特色景观，不要绑定到相邻地点。
+6. 如果当前照片与前/后照片拍摄时间相隔很近，且邻居 hasRealExifGps 为 true，其地点可作为强邻近线索，但不能覆盖当前照片图像中的明确冲突。
 
 输出结构只能是以下三种之一：
 
@@ -41,8 +42,6 @@
       "name": "地点名",
       "country": "国家名，可选",
       "city": "城市名，可选",
-      "lat": 0.0,
-      "lng": 0.0,
       "confidence": 0.0
     }
   },
@@ -57,8 +56,6 @@
       "name": "地点名",
       "country": "国家名，可选",
       "city": "城市名，可选",
-      "lat": 0.0,
-      "lng": 0.0,
       "confidence": 0.0
     }
   }
@@ -76,8 +73,8 @@
 
 1. target.placeId 必须来自 allowedPlaces，不能编造。
 2. 如果当前图像或 initialLocationCandidate 明确给出 allowedPlaces 之外的地点名、地标名、车站名、剧院名、桥梁名、湖泊名、山峰名等，应优先考虑 create_place_from_candidate，而不是因为 allowedPlaces 没有该地点就 keep_pending。
-3. create_place_from_candidate 的 locationCandidate 经纬度必须是合法估计坐标。如果你知道这是世界知名或可明确定位的地点，可以给出估计坐标；如果只知道城市但不知道精确地标坐标，可以给出城市级估计坐标并在 reason 中说明。
-4. 如果地点名明确但你无法给出可靠坐标，请仍然输出 create_place_from_candidate，并至少提供 name、city、country、confidence、reason；后端会尝试用本地地名库补坐标。
+3. create_place_from_candidate 不要输出经纬度。新地点坐标由后端负责查询。
+4. create_place_from_candidate 尽量至少提供 city、country、confidence、reason。name 可作为展示地点名、地标或地域名，但 city 是后端坐标查询依据。
 5. 当前待补照片缺 GPS 时，confidence 低于 0.55 通常输出 keep_pending；但如果当前候选位置与 allowedPlaces 中某地点高度重合，或前后邻居有真实 EXIF GPS 支撑且时间接近、地点一致，同时当前图像没有明确冲突，可以输出 bind_photos_to_place。
 6. 当前照片没有明确地标、城市、店名、教堂/建筑名称、湖泊/山峰/桥梁等可定位线索，且前后上下文不足时，输出 keep_pending。
 7. 只有“室内、街道、夜景、建筑、山、水、天空、餐厅”等泛语义时，输出 keep_pending，除非当前照片图像或 initialLocationCandidate 中有明确地点名。
@@ -100,5 +97,5 @@ rewrittenInitialAnalysis 输出规则：
 7. caption 禁止出现「GPS」「画面呈现」「图中」「检测到」「可见」「可能位于」「系统判断」「候选」这类分析口吻。
 8. 不要做人脸身份识别，不要推断敏感真实身份，但可以对人物进行模糊描述。
 9. locationCandidate 是重写后的唯一地点候选，必须和二次判断的最终地点一致。
-10. locationCandidate 必须包含 name 和 confidence；country、city、lat、lng 可省略，但如果你能可靠估计，应尽量给出。
+10. locationCandidate 必须包含 name 和 confidence；尽量包含 city 和 country；不要包含 lat 或 lng。
 11. locationCandidate 的 confidence 范围是 0 到 1；低于 0.55 的候选只作为弱线索。

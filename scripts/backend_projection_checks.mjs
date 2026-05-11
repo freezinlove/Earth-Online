@@ -114,12 +114,28 @@ const accepted = applyPendingDecision(baseState, "pending-location", { accepted:
 const projectedAfter = projectState(accepted);
 assert.equal(projectedAfter.pendingItems[0].status, "accepted");
 assert.equal(projectedAfter.photos[0].pendingReason, undefined);
-assert.deepEqual(projectedAfter.photos[0].location, { lat: 47.5622, lng: 13.6493 });
+assert.deepEqual(projectedAfter.photos[0].location, { lat: 47.56231, lng: 13.64912 });
 assert.equal(projectedAfter.placeNodes.length, 1);
 assert.equal(projectedAfter.globeMarkers.some((marker) => marker.kind === "place" && marker.label === "哈尔施塔特"), true);
 
 const ignored = applyPendingDecision(baseState, "pending-location", { accepted: false });
 assert.equal(projectState(ignored).pendingItems[0].status, "ignored");
+
+const ungeocodableState = structuredClone(baseState);
+ungeocodableState.pendingItems[0].proposal.candidate = {
+  id: "candidate-invented",
+  name: "Imaginary Viewpoint",
+  country: "Norway",
+  city: "Definitely Not A Real Gazetteer City",
+  point: { lat: 65.094, lng: 13.1 },
+  confidence: 0.82,
+  source: "ai_vision",
+  reason: "AI coordinate must not be enough to create a place.",
+};
+const ungeocodableAccepted = applyPendingDecision(ungeocodableState, "pending-location", { accepted: true });
+assert.equal(ungeocodableAccepted.pendingItems[0].status, "open");
+assert.equal(ungeocodableAccepted.placeNodes.length, 0);
+assert.equal(ungeocodableAccepted.photos[0].location, undefined);
 
 const berlinFallback = forwardLocalGeocode({ name: "柏林中央火车站", city: "柏林", country: "德国" })[0];
 assert.equal(berlinFallback?.country, "德国");

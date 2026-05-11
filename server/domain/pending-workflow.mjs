@@ -1,8 +1,9 @@
 import { haversineKm } from "./geo.mjs";
+import { forwardLocalGeocode } from "./local-geocoder.mjs";
 import { cleanPlaceName } from "./place-name-selector.mjs";
 
-const DEFAULT_PLACE_MERGE_RADIUS_KM = 1.2;
-const SAME_CITY_PLACE_MERGE_RADIUS_KM = 12;
+const DEFAULT_PLACE_MERGE_RADIUS_KM = 25;
+const SAME_CITY_PLACE_MERGE_RADIUS_KM = 25;
 const SAME_NAME_PLACE_MERGE_RADIUS_KM = 25;
 
 function markPending(state, id, status) {
@@ -144,17 +145,19 @@ function bindPhotosToPlace(state, proposal) {
 
 function createPlaceFromCandidate(state, proposal) {
   const candidate = proposal.candidate;
-  const point = candidatePoint(candidate);
+  const geocoded = cityGeocodedCandidate(candidate);
+  const point = geocoded?.point;
   if (!proposal.tripId || !point) return state;
   const photoIds = new Set(proposal.photoIds ?? []);
-  const existingPlace = findMergeableExistingPlace(state, proposal.tripId, candidate, point, proposal.placeId);
+  const candidateWithPoint = { ...candidate, ...geocoded, point };
+  const existingPlace = findMergeableExistingPlace(state, proposal.tripId, candidateWithPoint, point, proposal.placeId);
   if (existingPlace) {
     return bindPhotosToPlace(state, {
       action: "bind_photos_to_place",
       photoIds: Array.from(photoIds),
       placeId: existingPlace.id,
-      confidence: candidate.confidence,
-      reason: candidate.reason,
+      confidence: candidateWithPoint.confidence,
+      reason: candidateWithPoint.reason,
       rewrittenInitialAnalysis: proposal.rewrittenInitialAnalysis,
     });
   }
@@ -166,10 +169,10 @@ function createPlaceFromCandidate(state, proposal) {
     tripId: proposal.tripId,
     name: candidate.name ?? "AI 建议地点",
     displayName: candidate.name ?? "AI 建议地点",
-    city: candidate.city,
-    country: candidate.country,
+    city: candidate.city ?? geocoded.city,
+    country: candidate.country ?? geocoded.country,
     center: point,
-    coordinatePrecision: candidate.precision ?? "estimated",
+    coordinatePrecision: geocoded.precision ?? "estimated",
     photoIds: Array.from(photoIds),
     timeRange: { start: dates[0] ?? new Date().toISOString(), end: dates.at(-1) ?? dates[0] ?? new Date().toISOString() },
     pending: false,
@@ -179,7 +182,7 @@ function createPlaceFromCandidate(state, proposal) {
     photos: state.photos.map((photo) =>
       photoIds.has(photo.id)
         ? (() => {
-            const rewritten = applyRewrittenInitialAnalysis(photo, proposal.rewrittenInitialAnalysis, candidate);
+            const rewritten = applyRewrittenInitialAnalysis(photo, proposal.rewrittenInitialAnalysis, candidateWithPoint);
             return {
             ...rewritten,
             tripId: proposal.tripId,
@@ -192,9 +195,9 @@ function createPlaceFromCandidate(state, proposal) {
               status: "confirmed",
               effectiveName: place.name,
               effectivePoint: point,
-              confidence: candidate.confidence,
-              source: candidate.source ?? "ai_vision",
-              precision: candidate.precision ?? "estimated",
+              confidence: candidateWithPoint.confidence,
+              source: candidateWithPoint.source ?? "geocode",
+              precision: candidateWithPoint.precision ?? "estimated",
               candidateId: candidate.id,
               candidates: rewritten.ai?.locationCandidates ?? rewritten.locationResolution?.candidates ?? [],
               requiresUserAction: false,
@@ -205,6 +208,25 @@ function createPlaceFromCandidate(state, proposal) {
         : photo,
     ),
     placeNodes: [...state.placeNodes, place],
+  };
+}
+
+function cityGeocodedCandidate(candidate) {
+  if (!candidate?.name && !candidate?.city) return undefined;
+  const cityQuery = candidate.city || candidate.name;
+  const fallback = forwardLocalGeocode({ city: cityQuery, country: candidate.country })[0];
+  if (!fallback?.point) return undefined;
+  return {
+    ...candidate,
+    point: fallback.point,
+    city: candidate.city ?? fallback.city ?? cityQuery,
+    country: candidate.country ?? fallback.country,
+    localizedNames: candidate.localizedNames ?? fallback.localizedNames,
+    localizedCountryNames: candidate.localizedCountryNames ?? fallback.localizedCountryNames,
+    confidence: Math.max(Number(candidate.confidence ?? 0), Math.min(0.72, Number(fallback.confidence ?? 0.6))),
+    source: "geocode",
+    precision: "estimated",
+    reason: candidate.reason || `Local gazetteer coordinates were added from ${fallback.name}.`,
   };
 }
 
@@ -271,6 +293,7 @@ export function applyPendingDecision(state, id, { accepted }) {
   if (!pending) return state;
   if (!accepted) return markPending(state, id, "ignored");
   const applied = applyProposal(state, pending.proposal);
+  if (pending.proposal?.action === "create_place_from_candidate" && applied === state) return state;
   if (["missing_gps", "missing_time", "confirm_location_candidate"].includes(pending.type)) {
     const relatedPhotoIds = new Set(pending.relatedPhotoIds ?? []);
     return {

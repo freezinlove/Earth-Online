@@ -1355,6 +1355,8 @@ export function createImportServices({
   function addLocationPendingItems(imported, pendingItems) {
     const suggestedLocations = imported.filter((photo) => !hasAiProcessingFailure(photo) && photo.locationResolution?.status === "suggested" && photo.locationResolution.candidateId);
     for (const photo of suggestedLocations) {
+      const candidate = completeCandidatePoint(photo.locationResolution.candidates.find((item) => item.id === photo.locationResolution.candidateId));
+      if (!candidate?.point) continue;
       pendingItems.push({
         id: makeId("pending"),
         type: "confirm_location_candidate",
@@ -1367,7 +1369,7 @@ export function createImportServices({
           action: "create_place_from_candidate",
           tripId: photo.tripId,
           photoIds: [photo.id],
-          candidate: photo.locationResolution.candidates.find((candidate) => candidate.id === photo.locationResolution.candidateId),
+          candidate,
         },
       });
     }
@@ -1422,8 +1424,7 @@ export function createImportServices({
     const photo = state.photos.find((item) => item.id === pending.relatedPhotoIds[0]);
     if (!photo) return keepPending(missingInferenceText(locale, "photoNotFound"), 0.2, locale);
     const context = buildInferenceContextPhotos(state, batch, photo);
-    const contextPhotos = uniquePhotos([context.previousPhoto, context.nextPhoto]);
-    const contextPlaces = allowedInferencePlaces(state, photo, contextPhotos);
+    const contextPlaces = allowedInferencePlaces(state, context);
     const imagePayload = await readPhotoImagePayload(photo);
     if (!imagePayload) return keepPending(missingInferenceText(locale, "imageMissing"), 0, locale);
     const inferenceInput = buildMissingInfoInferenceInput({ photo, context, contextPlaces, locale });
@@ -1467,10 +1468,9 @@ export function createImportServices({
     return { previousPhoto: previous?.item, nextPhoto: next?.item, previousLocatedPhoto: previousLocated?.item, nextLocatedPhoto: nextLocated?.item };
   }
 
-  function allowedInferencePlaces(state, photo, contextPhotos) {
-    const tripIds = new Set([photo.tripId, ...contextPhotos.map((item) => item.tripId)].filter(Boolean));
-    const placeIds = new Set([photo.placeNodeId, ...contextPhotos.map((item) => item.placeNodeId)].filter(Boolean));
-    return state.placeNodes.filter((place) => tripIds.has(place.tripId) || placeIds.has(place.id));
+  function allowedInferencePlaces(state, context) {
+    const placeIds = new Set([context.previousPhoto?.placeNodeId, context.nextPhoto?.placeNodeId].filter(Boolean));
+    return state.placeNodes.filter((place) => placeIds.has(place.id));
   }
 
   async function readPhotoImagePayload(photo) {
@@ -1498,8 +1498,6 @@ export function createImportServices({
         name: localizedPlaceValue(place, "name", locale),
         city: localizedPlaceValue(place, "city", locale),
         country: localizedPlaceValue(place, "country", locale),
-        lat: place.center?.lat,
-        lng: place.center?.lng,
       })),
     };
   }
@@ -1523,8 +1521,10 @@ export function createImportServices({
     if (!photo) {
       return {
         capturedAt: null,
+        placeId: null,
         placeName: null,
         city: null,
+        country: null,
         hasRealExifGps: false,
       };
     }
@@ -1533,8 +1533,10 @@ export function createImportServices({
     const candidate = bestPhotoLocationCandidate(photo);
     return {
       capturedAt: formatAiTimestamp(photo.capturedAt),
+      placeId: place?.id ?? null,
       placeName: place ? localizedPlaceValue(place, "displayName", locale) : (photo.locationResolution?.effectiveName ?? candidate?.name ?? null),
       city: place ? localizedPlaceValue(place, "city", locale) : (candidate?.city ?? null),
+      country: place ? localizedPlaceValue(place, "country", locale) : (candidate?.country ?? null),
       hasRealExifGps: hasReliableGps,
     };
   }
@@ -1670,8 +1672,6 @@ export function createImportServices({
         name: candidate.name,
         country: candidate.country,
         city: candidate.city,
-        lat: candidate.lat,
-        lng: candidate.lng,
         confidence: candidate.confidence,
       },
     };
@@ -1734,7 +1734,7 @@ export function createImportServices({
         const sameCountry = !candidateCountry || !placeCountry || candidateCountry === placeCountry;
         const sameCity = Boolean(candidateCity && placeCity && candidateCity === placeCity);
         const sameName = Boolean(candidateName && placeName && (candidateName === placeName || candidateName.includes(placeName) || placeName.includes(candidateName)));
-        const threshold = sameName ? 25 : sameCity ? 12 : 2.5;
+        const threshold = sameName ? 25 : sameCity ? 25 : 25;
         if (!sameCountry || distance > threshold) return undefined;
         return { place, distance, sameName, sameCity };
       })
@@ -1744,11 +1744,10 @@ export function createImportServices({
 
   function completeCandidatePoint(candidate, locale = "zh") {
     if (!candidate?.name) return candidate;
-    if (candidate.point) return candidate;
+    const cityQuery = candidate.city || candidate.name;
     const fallback = forwardLocalGeocode(
       {
-        name: candidate.name,
-        city: candidate.city,
+        city: cityQuery,
         country: candidate.country,
       },
       { makeId },
@@ -1757,7 +1756,7 @@ export function createImportServices({
     return {
       ...candidate,
       point: fallback.point,
-      city: candidate.city ?? fallback.city,
+      city: candidate.city ?? fallback.city ?? cityQuery,
       country: candidate.country ?? fallback.country,
       localizedNames: candidate.localizedNames ?? fallback.localizedNames,
       localizedCountryNames: candidate.localizedCountryNames ?? fallback.localizedCountryNames,

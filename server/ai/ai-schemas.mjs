@@ -24,14 +24,6 @@ function normalizeCandidate(candidate) {
   };
 }
 
-function normalizePoint(point) {
-  const lat = finiteNumber(point?.lat);
-  const lng = finiteNumber(point?.lng);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return undefined;
-  if (Math.abs(lat) < 0.000001 && Math.abs(lng) < 0.000001) return undefined;
-  return { lat, lng };
-}
-
 function normalizeLocale(locale) {
   return locale === "en" ? "en" : "zh";
 }
@@ -65,11 +57,22 @@ export function validatePhotoAnalysisResult(parsed, preset, { locale = "zh" } = 
   };
 }
 
+function normalizeCandidateWithoutCoordinates(candidate) {
+  const normalized = normalizeCandidate(candidate);
+  return {
+    name: normalized.name,
+    country: normalized.country,
+    city: normalized.city,
+    confidence: normalized.confidence,
+    reason: normalized.reason,
+  };
+}
+
 function normalizeRewrittenInitialAnalysis(value, { locale = "zh" } = {}) {
   if (!value || typeof value !== "object") return undefined;
   const caption = String(value.caption ?? "").trim();
   const tags = Array.isArray(value.tags) ? normalizeTags(value.tags, undefined) : [];
-  const locationCandidate = normalizeCandidate(value.locationCandidate ?? value.locationCandidates?.[0]);
+  const locationCandidate = normalizeCandidateWithoutCoordinates(value.locationCandidate ?? value.locationCandidates?.[0]);
   if (!caption || tags.length === 0 || !locationCandidate.name || locationCandidate.confidence <= 0) return undefined;
   return {
     title: normalizeTitle(value.title, locale),
@@ -81,10 +84,8 @@ function normalizeRewrittenInitialAnalysis(value, { locale = "zh" } = {}) {
 
 function normalizeInferenceTargetCandidate(candidate, fallbackReason) {
   const raw = candidate && typeof candidate === "object" ? candidate : {};
-  const point = normalizePoint(raw.point ?? raw);
   return {
     name: String(raw.name ?? "").trim().slice(0, 80),
-    point,
     city: raw.city ? String(raw.city).trim().slice(0, 80) : undefined,
     country: raw.country ? String(raw.country).trim().slice(0, 80) : undefined,
     confidence: clampConfidence(raw.confidence),
