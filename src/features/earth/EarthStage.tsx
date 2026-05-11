@@ -47,6 +47,7 @@ type GlobeAssetKind = "landFar" | "landMid" | "landNear" | "coastLine" | "countr
 const GLOBE_RADIUS = 100;
 const GLOBE_SCALE = 0.0185;
 const MARKER_ALTITUDE = 0.022;
+const ROUTE_ENDPOINT_ALTITUDE = MARKER_ALTITUDE;
 const ROUTE_LONG_HOP = "#8f3f32";
 const ROUTE_ARROW = "#0f6f78";
 const LAND_PARTICLE = "#3f9fb3";
@@ -180,36 +181,10 @@ function useGlobeAssetGeometry(kind: GlobeAssetKind) {
 }
 
 function buildRouteStops(places: TravelMarker[]) {
-  const orderedPlaces = places
+  return places
     .filter((place) => place.kind === "place")
     .slice()
     .sort((a, b) => (a.startTime ?? "").localeCompare(b.startTime ?? ""));
-
-  return orderedPlaces.reduce<TravelMarker[]>((stops, place) => {
-    const previous = stops[stops.length - 1];
-    if (!previous) return [place];
-    const sameCountry = previous.countryName === place.countryName;
-    const localStay = sameCountry && distanceKm(previous.center, place.center) < 35;
-    if (!localStay) return [...stops, place];
-
-    const previousWeight = Math.max(previous.count, 1);
-    const nextWeight = Math.max(place.count, 1);
-    const mergedWeight = previousWeight + nextWeight;
-    stops[stops.length - 1] = {
-      ...previous,
-      id: `${previous.id}-${place.id}`,
-      label: previous.label,
-      center: {
-        lat: (previous.center.lat * previousWeight + place.center.lat * nextWeight) / mergedWeight,
-        lng: (previous.center.lng * previousWeight + place.center.lng * nextWeight) / mergedWeight,
-      },
-      count: previous.count + place.count,
-      photoIds: Array.from(new Set([...previous.photoIds, ...place.photoIds])),
-      placeIds: Array.from(new Set([...(previous.placeIds ?? []), ...(place.placeIds ?? [])])),
-      active: previous.active || place.active,
-    };
-    return stops;
-  }, []);
 }
 
 export function applyRouteRoles(markers: TravelMarker[]) {
@@ -239,7 +214,7 @@ function routePaths(places: TravelMarker[], selected?: TravelMarker): GlobePath[
     const distance = segmentKm / 6371;
     const crossCountry = place.countryName !== nextPlace.countryName;
     const longHop = segmentKm >= 120;
-    const midAlt = longHop ? Math.min(0.13, 0.024 + distance * 0.08) : 0.024;
+    const midAlt = longHop ? Math.min(0.13, ROUTE_ENDPOINT_ALTITUDE + distance * 0.08) : ROUTE_ENDPOINT_ALTITUDE;
     const active =
       !!selected &&
       selected.kind === "place" &&
@@ -252,13 +227,13 @@ function routePaths(places: TravelMarker[], selected?: TravelMarker): GlobePath[
       longHop,
       points: !longHop
         ? [
-            { ...point, alt: 0.024 },
-            { ...next, alt: 0.024 },
+            { ...point, alt: ROUTE_ENDPOINT_ALTITUDE },
+            { ...next, alt: ROUTE_ENDPOINT_ALTITUDE },
           ]
         : [
-            { ...point, alt: 0.024 },
+            { ...point, alt: ROUTE_ENDPOINT_ALTITUDE },
             { lat: (point.lat + next.lat) / 2, lng: (point.lng + next.lng) / 2, alt: midAlt },
-            { ...next, alt: 0.024 },
+            { ...next, alt: ROUTE_ENDPOINT_ALTITUDE },
           ],
     };
   });

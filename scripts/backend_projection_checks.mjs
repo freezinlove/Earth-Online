@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { applyPendingDecision } from "../server/domain/pending-workflow.mjs";
+import { validatePhotoAnalysisResult } from "../server/ai/ai-schemas.mjs";
 import { forwardLocalGeocode } from "../server/domain/local-geocoder.mjs";
+import { toAiEvidence } from "../server/domain/location-resolver.mjs";
 import { buildPlacesForGroup } from "../server/domain/place-projector.mjs";
 import { projectState } from "../server/domain/state-projector.mjs";
 
@@ -9,6 +11,21 @@ function makeId(prefix) {
   sequence += 1;
   return `${prefix}-test-${sequence}`;
 }
+
+const sneakyAiCoordinate = validatePhotoAnalysisResult(
+  {
+    title: "Sneaky coordinate",
+    tags: ["travel", "norway", "reine", "harbor", "mountain", "water"],
+    caption: "A quiet harbor moment between mountains and water.",
+    locationCandidate: { name: "Reine", city: "Reine", country: "Norway", lat: 1.23, lng: 4.56, confidence: 0.91 },
+  },
+  undefined,
+  { locale: "en" },
+);
+const sneakyAiEvidence = toAiEvidence(sneakyAiCoordinate, { makeId });
+assert.equal("lat" in sneakyAiCoordinate.locationCandidates[0], false);
+assert.equal("lng" in sneakyAiCoordinate.locationCandidates[0], false);
+assert.equal(Boolean(sneakyAiEvidence.locationCandidates[0].point), false);
 
 const baseState = {
   trips: [

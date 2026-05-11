@@ -12,8 +12,6 @@ The JSON must follow this structure. Do not add extra fields:
     "name": "Place name",
     "country": "Country name, optional",
     "city": "City name, optional",
-    "lat": 0.0,
-    "lng": 0.0,
     "confidence": 0.0
   }
 }
@@ -37,7 +35,7 @@ Rules:
 6. tags must be useful for travel photo search. Prefer concrete place names, landmarks, natural/street/indoor scenes, visible objects, and time or atmosphere.
 7. Do not output only generic tags such as "Europe", "travel", "city", or "architecture" unless combined with a specific city, landmark, or scene.
 8. If the current image or EXIF/GPS context supports a location judgment, output at most one locationCandidate.
-9. If there is no reliable location evidence, output locationCandidate as null. Do not invent coordinates.
+9. Never output latitude, longitude, coordinates, or point fields. If GPS exists, the backend already has it. If GPS is missing, the backend will geocode city/country locally.
 10. locationCandidate.confidence must be between 0 and 1. Candidates below 0.55 are weak hints only.
 11. EXIF/GPS context is only a reference. If the GPS city hint clearly conflicts with the image, you may keep the image-based judgment, but do not force one city label onto another city just to match GPS.
 

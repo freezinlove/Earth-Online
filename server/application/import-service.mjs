@@ -241,9 +241,8 @@ export function createImportServices({
                 }),
               ]).then(([ai, embedding]) => {
                 const resolvedLocation = existingPhoto.location ?? parsedLocation;
-                const geocodeCandidates = reverseLocalGeocode(resolvedLocation, { makeId });
                 const aiEvidenceBase = toAiEvidence(ai, { makeId });
-                const aiEvidence = { ...aiEvidenceBase, locationCandidates: mergeLocationCandidates(geocodeCandidates, aiEvidenceBase.locationCandidates) };
+                const aiEvidence = withBackendLocationCandidates({ location: resolvedLocation, aiEvidence: aiEvidenceBase, locale });
                 existingPhoto.tags = ai.tags;
                 existingPhoto.title = ai.title || makePhotoTitle(existingPhoto);
                 existingPhoto.aiCaption = ai.caption;
@@ -333,9 +332,8 @@ export function createImportServices({
           }),
         ]).then(([thumbName, ai, embedding]) => {
           const aiFailure = buildAiFailure(ai, embedding, newAiJob);
-          const geocodeCandidates = reverseLocalGeocode(newAiJob.location, { makeId });
           const aiEvidenceBase = toAiEvidence(ai, { makeId });
-          const aiEvidence = { ...aiEvidenceBase, locationCandidates: mergeLocationCandidates(geocodeCandidates, aiEvidenceBase.locationCandidates) };
+          const aiEvidence = withBackendLocationCandidates({ location: newAiJob.location, aiEvidence: aiEvidenceBase, locale });
           const photo = {
             id: newAiJob.photoId,
             fileName: newAiJob.fileName || newAiJob.storageName,
@@ -1148,9 +1146,8 @@ export function createImportServices({
       updatedAt: new Date().toISOString(),
     };
     const failed = Boolean(nextFailure.vision || nextFailure.embedding);
-    const geocodeCandidates = reverseLocalGeocode(photo.location, { makeId });
     const aiEvidenceBase = toAiEvidence(ai, { makeId });
-    const aiEvidence = { ...aiEvidenceBase, locationCandidates: mergeLocationCandidates(geocodeCandidates, aiEvidenceBase.locationCandidates) };
+    const aiEvidence = withBackendLocationCandidates({ location: photo.location, aiEvidence: aiEvidenceBase, locale });
     const patchedPhoto = {
       ...photo,
       title: ai.title || makePhotoTitle({ fileName: photo.fileName, tags: ai.tags, aiCaption: ai.caption }),
@@ -1190,11 +1187,13 @@ export function createImportServices({
   }
 
   function clearAiFailureForPhoto(photo) {
+    const aiEvidence = withBackendLocationCandidates({ location: photo.location, aiEvidence: photo.ai });
     return {
       ...photo,
       aiFailure: undefined,
       pendingReason: pendingReasonFromExif(photo),
-      locationResolution: resolveImportedLocation({ location: photo.location, aiEvidence: photo.ai, pendingReason: pendingReasonFromExif(photo) }),
+      ai: aiEvidence,
+      locationResolution: resolveImportedLocation({ location: photo.location, aiEvidence, pendingReason: pendingReasonFromExif(photo) }),
     };
   }
 
@@ -1765,6 +1764,48 @@ export function createImportServices({
         normalizeLocale(locale) === "en"
           ? `${candidate.reason || "AI provided a clear place name."} Local gazetteer coordinates were added from ${fallback.name}.`
           : `${candidate.reason || "AI 给出了明确地点名。"} 已用本地地名库补入估计坐标：${fallback.name}。`,
+      source: "geocode",
+      precision: "estimated",
+    };
+  }
+
+  function withBackendLocationCandidates({ location, aiEvidence, locale = "zh" }) {
+    if (!aiEvidence) return aiEvidence;
+    const aiCandidates = safeArray(aiEvidence.locationCandidates).map(stripCandidatePoint);
+    const backendCandidates = isUsableLocation(location)
+      ? reverseLocalGeocode(location, { makeId })
+      : aiCandidates.map((candidate) => geocodeAiLocationCandidate(candidate, locale));
+    return {
+      ...aiEvidence,
+      locationCandidates: mergeLocationCandidates(backendCandidates, aiCandidates),
+    };
+  }
+
+  function stripCandidatePoint(candidate) {
+    if (!candidate) return candidate;
+    const { point, lat, lng, ...rest } = candidate;
+    return rest;
+  }
+
+  function geocodeAiLocationCandidate(candidate, locale = "zh") {
+    if (!candidate?.name && !candidate?.city) return candidate;
+    const cityQuery = candidate.city || candidate.name;
+    const fallback = forwardLocalGeocode({ city: cityQuery, country: candidate.country }, { makeId })[0];
+    if (!fallback?.point) return candidate;
+    return {
+      ...candidate,
+      point: fallback.point,
+      city: candidate.city ?? fallback.city ?? cityQuery,
+      country: candidate.country ?? fallback.country,
+      localizedNames: candidate.localizedNames ?? fallback.localizedNames,
+      localizedCountryNames: candidate.localizedCountryNames ?? fallback.localizedCountryNames,
+      confidence: Math.max(Number(candidate.confidence ?? 0), Math.min(0.72, Number(fallback.confidence ?? 0.6))),
+      source: "geocode",
+      precision: "estimated",
+      reason:
+        normalizeLocale(locale) === "en"
+          ? `${candidate.reason || "AI provided a place name."} Local gazetteer coordinates were added from ${fallback.name}.`
+          : `${candidate.reason || "AI 给出了地点名。"} 已用本地地名库补入估计坐标：${fallback.name}。`,
     };
   }
 

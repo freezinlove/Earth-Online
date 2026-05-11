@@ -16,7 +16,6 @@ export function toAiEvidence(ai, { makeId, analyzedAt = new Date().toISOString()
       name: candidate.name,
       country: candidate.country,
       city: candidate.city,
-      point: candidate.point ?? (Number.isFinite(candidate.lat) && Number.isFinite(candidate.lng) ? { lat: candidate.lat, lng: candidate.lng } : undefined),
       confidence: candidate.confidence,
       source: candidate.source ?? "ai_vision",
       precision: candidate.precision,

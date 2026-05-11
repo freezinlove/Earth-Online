@@ -13,6 +13,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 const outDir = path.join(repoRoot, "public", "data", "globe");
 const globeRadius = 100;
+const surfaceAltitude = 0.022;
 const provinceLinesUrl =
   "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_1_states_provinces_lines.geojson";
 
@@ -197,9 +198,9 @@ async function fetchJson(url) {
 
 await mkdir(outDir, { recursive: true });
 
-const farLand = buildRegionalLandPositions({ step: 1.18, altitude: 0.012, jitterScale: 0.5, revealLift: 0.004 });
-const midLand = buildRegionalLandPositions({ step: 0.52, altitude: 0.016, jitterScale: 0.56, revealLift: 0.004 });
-const nearLand = buildRegionalLandPositions({ step: 0.28, altitude: 0.02, jitterScale: 0.58, revealLift: 0.0035 });
+const farLand = buildRegionalLandPositions({ step: 1.18, altitude: surfaceAltitude, jitterScale: 0.5, revealLift: 0 });
+const midLand = buildRegionalLandPositions({ step: 0.52, altitude: surfaceAltitude, jitterScale: 0.56, revealLift: 0 });
+const nearLand = buildRegionalLandPositions({ step: 0.28, altitude: surfaceAltitude, jitterScale: 0.58, revealLift: 0 });
 const coastLines = buildMeshLines(landTopology, "land");
 const countryLines = buildMeshLines(countriesTopology, "countries", (left, right) => left !== right);
 const provinceLines = buildGeoJsonLines(await fetchJson(provinceLinesUrl));
@@ -207,6 +208,6 @@ const provinceLines = buildGeoJsonLines(await fetchJson(provinceLinesUrl));
 await writeFloat32Asset("land-far.bin", farLand);
 await writeFloat32Asset("land-mid.bin", midLand);
 await writeFloat32Asset("land-near.bin", nearLand);
-await writeFloat32Asset("coast-lines.bin", buildLineSegmentPositions(coastLines, 0.02, 0.42));
-await writeFloat32Asset("country-lines.bin", buildLineSegmentPositions(countryLines, 0.028, 0.26));
-await writeFloat32Asset("province-lines.bin", buildLineSegmentPositions(provinceLines, 0.036, 0.18));
+await writeFloat32Asset("coast-lines.bin", buildLineSegmentPositions(coastLines, surfaceAltitude, 0.42));
+await writeFloat32Asset("country-lines.bin", buildLineSegmentPositions(countryLines, surfaceAltitude, 0.26));
+await writeFloat32Asset("province-lines.bin", buildLineSegmentPositions(provinceLines, surfaceAltitude, 0.18));

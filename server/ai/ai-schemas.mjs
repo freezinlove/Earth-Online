@@ -10,15 +10,11 @@ function clampConfidence(value) {
 }
 
 function normalizeCandidate(candidate) {
-  const lat = finiteNumber(candidate?.lat);
-  const lng = finiteNumber(candidate?.lng);
   const confidence = clampConfidence(candidate?.confidence);
   return {
     name: String(candidate?.name ?? "").trim(),
     country: candidate?.country ? String(candidate.country).trim() : undefined,
     city: candidate?.city ? String(candidate.city).trim() : undefined,
-    lat,
-    lng,
     confidence,
     reason: String(candidate?.reason ?? "").trim(),
   };
@@ -58,14 +54,7 @@ export function validatePhotoAnalysisResult(parsed, preset, { locale = "zh" } = 
 }
 
 function normalizeCandidateWithoutCoordinates(candidate) {
-  const normalized = normalizeCandidate(candidate);
-  return {
-    name: normalized.name,
-    country: normalized.country,
-    city: normalized.city,
-    confidence: normalized.confidence,
-    reason: normalized.reason,
-  };
+  return normalizeCandidate(candidate);
 }
 
 function normalizeRewrittenInitialAnalysis(value, { locale = "zh" } = {}) {
