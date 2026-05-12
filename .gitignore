@@ -19,7 +19,6 @@ pnpm-debug.log*
 # Local environment files
 .env
 .env.*
-!.env.example
 
 # Local user data
 data/**
@@ -27,10 +26,13 @@ data/**
 !data/.gitkeep
 !data/README.md
 
-# Optional generated geodata
+# Bundled geodata database is committed; local build byproducts are ignored.
 external/geodata/*.sqlite
+!external/geodata/geonames.sqlite
 external/geodata/*.sqlite-*
 external/geodata/downloads/
+
+# Local source checkout used for reference/debugging. The app uses npm three-globe.
 external/three-globe/
 
 # Private design notes and local media fixtures
