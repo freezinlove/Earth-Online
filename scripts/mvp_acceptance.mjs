@@ -51,7 +51,11 @@ async function ensureServer() {
     await request("/api/state");
     return;
   } catch {
-    server = spawn(process.execPath, ["server/index.mjs"], { cwd: rootDir, stdio: "ignore" });
+    server = spawn(process.execPath, ["server/index.mjs"], {
+      cwd: rootDir,
+      env: { ...process.env, EARTH_ONLINE_ENABLE_TEST_ROUTES: "1" },
+      stdio: "ignore",
+    });
     for (let i = 0; i < 20; i += 1) {
       await new Promise((resolve) => setTimeout(resolve, 300));
       try {

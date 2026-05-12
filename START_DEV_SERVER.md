@@ -5,7 +5,7 @@
 在 PowerShell 中进入项目目录：
 
 ```powershell
-cd X:\Code_AI\Earth_Online
+cd <repo-path>
 ```
 
 启动开发服务：
@@ -47,11 +47,14 @@ node server/dev.mjs --host 0.0.0.0
 如果想让服务在后台运行，可以用：
 
 ```powershell
-$out = 'X:\Code_AI\temp\earth-online-dev.out.log'
-$err = 'X:\Code_AI\temp\earth-online-dev.err.log'
+$repo = (Get-Location).Path
+$logDir = Join-Path $repo 'output'
+New-Item -ItemType Directory -Force $logDir | Out-Null
+$out = Join-Path $logDir 'earth-online-dev.out.log'
+$err = Join-Path $logDir 'earth-online-dev.err.log'
 Start-Process -FilePath "node" `
   -ArgumentList "server/dev.mjs --host 0.0.0.0" `
-  -WorkingDirectory "X:\Code_AI\Earth_Online" `
+  -WorkingDirectory $repo `
   -RedirectStandardOutput $out `
   -RedirectStandardError $err `
   -WindowStyle Hidden
@@ -60,8 +63,8 @@ Start-Process -FilePath "node" `
 查看日志：
 
 ```powershell
-Get-Content X:\Code_AI\temp\earth-online-dev.out.log -Tail 40
-Get-Content X:\Code_AI\temp\earth-online-dev.err.log -Tail 40
+Get-Content .\output\earth-online-dev.out.log -Tail 40
+Get-Content .\output\earth-online-dev.err.log -Tail 40
 ```
 
 ## 检查是否启动成功

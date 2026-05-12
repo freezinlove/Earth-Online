@@ -1131,6 +1131,9 @@ export function createImportServices({
 
   async function importAppleTestPhotos(options = {}) {
     const appleDir = path.join(paths.rootDir, "DESIGN_SPECS", "photo test", "apple");
+    await fs.access(appleDir).catch(() => {
+      throw new Error("Apple test photo fixtures are not included in the public repository.");
+    });
     const entries = await fs.readdir(appleDir, { withFileTypes: true });
     const files = [];
     for (const entry of entries) {

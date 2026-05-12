@@ -1,19 +1,43 @@
-node_modules
-dist
-output
+# Dependencies
+node_modules/
+
+# Build, cache, and test output
+dist/
+output/
+test-results/
+coverage/
+.playwright-cli/
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Local user data
 data/**
 !data/
 !data/.gitkeep
 !data/README.md
-test-results
-.playwright-cli/
+
+# Optional generated geodata
 external/geodata/*.sqlite
 external/geodata/*.sqlite-*
 external/geodata/downloads/
-.env
-.env.*
-!.env.example
-.env.local
-*.tsbuildinfo
-DESIGN_SPECS
-external/three-globe
+external/three-globe/
+
+# Private design notes and local media fixtures
+DESIGN_SPECS/
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

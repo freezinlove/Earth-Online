@@ -1,0 +1,11 @@
+*.bin binary
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.gif binary
+*.mp4 binary
+*.mov binary
+*.heic binary
+*.sqlite binary
+*.db binary
+*.zip binary

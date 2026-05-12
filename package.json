@@ -1,8 +1,13 @@
 {
   "name": "earth-online",
+  "description": "Local-first travel photo archive with a 3D Earth timeline.",
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=24.0.0",
+    "npm": ">=11.0.0"
+  },
   "scripts": {
     "dev": "node server/dev.mjs --host 0.0.0.0",
     "frontend": "vite",

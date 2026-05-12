@@ -2,6 +2,8 @@ import { readBody } from "./body.mjs";
 import { corsHeaders, send, sendError } from "./responses.mjs";
 
 export function createRouter(handlers, paths) {
+  const testRoutesEnabled = process.env.EARTH_ONLINE_ENABLE_TEST_ROUTES === "1";
+
   return async function route(req, res) {
     try {
       if (req.method === "OPTIONS") {
@@ -37,7 +39,10 @@ export function createRouter(handlers, paths) {
         return job ? send(res, 200, job) : sendError(res, 404, "Import job not found");
       }
       if (req.method === "POST" && pathname === "/api/photos/embeddings/rebuild/jobs") return send(res, 202, await handlers.startEmbeddingRebuildJob(await readBody(req)));
-      if (req.method === "POST" && pathname === "/api/import/apple-test") return send(res, 200, await handlers.importAppleTestPhotos(await readBody(req)));
+      if (req.method === "POST" && pathname === "/api/import/apple-test") {
+        if (!testRoutesEnabled) return sendError(res, 404, "Not found");
+        return send(res, 200, await handlers.importAppleTestPhotos(await readBody(req)));
+      }
       const importConfirm = pathname.match(/^\/api\/import\/([^/]+)\/confirm$/);
       if (req.method === "POST" && importConfirm) return send(res, 200, await handlers.confirmImport(importConfirm[1]));
       const importRollback = pathname.match(/^\/api\/import\/([^/]+)\/rollback$/);
