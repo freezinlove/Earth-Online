@@ -4,6 +4,7 @@ import { isUsableLocation } from "./geo.mjs";
 export function toAiEvidence(ai, { makeId, analyzedAt = new Date().toISOString() } = {}) {
   return {
     provider: ai.provider,
+    model: ai.model,
     promptId: ai.promptId ?? "photo-analysis",
     promptVersion: ai.promptVersion ?? "1.0.0",
     analyzedAt,

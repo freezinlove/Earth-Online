@@ -253,12 +253,17 @@ export function createImportServices({
                   pendingReason: existingPhoto.pendingReason,
                 });
                 existingPhoto.aiProvider = ai.provider;
+                existingPhoto.aiModel = ai.model;
                 existingPhoto.aiFallbackReason = ai.fallbackReason;
                 existingPhoto.embeddingProvider = embedding.embeddingProvider;
+                existingPhoto.embeddingModel = embedding.embeddingModel;
+                existingPhoto.embeddingSpaceId = embedding.embeddingSpaceId;
                 existingPhoto.embeddingDimension = embedding.embeddingDimension ?? embedding.embedding?.length;
+                existingPhoto.embeddingMode = embedding.embeddingMode;
                 existingPhoto.embeddingFallbackReason = embedding.embeddingFallbackReason;
                 if (parsedLocation && !existingPhoto.location) existingPhoto.location = parsedLocation;
-                vectorIndex[existingPhoto.id] = embedding.embedding;
+                if (Array.isArray(embedding.embedding)) vectorIndex[existingPhoto.id] = embedding.embedding;
+                else delete vectorIndex[existingPhoto.id];
               }),
             );
           }
@@ -332,6 +337,7 @@ export function createImportServices({
           }),
         ]).then(([thumbName, ai, embedding]) => {
           const aiFailure = buildAiFailure(ai, embedding, newAiJob);
+          const photoPendingReason = aiFailure ? "ai_processing_failed" : newAiJob.pendingReason;
           const aiEvidenceBase = toAiEvidence(ai, { makeId });
           const aiEvidence = withBackendLocationCandidates({ location: newAiJob.location, aiEvidence: aiEvidenceBase, locale });
           const photo = {
@@ -347,21 +353,25 @@ export function createImportServices({
             tags: ai.tags,
             aiCaption: ai.caption,
             ai: aiEvidence,
-            locationResolution: resolveImportedLocation({ location: newAiJob.location, aiEvidence, pendingReason: newAiJob.pendingReason }),
+            locationResolution: resolveImportedLocation({ location: newAiJob.location, aiEvidence, pendingReason: photoPendingReason }),
             aiProvider: ai.provider,
+            aiModel: ai.model,
             aiFallbackReason: ai.fallbackReason,
             embeddingProvider: embedding.embeddingProvider,
+            embeddingModel: embedding.embeddingModel,
+            embeddingSpaceId: embedding.embeddingSpaceId,
             embeddingDimension: embedding.embeddingDimension ?? embedding.embedding?.length,
+            embeddingMode: embedding.embeddingMode,
             embeddingFallbackReason: embedding.embeddingFallbackReason,
             aiFailure,
             importedBatchId: batchId,
-            pendingReason: aiFailure ? "ai_processing_failed" : newAiJob.pendingReason,
+            pendingReason: photoPendingReason,
             exifStatus: {
               time: newAiJob.hasExifTime ? "read" : "fallback",
               gps: newAiJob.hasExifLocation ? "read" : "missing",
             },
           };
-          vectorIndex[photo.id] = embedding.embedding;
+          if (Array.isArray(embedding.embedding)) vectorIndex[photo.id] = embedding.embedding;
           importedSlots[newAiJob.index] = photo;
         }),
       );
@@ -680,6 +690,24 @@ export function createImportServices({
     return enqueuePendingInferenceJob(makeId("job"), { batchId, pendingIds: pendingItems.map((item) => item.id), locale: normalizeLocale(body.locale) });
   }
 
+  async function startAiFailureResolveJob(batchId, body = {}) {
+    const state = await readState();
+    const batch = state.importBatches.find((item) => item.id === batchId);
+    if (!batch || batch.status !== "pending_confirmation") {
+      throw new Error("找不到待确认导入批次。");
+    }
+    const requestedIds = new Set(safeArray(body.pendingIds).map(String));
+    const action = ["retry_vision", "retry_embedding", "retry_both"].includes(body.action) ? body.action : "retry_vision";
+    const pendingItems = state.pendingItems.filter(
+      (item) =>
+        batch.pendingItemIds.includes(item.id) &&
+        item.status === "open" &&
+        item.type === "ai_processing_failed" &&
+        requestedIds.has(item.id),
+    );
+    return enqueueAiFailureResolveJob(makeId("job"), { batchId, pendingIds: pendingItems.map((item) => item.id), action, locale: normalizeLocale(body.locale) });
+  }
+
   function enqueuePendingInferenceJob(id, jobPayload) {
     const total = safeArray(jobPayload.pendingIds).length;
     const createdAt = new Date().toISOString();
@@ -760,6 +788,274 @@ export function createImportServices({
       publishJobTerminal(current);
     }, 0);
     return job;
+  }
+
+  function enqueueAiFailureResolveJob(id, jobPayload) {
+    const total = safeArray(jobPayload.pendingIds).length;
+    const createdAt = new Date().toISOString();
+    const initialProgress = {
+      phase: "queued",
+      done: 0,
+      total,
+      steps: {
+        ai: { done: 0, total },
+      },
+    };
+    const job = {
+      id,
+      status: "queued",
+      createdAt,
+      updatedAt: createdAt,
+      progress: initialProgress,
+      progressEvents: [{ ...initialProgress, sequence: 0, createdAt }],
+      result: undefined,
+      error: undefined,
+    };
+    importJobs.set(id, job);
+    repository.saveImportJob(job);
+    setTimeout(async () => {
+      const current = importJobs.get(id);
+      if (!current) return;
+      current.status = "processing";
+      current.updatedAt = new Date().toISOString();
+      current.progress = {
+        phase: "ai",
+        done: 0,
+        total,
+        steps: {
+          ai: { done: 0, total },
+        },
+      };
+      appendProgressEvent(current);
+      repository.saveImportJob(current);
+      const updateProgress = (next) => {
+        const steps = { ...(current.progress?.steps ?? {}) };
+        steps.ai = {
+          done: next.done ?? steps.ai?.done ?? 0,
+          total: next.total ?? steps.ai?.total ?? total,
+          currentFileName: next.currentFileName,
+        };
+        current.progress = {
+          ...(current.progress ?? {}),
+          ...next,
+          phase: next.phase ?? "ai",
+          total: next.total ?? current.progress?.total ?? total,
+          steps,
+        };
+        current.updatedAt = new Date().toISOString();
+        appendProgressEvent(current);
+        repository.saveImportJob(current);
+      };
+      try {
+        current.result = await resolveImportAiFailuresBatch(jobPayload, { update: updateProgress });
+        current.status = "completed";
+        current.progress = {
+          ...(current.progress ?? {}),
+          phase: "completed",
+          done: total,
+          total,
+          steps: {
+            ...(current.progress?.steps ?? {}),
+            ai: { done: total, total },
+          },
+        };
+      } catch (error) {
+        current.status = "failed";
+        current.error = error instanceof Error ? error.message : "AI failure resolve job failed";
+        current.progress = { ...(current.progress ?? {}), phase: "failed", total };
+        appendProgressEvent(current);
+      }
+      current.updatedAt = new Date().toISOString();
+      repository.saveImportJob(current);
+      publishJobTerminal(current);
+    }, 0);
+    return job;
+  }
+
+  function enqueueEmbeddingRebuildJob(id, jobPayload = {}) {
+    const createdAt = new Date().toISOString();
+    const job = {
+      id,
+      status: "queued",
+      createdAt,
+      updatedAt: createdAt,
+      progress: {
+        phase: "queued",
+        done: 0,
+        total: 0,
+        steps: {
+          embedding: { done: 0, total: 0 },
+        },
+      },
+      progressEvents: [
+        {
+          phase: "queued",
+          done: 0,
+          total: 0,
+          steps: {
+            embedding: { done: 0, total: 0 },
+          },
+          sequence: 0,
+          createdAt,
+        },
+      ],
+      result: undefined,
+      error: undefined,
+    };
+    importJobs.set(id, job);
+    repository.saveImportJob(job);
+    setTimeout(async () => {
+      const current = importJobs.get(id);
+      if (!current) return;
+      current.status = "processing";
+      current.updatedAt = new Date().toISOString();
+      const updateProgress = (next) => {
+        const total = next.total ?? current.progress?.total ?? 0;
+        const done = next.done ?? current.progress?.done ?? 0;
+        current.progress = {
+          ...(current.progress ?? {}),
+          ...next,
+          phase: next.phase ?? "embedding",
+          done,
+          total,
+          steps: {
+            ...(current.progress?.steps ?? {}),
+            embedding: {
+              done,
+              total,
+              currentFileName: next.currentFileName,
+            },
+          },
+        };
+        current.updatedAt = new Date().toISOString();
+        appendProgressEvent(current);
+        repository.saveImportJob(current);
+      };
+      updateProgress({ phase: "embedding", done: 0, total: 0 });
+      try {
+        current.result = await rebuildPhotoEmbeddings(jobPayload, { update: updateProgress });
+        const total = current.progress?.total ?? 0;
+        current.status = "completed";
+        current.progress = {
+          ...(current.progress ?? {}),
+          phase: "completed",
+          done: total,
+          total,
+          steps: {
+            ...(current.progress?.steps ?? {}),
+            embedding: { done: total, total },
+          },
+        };
+      } catch (error) {
+        current.status = "failed";
+        current.error = error instanceof Error ? error.message : "embedding rebuild job failed";
+        current.progress = { ...(current.progress ?? {}), phase: "failed" };
+        appendProgressEvent(current);
+      }
+      current.updatedAt = new Date().toISOString();
+      repository.saveImportJob(current);
+      publishJobTerminal(current);
+    }, 0);
+    return job;
+  }
+
+  function startEmbeddingRebuildJob(body = {}) {
+    return enqueueEmbeddingRebuildJob(makeId("job"), {
+      photoIds: safeArray(body.photoIds).map(String).filter(Boolean),
+    });
+  }
+
+  async function rebuildPhotoEmbeddings(jobPayload = {}, progress = {}) {
+    const state = await readState();
+    const requestedPhotoIds = new Set(safeArray(jobPayload.photoIds).map(String).filter(Boolean));
+    const photos = requestedPhotoIds.size ? safeArray(state.photos).filter((photo) => requestedPhotoIds.has(photo.id)) : safeArray(state.photos);
+    const total = photos.length;
+    const previousVectorIndex = await readVectorIndex();
+    const nextVectorIndex = requestedPhotoIds.size ? { ...previousVectorIndex } : {};
+    const failed = [];
+    const succeeded = [];
+    let done = 0;
+    progress.update?.({ phase: "embedding", done, total });
+    const rebuiltPhotos = await mapConcurrent(photos, embeddingConcurrency, async (photo) => {
+      const imagePayload = await readPhotoImagePayload(photo);
+      let embedding;
+      if (imagePayload) {
+        embedding = await embedPhotoImageWithRetry({
+          fileName: photo.fileName,
+          mime: imagePayload.mime,
+          dataUrl: imagePayload.dataUrl,
+          allowCloud: true,
+        });
+      } else {
+        embedding = {
+          embedding: undefined,
+          embeddingProvider: undefined,
+          embeddingModel: undefined,
+          embeddingSpaceId: undefined,
+          embeddingDimension: undefined,
+          embeddingMode: "failed",
+          embeddingFallbackReason: "找不到原图，无法重建向量。",
+        };
+      }
+      const success = Array.isArray(embedding.embedding) && embedding.embedding.length > 0 && embedding.embeddingMode === "cross_modal";
+      if (success) {
+        nextVectorIndex[photo.id] = embedding.embedding;
+        succeeded.push(photo.id);
+      } else {
+        delete nextVectorIndex[photo.id];
+        failed.push({
+          id: photo.id,
+          fileName: photo.fileName,
+          reason: embedding.embeddingFallbackReason || "向量模型未返回可用 embedding。",
+        });
+      }
+      done += 1;
+      progress.update?.({ phase: "embedding", done, total, currentFileName: photo.fileName });
+      return {
+        ...photo,
+        embeddingProvider: embedding.embeddingProvider,
+        embeddingModel: embedding.embeddingModel,
+        embeddingSpaceId: embedding.embeddingSpaceId,
+        embeddingDimension: embedding.embeddingDimension ?? embedding.embedding?.length,
+        embeddingMode: embedding.embeddingMode,
+        embeddingFallbackReason: embedding.embeddingFallbackReason,
+      };
+    });
+    const rebuiltById = new Map(rebuiltPhotos.map((photo) => [photo.id, photo]));
+    await writeVectorIndex(nextVectorIndex);
+    const nextState = {
+      ...state,
+      photos: safeArray(state.photos).map((photo) => rebuiltById.get(photo.id) ?? photo),
+    };
+    await writeState({
+      ...nextState,
+    });
+    progress.update?.({ phase: "completed", done: total, total });
+    return {
+      ...(await responseState()),
+      embeddingRebuild: {
+        total,
+        successCount: succeeded.length,
+        failedCount: failed.length,
+        failedPhotoIds: failed.map((item) => item.id),
+        failures: failed,
+        mode: requestedPhotoIds.size ? "retry_failed" : "all",
+      },
+    };
+  }
+
+  async function wait(ms) {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function embedPhotoImageWithRetry(input, { attempts = 3 } = {}) {
+    let latest;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      latest = await embedPhotoImage(input);
+      if (Array.isArray(latest.embedding) && latest.embedding.length > 0 && latest.embeddingMode === "cross_modal") return latest;
+      if (attempt < attempts) await wait(400 * attempt);
+    }
+    return latest;
   }
 
   function appendProgressEvent(job) {
@@ -1073,6 +1369,74 @@ export function createImportServices({
     throw new Error("未知的 AI 失败处理方式。");
   }
 
+  async function resolveImportAiFailuresBatch({ batchId, pendingIds, action = "retry_vision", locale: rawLocale }, progress = {}) {
+    const state = await readState();
+    const batch = state.importBatches.find((item) => item.id === batchId);
+    if (!batch || batch.status !== "pending_confirmation") return responseState();
+    const locale = normalizeLocale(rawLocale);
+    const requestedIds = new Set(safeArray(pendingIds).map(String));
+    const items = state.pendingItems
+      .filter((pending) => pending.status === "open" && pending.type === "ai_processing_failed" && batch.pendingItemIds.includes(pending.id) && requestedIds.has(pending.id))
+      .map((pending) => ({
+        pending,
+        photo: state.photos.find((photo) => pending.relatedPhotoIds?.includes(photo.id)),
+      }))
+      .filter((item) => Boolean(item.photo));
+    const total = items.length;
+    let done = 0;
+    progress.update?.({ phase: "ai", done, total });
+    const results = await mapConcurrent(items, aiConcurrency, async ({ pending, photo }) => {
+      try {
+        const retry = await buildRetryImportAiFailureResult(state, batch, pending, photo, action, { locale });
+        return { pendingId: pending.id, photoId: photo.id, retry };
+      } catch (error) {
+        return { pendingId: pending.id, photoId: photo.id, error: error instanceof Error ? error.message : "AI Vision 重跑失败。" };
+      } finally {
+        done += 1;
+        progress.update?.({ phase: "ai", done, total, currentFileName: photo?.fileName });
+      }
+    });
+
+    const latestState = await readState();
+    const latestBatch = latestState.importBatches.find((item) => item.id === batchId);
+    if (!latestBatch || latestBatch.status !== "pending_confirmation") return responseState();
+
+    let nextState = latestState;
+    const vectorIndex = await readVectorIndex();
+    const affectedTripIds = new Set([...latestBatch.createdTripIds, ...(latestBatch.updatedTripIds ?? [])].filter(Boolean));
+    const resultByPendingId = new Map(results.map((item) => [item.pendingId, item]));
+    nextState = {
+      ...nextState,
+      photos: nextState.photos.map((photo) => {
+        const pending = nextState.pendingItems.find((item) => item.status === "open" && item.type === "ai_processing_failed" && latestBatch.pendingItemIds.includes(item.id) && item.relatedPhotoIds?.includes(photo.id));
+        const result = pending ? resultByPendingId.get(pending.id) : undefined;
+        if (!result?.retry) return photo;
+        if (photo.tripId) affectedTripIds.add(photo.tripId);
+        if (result.retry.retryEmbedding && Array.isArray(result.retry.embedding.embedding)) vectorIndex[photo.id] = result.retry.embedding.embedding;
+        else if (result.retry.retryEmbedding) delete vectorIndex[photo.id];
+        return result.retry.patchedPhoto;
+      }),
+      pendingItems: nextState.pendingItems.map((pending) => {
+        const result = resultByPendingId.get(pending.id);
+        if (!result || !latestBatch.pendingItemIds.includes(pending.id) || pending.status !== "open" || pending.type !== "ai_processing_failed") return pending;
+        if (result.error) return { ...pending, reason: result.error, suggestion: "初次导入 AI 重跑失败，需要重新选择处理方式。" };
+        if (!result.retry) return pending;
+        return result.retry.failed
+          ? { ...pending, reason: failureReasonText(result.retry.patchedPhoto), suggestion: `${result.retry.patchedPhoto.title ?? result.retry.patchedPhoto.fileName} 初次导入 AI 仍处理失败，需要重新选择处理方式。` }
+          : { ...pending, status: "accepted" };
+      }),
+    };
+    await writeVectorIndex(vectorIndex);
+    for (const result of results) {
+      if (!result.retry || result.retry.failed) continue;
+      const currentBatch = nextState.importBatches.find((item) => item.id === batchId) ?? latestBatch;
+      nextState = appendMissingInfoPendingIfNeeded(nextState, currentBatch, result.retry.patchedPhoto);
+    }
+    await writeState(rebuildTrips(nextState, affectedTripIds, { makeId, allowExistingPlaceMerge: true }));
+    progress.update?.({ phase: "completed", done: total, total });
+    return responseState();
+  }
+
   async function archiveAiFailureWithExif(state, batch, pending, photo) {
     if (photo.exifStatus?.gps !== "read" || !isUsableLocation(photo.location)) throw new Error("这张照片没有真实 EXIF GPS，不能直接按真实定位归档。");
     const patchedPhoto = {
@@ -1092,7 +1456,7 @@ export function createImportServices({
     return responseState();
   }
 
-  async function retryImportAiFailure(state, batch, pending, photo, action, { locale = "zh" } = {}) {
+  async function buildRetryImportAiFailureResult(state, batch, pending, photo, action, { locale = "zh" } = {}) {
     const imagePayload = await readPhotoImagePayload(photo);
     if (!imagePayload) throw new Error("找不到原图，无法重跑初次导入 AI。");
     const retryVision = action === "retry_vision" || action === "retry_both";
@@ -1102,6 +1466,7 @@ export function createImportServices({
           provider: photo.aiProvider ?? photo.ai.provider,
           promptId: photo.ai.promptId,
           promptVersion: photo.ai.promptVersion,
+          model: photo.aiModel ?? photo.ai.model,
           title: photo.title,
           tags: photo.tags ?? [],
           caption: photo.aiCaption,
@@ -1114,7 +1479,10 @@ export function createImportServices({
     let embedding = {
       embedding: undefined,
       embeddingProvider: photo.embeddingProvider,
+      embeddingModel: photo.embeddingModel,
+      embeddingSpaceId: photo.embeddingSpaceId,
       embeddingDimension: photo.embeddingDimension,
+      embeddingMode: photo.embeddingMode,
       embeddingFallbackReason: photo.embeddingFallbackReason,
     };
     if (retryVision) {
@@ -1140,7 +1508,7 @@ export function createImportServices({
 
     const nextFailure = {
       vision: retryVision ? ai.fallbackReason : photo.aiFailure?.vision,
-      embedding: retryEmbedding ? embedding.embeddingFallbackReason : photo.aiFailure?.embedding,
+      embedding: retryEmbedding ? embeddingFailureReason(embedding) : photo.aiFailure?.embedding,
       hasRealExifGps: photo.exifStatus?.gps === "read" && isUsableLocation(photo.location),
       hasRealExifTime: photo.exifStatus?.time === "read",
       updatedAt: new Date().toISOString(),
@@ -1156,27 +1524,37 @@ export function createImportServices({
       ai: aiEvidence,
       locationResolution: resolveImportedLocation({ location: photo.location, aiEvidence, pendingReason: failed ? "ai_processing_failed" : pendingReasonFromExif(photo) }),
       aiProvider: ai.provider,
+      aiModel: ai.model,
       aiFallbackReason: ai.fallbackReason,
       embeddingProvider: retryEmbedding ? embedding.embeddingProvider : photo.embeddingProvider,
+      embeddingModel: retryEmbedding ? embedding.embeddingModel : photo.embeddingModel,
+      embeddingSpaceId: retryEmbedding ? embedding.embeddingSpaceId : photo.embeddingSpaceId,
       embeddingDimension: retryEmbedding ? embedding.embeddingDimension ?? embedding.embedding?.length : photo.embeddingDimension,
+      embeddingMode: retryEmbedding ? embedding.embeddingMode : photo.embeddingMode,
       embeddingFallbackReason: retryEmbedding ? embedding.embeddingFallbackReason : photo.embeddingFallbackReason,
       aiFailure: failed ? nextFailure : undefined,
       pendingReason: failed ? "ai_processing_failed" : pendingReasonFromExif(photo),
     };
 
+    return { patchedPhoto, embedding, failed, retryEmbedding };
+  }
+
+  async function retryImportAiFailure(state, batch, pending, photo, action, { locale = "zh" } = {}) {
+    const retry = await buildRetryImportAiFailureResult(state, batch, pending, photo, action, { locale });
     const vectorIndex = await readVectorIndex();
-    if (retryEmbedding && Array.isArray(embedding.embedding)) vectorIndex[photo.id] = embedding.embedding;
+    if (retry.retryEmbedding && Array.isArray(retry.embedding.embedding)) vectorIndex[photo.id] = retry.embedding.embedding;
+    else if (retry.retryEmbedding) delete vectorIndex[photo.id];
     await writeVectorIndex(vectorIndex);
     const nextState = appendMissingInfoPendingIfNeeded(
       {
         ...state,
-        photos: state.photos.map((item) => (item.id === photo.id ? patchedPhoto : item)),
-        pendingItems: state.pendingItems.map((item) => (item.id === pending.id && !failed ? { ...item, status: "accepted" } : item.id === pending.id ? { ...item, reason: failureReasonText(patchedPhoto), suggestion: `${patchedPhoto.title ?? patchedPhoto.fileName} 初次导入 AI 仍处理失败，需要重新选择处理方式。` } : item)),
+        photos: state.photos.map((item) => (item.id === photo.id ? retry.patchedPhoto : item)),
+        pendingItems: state.pendingItems.map((item) => (item.id === pending.id && !retry.failed ? { ...item, status: "accepted" } : item.id === pending.id ? { ...item, reason: failureReasonText(retry.patchedPhoto), suggestion: `${retry.patchedPhoto.title ?? retry.patchedPhoto.fileName} 初次导入 AI 仍处理失败，需要重新选择处理方式。` } : item)),
       },
       batch,
-      patchedPhoto,
+      retry.patchedPhoto,
     );
-    await writeState(rebuildTripsForImportedPhoto(nextState, patchedPhoto, batch, { allowExistingPlaceMerge: true }));
+    await writeState(rebuildTripsForImportedPhoto(nextState, retry.patchedPhoto, batch, { allowExistingPlaceMerge: true }));
     return responseState();
   }
 
@@ -1293,7 +1671,10 @@ export function createImportServices({
       return {
         embedding: analysis.embedding,
         embeddingProvider: analysis.embeddingProvider,
+        embeddingModel: analysis.embeddingModel,
+        embeddingSpaceId: analysis.embeddingSpaceId,
         embeddingDimension: analysis.embeddingDimension ?? analysis.embedding?.length,
+        embeddingMode: analysis.embeddingMode ?? "disabled",
       };
     }
     return embedTravelImageAnalysis({
@@ -1324,23 +1705,29 @@ export function createImportServices({
   }
 
   function recordVisionStats(ai, aiStats) {
-    if (ai.provider === "qwen") aiStats.qwenCount += 1;
+    if (ai.provider === "qwen" || ai.provider === "aliyun") aiStats.qwenCount += 1;
     else aiStats.fallbackCount += 1;
   }
 
   function recordEmbeddingStats(ai, aiStats) {
     if (Array.isArray(ai.embedding) && ai.embedding.length > 0) aiStats.embeddingCount += 1;
-    if (ai.embeddingProvider === "qwen") aiStats.qwenEmbeddingCount += 1;
-    else aiStats.deterministicEmbeddingCount += 1;
+    if (ai.embeddingProvider === "qwen" || ai.embeddingProvider === "aliyun") aiStats.qwenEmbeddingCount += 1;
+    else if (ai.embeddingMode !== "cross_modal") aiStats.deterministicEmbeddingCount += 1;
+  }
+
+  function embeddingFailureReason(embedding) {
+    if (!embedding) return undefined;
+    if (embedding.embeddingMode !== "failed") return undefined;
+    return embedding.embeddingFallbackReason || "Embedding 未返回可用向量。";
   }
 
   function buildAiFailure(ai, embedding, job) {
     const vision = ai?.fallbackReason;
-    const embeddingError = embedding?.embeddingFallbackReason;
-    if (!vision && !embeddingError) return undefined;
+    const embeddingFailure = embeddingFailureReason(embedding);
+    if (!vision && !embeddingFailure) return undefined;
     return {
       vision,
-      embedding: embeddingError,
+      embedding: embeddingFailure,
       hasRealExifGps: Boolean(job.hasExifLocation),
       hasRealExifTime: Boolean(job.hasExifTime),
       updatedAt: new Date().toISOString(),
@@ -1383,7 +1770,7 @@ export function createImportServices({
         type: missingGps ? "missing_gps" : "missing_time",
         relatedPhotoIds: [photo.id],
         relatedTripId: photo.tripId,
-        suggestion: `${photo.title ?? photo.fileName} 缺少${missingGps && missingTime ? " GPS 和 EXIF 时间" : missingGps ? " GPS" : " EXIF 时间"}，可手动触发 AI 二次推断。`,
+        suggestion: `${photo.title ?? photo.fileName} 缺少${missingGps && missingTime ? " GPS 和 EXIF 时间" : missingGps ? " GPS" : " EXIF 时间"}，可手动触发基于上下文推断。`,
         reason: "初次导入只完成单张照片理解；需要用户在待补信息中手动触发上下文推断后再确认。",
         status: "open",
       });
@@ -1783,7 +2170,10 @@ export function createImportServices({
 
   function stripCandidatePoint(candidate) {
     if (!candidate) return candidate;
-    const { point, lat, lng, ...rest } = candidate;
+    const rest = { ...candidate };
+    delete rest.point;
+    delete rest.lat;
+    delete rest.lng;
     return rest;
   }
 
@@ -1817,8 +2207,8 @@ export function createImportServices({
     const english = normalizeLocale(locale) === "en";
     const messages = {
       photoNotFound: english ? "The pending photo could not be found." : "找不到待补照片。",
-      imageMissing: english ? "The original image for this pending photo could not be found, so second-pass visual inference cannot run." : "找不到当前待补照片原图，无法执行二次视觉推断。",
-      secondInferenceFailed: english ? "AI second-pass inference failed." : "AI 二次推断失败。",
+      imageMissing: english ? "The original image for this pending photo could not be found, so context inference cannot run." : "找不到当前待补照片原图，无法执行基于上下文推断。",
+      secondInferenceFailed: english ? "Context inference failed." : "基于上下文推断失败。",
       targetNotAllowed: english ? "AI suggested a target place that is not in the backend allowed-place list." : "AI 建议的目标地点不在后端允许的地点列表中。",
       lowConfidence: english ? "The inferred location confidence is too low for this pending photo." : "待补照片地点置信度不足。",
       invalidPlaceName: english ? "AI did not provide a valid place name that can be created." : "AI 未给出可创建地点的合法名称。",
@@ -1858,6 +2248,7 @@ export function createImportServices({
     importPhotos,
     startImportJob,
     startMultipartImportJob,
+    startEmbeddingRebuildJob,
     getImportJob,
     subscribeImportJob,
     importAppleTestPhotos,
@@ -1865,6 +2256,7 @@ export function createImportServices({
     rollbackImport,
     cancelImportPhotos,
     resolveImportAiFailure,
+    startAiFailureResolveJob,
     inferPendingLocation,
     startPendingInferenceJob,
     mergeImportTrips,

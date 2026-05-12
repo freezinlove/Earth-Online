@@ -14,9 +14,12 @@ export function createRouter(handlers, paths) {
       if (pathname.startsWith("/data/photos/") || pathname.startsWith("/data/thumbs/")) {
         return handlers.servePhoto(res, pathname, { photoDir: paths.photoDir, thumbDir: paths.thumbDir });
       }
+      if (req.method === "GET" && pathname === "/api/health/capabilities") return send(res, 200, { embeddingRebuildJobs: true });
       if (req.method === "GET" && pathname === "/api/state") return send(res, 200, await handlers.responseState());
       if (req.method === "GET" && pathname === "/api/settings/local-ai") return send(res, 200, handlers.localAiSettings());
       if (req.method === "PATCH" && pathname === "/api/settings/local-ai") return send(res, 200, handlers.updateLocalAiSettings(await readBody(req)));
+      if (req.method === "GET" && pathname === "/api/settings/ai") return send(res, 200, handlers.aiSettings());
+      if (req.method === "PATCH" && pathname === "/api/settings/ai") return send(res, 200, handlers.updateAiSettings(await readBody(req)));
       if (req.method === "GET" && pathname === "/api/geocode/reverse") return send(res, 200, handlers.reverseGeocode(url.searchParams));
       if (req.method === "GET" && pathname === "/api/search") return send(res, 200, await handlers.search(url.searchParams));
       if (req.method === "POST" && pathname === "/api/import/jobs") {
@@ -33,6 +36,7 @@ export function createRouter(handlers, paths) {
         const job = handlers.getImportJob(importJob[1]);
         return job ? send(res, 200, job) : sendError(res, 404, "Import job not found");
       }
+      if (req.method === "POST" && pathname === "/api/photos/embeddings/rebuild/jobs") return send(res, 202, await handlers.startEmbeddingRebuildJob(await readBody(req)));
       if (req.method === "POST" && pathname === "/api/import/apple-test") return send(res, 200, await handlers.importAppleTestPhotos(await readBody(req)));
       const importConfirm = pathname.match(/^\/api\/import\/([^/]+)\/confirm$/);
       if (req.method === "POST" && importConfirm) return send(res, 200, await handlers.confirmImport(importConfirm[1]));
@@ -46,6 +50,8 @@ export function createRouter(handlers, paths) {
       if (req.method === "POST" && importPendingInfer) return send(res, 200, await handlers.inferPendingLocation(importPendingInfer[1], importPendingInfer[2], await readBody(req)));
       const importAiFailure = pathname.match(/^\/api\/import\/([^/]+)\/ai-failures\/([^/]+)\/resolve$/);
       if (req.method === "POST" && importAiFailure) return send(res, 200, await handlers.resolveImportAiFailure(importAiFailure[1], importAiFailure[2], await readBody(req)));
+      const importAiFailureJob = pathname.match(/^\/api\/import\/([^/]+)\/ai-failures\/resolve\/jobs$/);
+      if (req.method === "POST" && importAiFailureJob) return send(res, 202, await handlers.startAiFailureResolveJob(importAiFailureJob[1], await readBody(req)));
       const importMerge = pathname.match(/^\/api\/import\/([^/]+)\/merge$/);
       if (req.method === "POST" && importMerge) return send(res, 200, await handlers.mergeImportTrips(importMerge[1]));
       if (req.method === "POST" && pathname === "/api/trips") return send(res, 200, await handlers.createTrip(await readBody(req)));

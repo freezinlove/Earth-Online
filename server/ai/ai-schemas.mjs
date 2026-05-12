@@ -87,7 +87,7 @@ function normalizeInferenceTargetCandidate(candidate, fallbackReason) {
 export function validateMissingInfoInferenceResult(parsed, { locale = "zh" } = {}) {
   const english = normalizeLocale(locale) === "en";
   if (!parsed || typeof parsed !== "object") {
-    return { action: "keep_pending", confidence: 0, reason: english ? "AI did not return a parseable second-pass inference result." : "AI 未返回可解析的二次推断结果。" };
+    return { action: "keep_pending", confidence: 0, reason: english ? "AI did not return a parseable context inference result." : "AI 未返回可解析的基于上下文推断结果。" };
   }
   const action = String(parsed.action ?? "");
   const confidence = clampConfidence(parsed.confidence ?? parsed.candidate?.confidence);

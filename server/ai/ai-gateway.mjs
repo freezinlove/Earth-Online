@@ -1,5 +1,6 @@
 import path from "node:path";
 import { deterministicVector } from "../domain/vectors.mjs";
+import { embeddingDimensions, embeddingSpaceId, getAiConfig } from "./ai-config.mjs";
 import { getAiProvider, listAiProviders } from "./provider-registry.mjs";
 
 function normalizeLocale(locale) {
@@ -54,6 +55,7 @@ function fallbackPhotoAnalysis({ fileName, preset, locale = "zh" }) {
 function mergeVisionWithFallback(vision, fallback, providerId) {
   return {
     provider: vision.provider ?? providerId,
+    model: vision.model,
     promptId: vision.promptId,
     promptVersion: vision.promptVersion,
     title: vision.title || fallback.title,
@@ -87,6 +89,20 @@ function friendlyAiError(error, fallback = "AI provider failed", locale = "zh") 
 
 export { listAiProviders };
 
+function profileConfig(rootDir, secretProvider, profileId) {
+  return getAiConfig({ rootDir, secretProvider }).profiles[profileId];
+}
+
+function profileSecretProvider(secretProvider, profileId, providerId) {
+  if (!secretProvider) return secretProvider;
+  return {
+    ...secretProvider,
+    get(key) {
+      return secretProvider.getProfileApiKey?.(profileId, providerId) ?? secretProvider.get?.(key);
+    },
+  };
+}
+
 export async function analyzeTravelImageVision({
   rootDir = process.cwd(),
   secretProvider,
@@ -106,10 +122,12 @@ export async function analyzeTravelImageVision({
     return withoutEmbeddingFields(fallback);
   }
   try {
-    const imageProvider = getAiProvider("imageAnalysis", imageAnalysisProviderId);
+    const profile = profileConfig(rootDir, secretProvider, "imageUnderstanding");
+    const imageProvider = getAiProvider("imageUnderstanding", imageAnalysisProviderId ?? profile.providerId);
     if (!imageProvider) throw new Error("no image analysis provider configured");
+    const providerSecretProvider = profileSecretProvider(secretProvider, "imageUnderstanding", imageProvider.id);
 
-    const vision = await imageProvider.analyzeImage({ rootDir, secretProvider, fileName, mime, dataUrl, preset, geoContext, locale: normalizedLocale });
+    const vision = await imageProvider.analyzeImage({ rootDir, secretProvider: providerSecretProvider, fileName, mime, dataUrl, preset, geoContext, locale: normalizedLocale, modelId: profile.modelId });
     return mergeVisionWithFallback(vision, fallback, imageProvider.id);
   } catch (error) {
     const visionFallback = withoutEmbeddingFields(fallback);
@@ -132,33 +150,53 @@ export async function embedTravelImageAnalysis({
   const text = embeddingText({ fileName, ...analysis });
   if (allowCloud) {
     try {
-      const embeddingProvider = getAiProvider("embedding", embeddingProviderId);
+      const profile = profileConfig(rootDir, secretProvider, "crossModalEmbedding");
+      if (!profile.enabled) {
+        return {
+          embedding: undefined,
+          embeddingProvider: undefined,
+          embeddingModel: undefined,
+          embeddingSpaceId: undefined,
+          embeddingDimension: undefined,
+          embeddingMode: "disabled",
+          embeddingFallbackReason: undefined,
+        };
+      }
+      const embeddingProvider = getAiProvider("crossModalEmbedding", embeddingProviderId ?? profile.providerId);
       if (!embeddingProvider) throw new Error("no embedding provider configured");
-      const result = await embeddingProvider.embed({ rootDir, secretProvider, fileName, text });
+      const providerSecretProvider = profileSecretProvider(secretProvider, "crossModalEmbedding", embeddingProvider.id);
+      const result = await embeddingProvider.embed({ rootDir, secretProvider: providerSecretProvider, fileName, text, modelId: profile.modelId, dimensions: embeddingDimensions(profile) });
       if (!Array.isArray(result.embedding)) throw new Error("embedding unavailable");
 
       return {
         embedding: result.embedding,
         embeddingProvider: result.embeddingProvider,
+        embeddingModel: result.embeddingModel ?? profile.modelId,
+        embeddingSpaceId: embeddingSpaceId(profile),
         embeddingDimension: result.embedding.length,
+        embeddingMode: "cross_modal",
         embeddingFallbackReason: undefined,
       };
     } catch (error) {
-      const embedding = deterministicVector(text);
       return {
-        embedding,
-        embeddingProvider: "deterministic",
-        embeddingDimension: embedding.length,
-        embeddingFallbackReason: friendlyAiError(error, "embedding provider failed"),
+        embedding: undefined,
+        embeddingProvider: undefined,
+        embeddingModel: undefined,
+        embeddingSpaceId: undefined,
+        embeddingDimension: undefined,
+        embeddingMode: "failed",
+        embeddingFallbackReason: friendlyAiError(error, "embedding provider failed", locale),
       };
     }
   }
-  const embedding = deterministicVector(text);
   return {
-    embedding,
-    embeddingProvider: "deterministic",
-    embeddingDimension: embedding.length,
-    embeddingFallbackReason: allowCloud ? "embedding provider failed" : undefined,
+    embedding: undefined,
+    embeddingProvider: undefined,
+    embeddingModel: undefined,
+    embeddingSpaceId: undefined,
+    embeddingDimension: undefined,
+    embeddingMode: "disabled",
+    embeddingFallbackReason: undefined,
   };
 }
 
@@ -167,40 +205,58 @@ export async function embedTravelImageImage({
   secretProvider,
   embeddingProviderId,
   fileName,
-  mime,
   dataUrl,
   allowCloud = true,
 }) {
-  const fallbackText = [fileName, mime].filter(Boolean).join(" ");
   if (allowCloud) {
     try {
-      const embeddingProvider = getAiProvider("embedding", embeddingProviderId);
+      const profile = profileConfig(rootDir, secretProvider, "crossModalEmbedding");
+      if (!profile.enabled) {
+        return {
+          embedding: undefined,
+          embeddingProvider: undefined,
+          embeddingModel: undefined,
+          embeddingSpaceId: undefined,
+          embeddingDimension: undefined,
+          embeddingMode: "disabled",
+          embeddingFallbackReason: undefined,
+        };
+      }
+      const embeddingProvider = getAiProvider("crossModalEmbedding", embeddingProviderId ?? profile.providerId);
       if (!embeddingProvider) throw new Error("no embedding provider configured");
-      const result = await embeddingProvider.embed({ rootDir, secretProvider, fileName, dataUrl });
+      const providerSecretProvider = profileSecretProvider(secretProvider, "crossModalEmbedding", embeddingProvider.id);
+      const result = await embeddingProvider.embed({ rootDir, secretProvider: providerSecretProvider, fileName, dataUrl, modelId: profile.modelId, dimensions: embeddingDimensions(profile) });
       if (!Array.isArray(result.embedding)) throw new Error("embedding unavailable");
 
       return {
         embedding: result.embedding,
         embeddingProvider: result.embeddingProvider,
+        embeddingModel: result.embeddingModel ?? profile.modelId,
+        embeddingSpaceId: embeddingSpaceId(profile),
         embeddingDimension: result.embedding.length,
+        embeddingMode: "cross_modal",
         embeddingFallbackReason: undefined,
       };
     } catch (error) {
-      const embedding = deterministicVector(fallbackText);
       return {
-        embedding,
-        embeddingProvider: "deterministic",
-        embeddingDimension: embedding.length,
+        embedding: undefined,
+        embeddingProvider: undefined,
+        embeddingModel: undefined,
+        embeddingSpaceId: undefined,
+        embeddingDimension: undefined,
+        embeddingMode: "failed",
         embeddingFallbackReason: friendlyAiError(error, "image embedding provider failed"),
       };
     }
   }
-  const embedding = deterministicVector(fallbackText);
   return {
-    embedding,
-    embeddingProvider: "deterministic",
-    embeddingDimension: embedding.length,
-    embeddingFallbackReason: allowCloud ? "image embedding provider failed" : undefined,
+    embedding: undefined,
+    embeddingProvider: undefined,
+    embeddingModel: undefined,
+    embeddingSpaceId: undefined,
+    embeddingDimension: undefined,
+    embeddingMode: "disabled",
+    embeddingFallbackReason: undefined,
   };
 }
 
@@ -225,21 +281,23 @@ export async function inferMissingInfoWithImage({
     return {
       action: "keep_pending",
       confidence: 0,
-      reason: normalizedLocale === "en" ? "Cloud AI is disabled, so second-pass visual inference cannot run." : "云端 AI 未启用，无法执行当前照片二次视觉推断。",
+      reason: normalizedLocale === "en" ? "Cloud AI is disabled, so context inference cannot run." : "云端 AI 未启用，无法执行当前照片的基于上下文推断。",
       provider: "mock",
       promptId: "missing-info-inference",
       promptVersion: "fallback",
     };
   }
   try {
-    const provider = getAiProvider("missingInfoInference", missingInfoInferenceProviderId);
+    const profile = profileConfig(rootDir, secretProvider, "imageUnderstanding");
+    const provider = getAiProvider("imageUnderstanding", missingInfoInferenceProviderId ?? profile.providerId);
     if (!provider) throw new Error("no missing info inference provider configured");
-    return await provider.inferMissingInfo({ rootDir, secretProvider, dataUrl, mime, inferenceInput, locale: normalizedLocale });
+    const providerSecretProvider = profileSecretProvider(secretProvider, "imageUnderstanding", provider.id);
+    return await provider.inferMissingInfo({ rootDir, secretProvider: providerSecretProvider, dataUrl, mime, inferenceInput, locale: normalizedLocale, modelId: profile.modelId });
   } catch (error) {
     return {
       action: "keep_pending",
       confidence: 0,
-      reason: friendlyAiError(error, normalizedLocale === "en" ? "AI second-pass inference failed." : "AI 二次推断失败。", normalizedLocale),
+      reason: friendlyAiError(error, normalizedLocale === "en" ? "Context inference failed." : "基于上下文推断失败。", normalizedLocale),
       provider: "mock",
       promptId: "missing-info-inference",
       promptVersion: "fallback",
@@ -250,13 +308,22 @@ export async function inferMissingInfoWithImage({
 export async function embedSearchQuery(query, { rootDir = process.cwd(), allowCloud = true, secretProvider, embeddingProviderId } = {}) {
   if (allowCloud) {
     try {
-      const embeddingProvider = getAiProvider("embedding", embeddingProviderId);
+      const profile = profileConfig(rootDir, secretProvider, "crossModalEmbedding");
+      if (!profile.enabled) return { embedding: deterministicVector(query), embeddingMode: "disabled" };
+      const embeddingProvider = getAiProvider("crossModalEmbedding", embeddingProviderId ?? profile.providerId);
       if (!embeddingProvider) throw new Error("no embedding provider configured");
-      const result = await embeddingProvider.embed({ rootDir, secretProvider, fileName: "search-query", text: query });
-      return result.embedding;
+      const providerSecretProvider = profileSecretProvider(secretProvider, "crossModalEmbedding", embeddingProvider.id);
+      const result = await embeddingProvider.embed({ rootDir, secretProvider: providerSecretProvider, fileName: "search-query", text: query, modelId: profile.modelId, dimensions: embeddingDimensions(profile) });
+      return {
+        embedding: result.embedding,
+        embeddingProvider: result.embeddingProvider,
+        embeddingModel: result.embeddingModel ?? profile.modelId,
+        embeddingSpaceId: embeddingSpaceId(profile),
+        embeddingMode: "cross_modal",
+      };
     } catch {
       // fall back below
     }
   }
-  return deterministicVector(query);
+  return { embedding: deterministicVector(query), embeddingMode: "disabled" };
 }

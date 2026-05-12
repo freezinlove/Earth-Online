@@ -79,7 +79,7 @@ interface AppState {
   searchFilters: { tripId?: string; placeId?: string; date?: string; tag?: string; fileName?: string };
   searchResults: SearchResult[];
   manualPlacePick?: ManualPlacePickSession;
-  aiProvider: "qwen" | "mock";
+  aiProvider: string;
   aiCloudEnabled: boolean;
   isLoading: boolean;
   isImporting: boolean;
@@ -118,6 +118,7 @@ interface AppState {
   inferPendingLocation: (pendingId: ID) => Promise<void>;
   inferPendingLocations: (pendingIds: ID[], onProgress?: (progress: ImportJobProgress) => void) => Promise<void>;
   resolveImportAiFailure: (pendingId: ID, action: "retry_vision" | "retry_embedding" | "retry_both" | "archive_exif") => Promise<void>;
+  resolveImportAiFailures: (pendingIds: ID[], action: "retry_vision" | "retry_embedding" | "retry_both" | "archive_exif", onProgress?: (progress: ImportJobProgress) => void) => Promise<void>;
   mergeLatestImportTrips: () => Promise<void>;
   deleteTrip: (tripId: ID) => Promise<void>;
   updateTripTitle: (tripId: ID, title: string) => Promise<void>;
@@ -338,6 +339,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     const latest = batches[batches.length - 1];
     if (!latest || latest.status !== "pending_confirmation") return;
     const snapshot = await apiClient.resolveImportAiFailure(latest.id, pendingId, action, get().locale);
+    set({ ...applySnapshot(snapshot), activePanel: "upload" });
+  },
+  resolveImportAiFailures: async (pendingIds, action, onProgress) => {
+    const batches = get().importBatches;
+    const latest = batches[batches.length - 1];
+    if (!latest || latest.status !== "pending_confirmation" || pendingIds.length === 0) return;
+    const snapshot = await apiClient.resolveImportAiFailures(latest.id, pendingIds, action, get().locale, onProgress);
     set({ ...applySnapshot(snapshot), activePanel: "upload" });
   },
   mergeLatestImportTrips: async () => {

@@ -49,16 +49,19 @@ export const qwenProvider = {
   id: "qwen",
   displayName: "阿里 Qwen",
   capabilities: {
+    imageUnderstanding: true,
+    crossModalEmbedding: true,
     imageAnalysis: true,
     missingInfoInference: true,
     embedding: true,
   },
-  async analyzeImage({ rootDir, secretProvider, mime, dataUrl, preset, geoContext, locale }) {
+  async analyzeImage({ rootDir, secretProvider, mime, dataUrl, preset, geoContext, locale, modelId }) {
     const prompt = await loadPrompt("photoAnalysis", locale);
     const apiKey = readQwenChatApiKey(rootDir, secretProvider);
     const content = await qwenChatCompletion({
       rootDir,
       apiKey,
+      model: modelId,
       messages: [
         {
           role: "system",
@@ -82,11 +85,12 @@ export const qwenProvider = {
     return {
       ...validatePhotoAnalysisResult(parsed, prompt.locale === "en" ? undefined : preset, { locale: prompt.locale }),
       provider: this.id,
+      model: modelId,
       promptId: prompt.id,
       promptVersion: prompt.version,
     };
   },
-  async inferMissingInfo({ rootDir, secretProvider, dataUrl, mime, inferenceInput, locale }) {
+  async inferMissingInfo({ rootDir, secretProvider, dataUrl, mime, inferenceInput, locale, modelId }) {
     const prompt = await loadPrompt("missingInfoInference", locale);
     const apiKey = readQwenChatApiKey(rootDir, secretProvider);
     const userInstruction =
@@ -96,6 +100,7 @@ export const qwenProvider = {
     const content = await qwenChatCompletion({
       rootDir,
       apiKey,
+      model: modelId,
       temperature: 0.1,
       messages: [
         {
@@ -121,16 +126,24 @@ export const qwenProvider = {
     return {
       ...validateMissingInfoInferenceResult(parsed, { locale: prompt.locale }),
       provider: this.id,
+      model: modelId,
       promptId: prompt.id,
       promptVersion: prompt.version,
     };
   },
-  async embed({ rootDir, secretProvider, fileName, dataUrl, text }) {
+  async embed({ rootDir, secretProvider, fileName, dataUrl, text, modelId, dimensions }) {
     const apiKey = readQwenEmbeddingApiKey(rootDir, secretProvider);
-    const embedding = await qwenMultimodalEmbedding({ apiKey, rootDir, fileName, dataUrl, text });
+    const embedding = await qwenMultimodalEmbedding({ apiKey, rootDir, model: modelId, fileName, dataUrl, text, dimension: dimensions });
     return {
       embedding,
       embeddingProvider: this.id,
+      embeddingModel: modelId,
     };
   },
+};
+
+export const aliyunProvider = {
+  ...qwenProvider,
+  id: "aliyun",
+  displayName: "阿里百炼",
 };

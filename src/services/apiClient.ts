@@ -24,6 +24,50 @@ export interface LocalAiSettings {
   qwenEmbeddingApiKey: LocalAiCredential;
 }
 
+export type ProviderCredentialKey = "aliyunApiKey" | "siliconflowApiKey" | "openaiApiKey" | "openrouterApiKey" | "voyageApiKey";
+
+export interface AiModelOption {
+  id: string;
+  label: string;
+  recommended?: boolean;
+  dimensions?: number;
+}
+
+export interface AiProviderOption {
+  id: string;
+  displayName: string;
+  capabilities: {
+    imageUnderstanding?: boolean;
+    crossModalEmbedding?: boolean;
+  };
+}
+
+export interface AiConfig {
+  catalog: {
+    providers: AiProviderOption[];
+    models: Record<"imageUnderstanding" | "crossModalEmbedding", Record<string, AiModelOption[]>>;
+  };
+  profiles: {
+    imageUnderstanding: {
+      providerId: string;
+      modelId: string;
+      modelSource: "recommended" | "custom";
+    };
+    crossModalEmbedding: {
+      enabled: boolean;
+      providerId: string | null;
+      modelId: string | null;
+      modelSource: "recommended" | "custom" | null;
+    };
+  };
+}
+
+export interface AiSettings {
+  credentials: Record<ProviderCredentialKey, LocalAiCredential>;
+  profileCredentials: Record<"imageUnderstanding" | "crossModalEmbedding", Record<ProviderCredentialKey, LocalAiCredential>>;
+  aiConfig: AiConfig;
+}
+
 export type ImportJobPhase = "queued" | "reading" | "uploading" | "exif" | "thumbnails" | "ai" | "embedding" | "grouping" | "completed" | "failed";
 
 export interface ImportJobStepProgress {
@@ -52,8 +96,17 @@ export interface ImportJob {
   updatedAt: string;
   progress?: ImportJobProgress;
   progressEvents?: ImportJobProgressEvent[];
-  result?: AppSnapshot;
+  result?: AppSnapshot & { embeddingRebuild?: EmbeddingRebuildReport };
   error?: string;
+}
+
+export interface EmbeddingRebuildReport {
+  total: number;
+  successCount: number;
+  failedCount: number;
+  failedPhotoIds: string[];
+  failures: Array<{ id: string; fileName?: string; reason: string }>;
+  mode: "all" | "retry_failed";
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -104,7 +157,7 @@ function watchImportJobProgress(jobId: string, seenSequences: Set<number>, onPro
   return () => source.close();
 }
 
-async function pollImportJob(jobId: string, onProgress?: (progress: ImportJobProgress) => void) {
+async function pollImportJob<T extends AppSnapshot = AppSnapshot>(jobId: string, onProgress?: (progress: ImportJobProgress) => void) {
   const seenSequences = new Set<number>();
   const closeProgressStream = watchImportJobProgress(jobId, seenSequences, onProgress);
   try {
@@ -114,7 +167,7 @@ async function pollImportJob(jobId: string, onProgress?: (progress: ImportJobPro
       else if (job.progress) onProgress?.(job.progress);
       if (job.status === "completed") {
         if (!job.result) throw new Error("导入任务已完成但没有返回结果");
-        return job.result;
+        return job.result as T;
       }
       if (job.status === "failed") throw new Error(job.error ?? "导入任务失败");
       await wait(900);
@@ -133,6 +186,18 @@ export const apiClient = {
   getLocalAiSettings: () => request<LocalAiSettings>("/api/settings/local-ai"),
   updateLocalAiSettings: (body: Partial<Record<keyof LocalAiSettings, string>>) =>
     request<LocalAiSettings>("/api/settings/local-ai", { method: "PATCH", body: JSON.stringify(body) }),
+  getAiSettings: () => request<AiSettings>("/api/settings/ai"),
+  updateAiSettings: (body: {
+    credentials?: Partial<Record<ProviderCredentialKey, string>>;
+    profileCredentials?: Partial<Record<"imageUnderstanding" | "crossModalEmbedding", Partial<Record<ProviderCredentialKey, string>>>>;
+    aiConfig?: Partial<AiConfig> | AiConfig;
+  }) =>
+    request<AiSettings>("/api/settings/ai", { method: "PATCH", body: JSON.stringify(body) }),
+  rebuildPhotoEmbeddings: async (onJobProgress?: (progress: ImportJobProgress) => void, photoIds?: string[]) => {
+    const job = await request<ImportJob>("/api/photos/embeddings/rebuild/jobs", { method: "POST", body: JSON.stringify({ photoIds }) });
+    if (job.progress) onJobProgress?.(job.progress);
+    return pollImportJob<AppSnapshot & { embeddingRebuild?: EmbeddingRebuildReport }>(job.id, onJobProgress);
+  },
   importFiles: async (
     files: FileList | File[],
     allowCloudAi: boolean,
@@ -175,6 +240,17 @@ export const apiClient = {
   },
   resolveImportAiFailure: (batchId: string, pendingId: string, action: "retry_vision" | "retry_embedding" | "retry_both" | "archive_exif", locale: "zh" | "en" = "zh") =>
     request<AppSnapshot>(`/api/import/${batchId}/ai-failures/${pendingId}/resolve`, { method: "POST", body: JSON.stringify({ action, locale }) }),
+  resolveImportAiFailures: async (
+    batchId: string,
+    pendingIds: string[],
+    action: "retry_vision" | "retry_embedding" | "retry_both" | "archive_exif",
+    locale: "zh" | "en" = "zh",
+    onJobProgress?: (progress: ImportJobProgress) => void,
+  ) => {
+    const job = await request<ImportJob>(`/api/import/${batchId}/ai-failures/resolve/jobs`, { method: "POST", body: JSON.stringify({ pendingIds, action, locale }) });
+    if (job.progress) onJobProgress?.(job.progress);
+    return pollImportJob(job.id, onJobProgress);
+  },
   mergeImportTrips: (batchId: string) => request<AppSnapshot>(`/api/import/${batchId}/merge`, { method: "POST", body: "{}" }),
   createTrip: (title: string, start: string, end: string) => request<AppSnapshot>("/api/trips", { method: "POST", body: JSON.stringify({ title, start, end }) }),
   updateTrip: (tripId: string, body: { title?: string; dateRange?: { start: string; end: string } }) =>

@@ -21,6 +21,7 @@ export default [
         Image: "readonly",
         HTMLElement: "readonly",
         console: "readonly",
+        structuredClone: "readonly",
       },
     },
     plugins: {

@@ -58,7 +58,9 @@ export function createSearchService({ readState, readVectorIndex, embedSearchQue
     const projection = projectState(state);
     const vectorIndex = await readVectorIndex();
     const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
-    const queryVector = await embedSearchQuery(q, { rootDir, allowCloud: true, secretProvider });
+    const queryEmbedding = await embedSearchQuery(q, { rootDir, allowCloud: true, secretProvider });
+    const queryVector = Array.isArray(queryEmbedding) ? queryEmbedding : queryEmbedding.embedding;
+    const querySpaceId = Array.isArray(queryEmbedding) ? undefined : queryEmbedding.embeddingSpaceId;
     const tripId = params.get("tripId") || undefined;
     const placeId = params.get("placeId") || undefined;
     const date = params.get("date") || undefined;
@@ -69,7 +71,14 @@ export function createSearchService({ readState, readVectorIndex, embedSearchQue
       .filter((document) => !date || document.capturedAt?.slice(0, 10) === date)
       .filter((document) => !tag || document.tags?.some((item) => normalizeText(item).includes(tag)))
       .map((document) => {
-        const vectorScore = vectorIndex[document.photoId] ? (cosine(queryVector, vectorIndex[document.photoId]) + 1) / 2 : 0;
+        const photo = state.photos.find((item) => item.id === document.photoId);
+        const canUseVector =
+          Array.isArray(queryVector) &&
+          Array.isArray(vectorIndex[document.photoId]) &&
+          querySpaceId &&
+          photo?.embeddingMode === "cross_modal" &&
+          photo.embeddingSpaceId === querySpaceId;
+        const vectorScore = canUseVector ? (cosine(queryVector, vectorIndex[document.photoId]) + 1) / 2 : 0;
         const matches = {
           title: textMatchScore(document.titleText, terms),
           geo: textMatchScore([...(document.geoKeywords ?? []), ...(document.locationNames ?? [])].join(" "), terms),

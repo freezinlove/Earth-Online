@@ -52,7 +52,7 @@ const importServices = createImportServices({
   writeVectorIndex,
 });
 const searchServices = createSearchService({ readState, readVectorIndex, embedSearchQuery, rootDir, secretProvider });
-const settingsServices = createSettingsService({ secretProvider });
+const settingsServices = createSettingsService({ rootDir, secretProvider });
 
 function reverseGeocode(params) {
   const lat = Number(params.get("lat"));

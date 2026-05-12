@@ -58,7 +58,8 @@ export interface LocationCandidate {
 }
 
 export interface PhotoAiEvidence {
-  provider: "qwen" | "qwen-mock" | "mock";
+  provider: string;
+  model?: string;
   promptId: string;
   promptVersion: string;
   analyzedAt: string;
@@ -106,9 +107,14 @@ export interface Photo {
   };
   ai?: PhotoAiEvidence;
   locationResolution?: LocationResolution;
-  aiProvider?: "qwen" | "qwen-mock" | "mock";
-  embeddingProvider?: "qwen" | "deterministic";
+  aiProvider?: string;
+  aiModel?: string;
+  embeddingProvider?: string;
+  embeddingModel?: string;
+  embeddingSpaceId?: string;
   embeddingDimension?: number;
+  embeddingMode?: "cross_modal" | "disabled" | "failed" | "local_fallback";
+  embeddingFallbackReason?: string;
   aiFallbackReason?: string;
   aiFailure?: {
     vision?: string;

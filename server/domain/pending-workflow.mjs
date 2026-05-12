@@ -39,7 +39,7 @@ function rewrittenCandidate(candidate, fallback = {}) {
     confidence: Number.isFinite(Number(candidate.confidence)) ? Number(candidate.confidence) : Number(fallback.confidence ?? 0.65),
     source: "ai_context_inference",
     precision: "estimated",
-    reason: fallback.reason ?? "AI 二次推断修正了初次地点判断。",
+    reason: fallback.reason ?? "基于上下文推断修正了初次地点判断。",
   };
 }
 

@@ -10,6 +10,25 @@ function requestSignal(rootDir) {
   return globalThis.AbortSignal.timeout(Number.isFinite(timeout) && timeout > 0 ? timeout : qwenRequestTimeoutMs);
 }
 
+function extractMessageText(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (typeof part?.text === "string") return part.text;
+        if (typeof part?.content === "string") return part.content;
+        if (Array.isArray(part?.content)) return extractMessageText(part.content);
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  if (typeof content?.text === "string") return content.text;
+  if (typeof content?.content === "string") return content.content;
+  return "";
+}
+
 export async function qwenChatCompletion({
   apiKey,
   rootDir = process.cwd(),
@@ -37,8 +56,8 @@ export async function qwenChatCompletion({
   if (!response.ok) throw new Error(`qwen chat failed: ${response.status}`);
 
   const json = await response.json();
-  const content = json.choices?.[0]?.message?.content;
-  if (typeof content === "string" && content.trim()) return content;
+  const content = extractMessageText(json.choices?.[0]?.message?.content);
+  if (content.trim()) return content;
   const upstreamMessage = json.error?.message || json.message || json.choices?.[0]?.finish_reason;
   throw new Error(`qwen chat returned empty content${upstreamMessage ? `: ${upstreamMessage}` : ""}`);
 }
@@ -50,6 +69,7 @@ export async function qwenMultimodalEmbedding({
   fileName,
   dataUrl,
   text,
+  dimension,
 }) {
   if (!apiKey) throw new Error("missing Qwen API key");
 
@@ -71,7 +91,7 @@ export async function qwenMultimodalEmbedding({
               },
         ],
       },
-      parameters: {},
+      parameters: Number.isInteger(dimension) && dimension > 0 ? { dimension } : {},
     }),
   });
   if (!response.ok) throw new Error(`qwen embedding failed: ${response.status}`);
