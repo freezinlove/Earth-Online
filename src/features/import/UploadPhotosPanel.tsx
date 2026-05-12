@@ -688,7 +688,7 @@ function AiFailureSuggestions({
           const canRetryVision = Boolean(failure.photo.aiFailure?.vision);
           const canRetryEmbedding = Boolean(failure.photo.aiFailure?.embedding);
           return (
-            <div key={failure.id} className="import-missing-row" title={failure.error}>
+            <div key={failure.id} className="import-missing-row import-ai-failure-row" title={failure.error}>
               <PhotoStrip photos={[failure.photo]} selectedPhotoId={selectedPhotoId} onOpenPreview={onOpenPreview} onSelect={onSelectPhoto} t={t} />
               <span className="import-missing-field">{failure.label}</span>
               <span className="import-ai-suggest" data-status={t("failed")}>

@@ -3,6 +3,7 @@ import { ArchiveDrawer } from "@/features/archive/ArchiveDrawer";
 import { TripDetailPanel } from "@/features/archive/TripDetailPanel";
 import { EarthStage } from "@/features/earth/EarthStage";
 import { UploadPhotosPanel } from "@/features/import/UploadPhotosPanel";
+import { OnboardingGuide } from "@/features/onboarding/OnboardingGuide";
 import { SearchPanel } from "@/features/search/SearchPanel";
 import { SettingsPanel } from "@/features/settings/SettingsPanel";
 import { TimelineDock } from "@/features/timeline/TimelineDock";
@@ -139,14 +140,17 @@ export function App() {
   }, [activePanel, shouldRenderUpload]);
 
   return (
-    <MainLayout>
-      <EarthStage />
-      <TimelineDock />
-      {shouldRenderArchive ? <ArchiveDrawer isClosing={isArchiveClosing} /> : null}
-      {shouldRenderTripDetail ? <TripDetailPanel isClosing={isTripDetailClosing} /> : null}
-      {shouldRenderUpload ? <UploadPhotosPanel isClosing={isUploadClosing} /> : null}
-      {shouldRenderSearch ? <SearchPanel isClosing={isSearchClosing} /> : null}
-      {shouldRenderSettings ? <SettingsPanel isClosing={isSettingsClosing} /> : null}
-    </MainLayout>
+    <>
+      <MainLayout>
+        <EarthStage />
+        <TimelineDock />
+        {shouldRenderArchive ? <ArchiveDrawer isClosing={isArchiveClosing} /> : null}
+        {shouldRenderTripDetail ? <TripDetailPanel isClosing={isTripDetailClosing} /> : null}
+        {shouldRenderUpload ? <UploadPhotosPanel isClosing={isUploadClosing} /> : null}
+        {shouldRenderSearch ? <SearchPanel isClosing={isSearchClosing} /> : null}
+        {shouldRenderSettings ? <SettingsPanel isClosing={isSettingsClosing} /> : null}
+      </MainLayout>
+      <OnboardingGuide />
+    </>
   );
 }
