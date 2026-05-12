@@ -94,6 +94,22 @@ function normalizedText(value) {
     .toLowerCase();
 }
 
+function countryAliases(value) {
+  const normalized = normalizedText(value).replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
+  if (!normalized) return [];
+  if (["us", "usa", "unitedstates", "unitedstatesofamerica"].includes(normalized)) return ["us", "usa", "unitedstates", "unitedstatesofamerica"];
+  return [normalized];
+}
+
+function countryMatches(row, country) {
+  const expected = countryAliases(country);
+  if (!expected.length) return true;
+  return [row.country_name_zh, row.country_name_en, row.country_name, row.country_code]
+    .flatMap(countryAliases)
+    .filter(Boolean)
+    .some((value) => expected.includes(value));
+}
+
 function localizedName(row) {
   const override = [row.name_zh, row.name, row.ascii_name, row.name_en].map(zhPlaceNameOverride).find(Boolean);
   if (override) return override;
@@ -164,7 +180,7 @@ export function forwardLocalGeocode({ name, city, country } = {}, { makeId } = {
   const texts = [city, name].map((value) => String(value ?? "").trim()).filter(Boolean);
   if (!texts.length && !country) return [];
 
-  const preset = texts.map(presetCandidateForText).find(Boolean);
+  const preset = texts.map(presetCandidateForText).find((item) => !country || normalizedText(item?.country) === normalizedText(country));
   const queries = Array.from(new Set([preset?.keyword, preset?.city, ...texts].filter(Boolean)));
   const rows = [];
   if (connection) {
@@ -178,7 +194,7 @@ export function forwardLocalGeocode({ name, city, country } = {}, { makeId } = {
       ORDER BY population DESC
       LIMIT ${FORWARD_RESULT_LIMIT}
     `);
-    for (const query of queries) rows.push(...statement.all(query, query, query, query));
+    for (const query of queries) rows.push(...statement.all(query, query, query, query).filter((row) => countryMatches(row, country)));
   }
 
   if (rows.length) {

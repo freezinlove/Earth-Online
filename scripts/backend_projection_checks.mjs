@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { createImportServices } from "../server/application/import-service.mjs";
 import { applyPendingDecision } from "../server/domain/pending-workflow.mjs";
 import { validatePhotoAnalysisResult } from "../server/ai/ai-schemas.mjs";
 import { forwardLocalGeocode } from "../server/domain/local-geocoder.mjs";
@@ -158,6 +162,185 @@ const berlinFallback = forwardLocalGeocode({ name: "柏林中央火车站", city
 assert.equal(berlinFallback?.country, "德国");
 assert.equal(berlinFallback?.localizedCountryNames?.en, "Germany");
 assert.equal(Boolean(berlinFallback?.point), true);
+assert.equal(forwardLocalGeocode({ city: "挪威", country: "挪威" }).length, 0);
+
+async function runSecondPassInference({ photo, aiResult }) {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "earth-online-import-test-"));
+  const photoDir = path.join(tempRoot, "photos");
+  await fs.mkdir(photoDir, { recursive: true });
+  const storageName = path.basename(photo.storageUrl);
+  await fs.writeFile(path.join(photoDir, storageName), Buffer.from("not a real image"));
+  const pending = {
+    id: makeId("pending-second-pass"),
+    type: "missing_gps",
+    relatedPhotoIds: [photo.id],
+    relatedTripId: photo.tripId,
+    suggestion: "缺少 GPS，可手动触发基于上下文推断。",
+    reason: "等待二次推断。",
+    status: "open",
+  };
+  let state = {
+    trips: [
+      {
+        id: photo.tripId,
+        title: "2024-08 挪威测试旅行",
+        dateRange: { start: "2024-08-12", end: "2024-08-12" },
+        countries: ["挪威"],
+        cities: ["待确认地点"],
+        coverUrl: photo.thumbnailUrl,
+        photoCount: 1,
+        placeNodeCount: 0,
+        status: "pending",
+        source: "import",
+      },
+    ],
+    photos: [photo],
+    placeNodes: [],
+    routes: [],
+    importBatches: [
+      {
+        id: "batch-second-pass",
+        importedAt: "2026-05-12T12:00:00Z",
+        totalCount: 1,
+        successCount: 1,
+        failedCount: 0,
+        status: "pending_confirmation",
+        createdTripIds: [photo.tripId],
+        addedPhotoIds: [photo.id],
+        pendingItemIds: [pending.id],
+        summary: "测试导入",
+      },
+    ],
+    pendingItems: [pending],
+  };
+  const services = createImportServices({
+    inferMissingInfoWithImage: async () => aiResult,
+    importJobs: new Map(),
+    makeId,
+    paths: { rootDir: process.cwd(), photoDir },
+    readState: async () => state,
+    writeState: async (nextState) => {
+      state = nextState;
+    },
+    responseState: async () => state,
+  });
+  try {
+    await services.inferPendingLocation("batch-second-pass", pending.id, { locale: "zh" });
+    return state.pendingItems[0];
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
+const highConfidenceReinePending = await runSecondPassInference({
+  photo: {
+    id: "photo-second-pass-reine",
+    fileName: "reine-road.jpg",
+    title: "罗弗敦雨天的蜿蜒公路",
+    thumbnailUrl: "/data/thumbs/reine-road.jpg",
+    storageUrl: "/data/photos/reine-road.jpg",
+    capturedAt: "2024-08-12T14:18:41",
+    tripId: "trip-second-pass",
+    tags: ["雷讷", "罗弗敦群岛"],
+    aiCaption: "阴云下的罗弗敦公路。",
+    pendingReason: "missing_gps",
+    exifStatus: { time: "read", gps: "missing" },
+    ai: {
+      visiblePlaceNames: [],
+      locationCandidates: [
+        {
+          id: "candidate-reine-second-pass",
+          name: "雷讷",
+          country: "挪威",
+          city: "罗弗敦群岛",
+          confidence: 0.95,
+          source: "ai_vision",
+          reason: "路标和渔村景观匹配雷讷。",
+        },
+      ],
+    },
+    locationResolution: {
+      status: "missing",
+      candidates: [
+        {
+          id: "candidate-reine-second-pass",
+          name: "雷讷",
+          country: "挪威",
+          city: "罗弗敦群岛",
+          confidence: 0.95,
+          source: "ai_vision",
+          reason: "路标和渔村景观匹配雷讷。",
+        },
+      ],
+      requiresUserAction: true,
+      updatedAt: "2026-05-12T12:00:00Z",
+    },
+  },
+  aiResult: {
+    action: "keep_pending",
+    confidence: 0.9,
+    reason: "图片路标清晰显示 REINE，确认地点为雷讷。因 allowedPlaces 为空，创建新地点。",
+  },
+});
+assert.equal(highConfidenceReinePending.inference.status, "suggested");
+assert.equal(highConfidenceReinePending.proposal.action, "create_place_from_candidate");
+assert.equal(highConfidenceReinePending.proposal.candidate.name, "雷讷");
+assert.equal(Boolean(highConfidenceReinePending.proposal.candidate.point), true);
+
+const ungeocodableHighConfidencePending = await runSecondPassInference({
+  photo: {
+    id: "photo-second-pass-kvalvag",
+    fileName: "kvalvag-road.jpg",
+    title: "阴云下的挪威蜿蜒公路",
+    thumbnailUrl: "/data/thumbs/kvalvag-road.jpg",
+    storageUrl: "/data/photos/kvalvag-road.jpg",
+    capturedAt: "2024-08-12T14:18:54",
+    tripId: "trip-second-pass",
+    tags: ["Kvalvåg", "挪威"],
+    aiCaption: "山坡旁的白色木屋。",
+    pendingReason: "missing_gps",
+    exifStatus: { time: "read", gps: "missing" },
+    ai: {
+      visiblePlaceNames: [],
+      locationCandidates: [
+        {
+          id: "candidate-kvalvag-second-pass",
+          name: "Kvalvåg",
+          country: "Norway",
+          city: "Selbu",
+          confidence: 0.85,
+          source: "ai_vision",
+          reason: "路牌线索指向 Kvalvåg。",
+        },
+      ],
+    },
+    locationResolution: {
+      status: "missing",
+      candidates: [
+        {
+          id: "candidate-kvalvag-second-pass",
+          name: "Kvalvåg",
+          country: "Norway",
+          city: "Selbu",
+          confidence: 0.85,
+          source: "ai_vision",
+          reason: "路牌线索指向 Kvalvåg。",
+        },
+      ],
+      requiresUserAction: true,
+      updatedAt: "2026-05-12T12:00:00Z",
+    },
+  },
+  aiResult: {
+    action: "keep_pending",
+    confidence: 0.85,
+    reason: "当前照片与 Kvalvåg 高度吻合，依据初始候选创建新地点。",
+  },
+});
+assert.equal(ungeocodableHighConfidencePending.inference.status, "keep_pending");
+assert.ok(ungeocodableHighConfidencePending.inference.confidence < 0.55);
+assert.match(ungeocodableHighConfidencePending.reason, /本地地名库无法估计可用坐标/);
+assert.equal(ungeocodableHighConfidencePending.proposal, undefined);
 
 const centralEuropePhotos = [
   {

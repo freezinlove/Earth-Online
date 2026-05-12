@@ -75,7 +75,7 @@
 2. 如果当前图像或 initialLocationCandidate 明确给出 allowedPlaces 之外的地点名、地标名、车站名、剧院名、桥梁名、湖泊名、山峰名等，应优先考虑 create_place_from_candidate，而不是因为 allowedPlaces 没有该地点就 keep_pending。
 3. create_place_from_candidate 不要输出经纬度。新地点坐标由后端负责查询。
 4. create_place_from_candidate 尽量至少提供 city、country、confidence、reason。name 可作为展示地点名、地标或地域名，但 city 是后端坐标查询依据。
-5. 当前待补照片缺 GPS 时，confidence 低于 0.55 通常输出 keep_pending；但如果当前候选位置与 allowedPlaces 中某地点高度重合，或前后邻居有真实 EXIF GPS 支撑且时间接近、地点一致，同时当前图像没有明确冲突，可以输出 bind_photos_to_place。
+5. 当前待补照片缺 GPS 时，只有 confidence 低于 0.55 才输出 keep_pending；confidence 大于等于 0.55 时必须输出 bind_photos_to_place 或 create_place_from_candidate，除非没有任何具体地点候选。
 6. 当前照片没有明确地标、城市、店名、教堂/建筑名称、湖泊/山峰/桥梁等可定位线索，且前后上下文不足时，输出 keep_pending。
 7. 只有“室内、街道、夜景、建筑、山、水、天空、餐厅”等泛语义时，输出 keep_pending，除非当前照片图像或 initialLocationCandidate 中有明确地点名。
 8. 前后照片地点只能帮助估计位置，不能当成当前照片真实 GPS。
@@ -84,7 +84,7 @@
 11. 如果二次判断地点与 currentPhoto.initialLocationCandidate 的 name/city 相同或高度等价，rewriteInitialAnalysis 必须为 false，rewrittenInitialAnalysis 必须为 null。
 12. 如果二次判断地点与 currentPhoto.initialLocationCandidate 明显不同，rewriteInitialAnalysis 必须为 true，rewrittenInitialAnalysis 必须完整包含 title、tags、caption、locationCandidate。
 13. 如果 action 是 bind_photos_to_place 且绑定的 allowedPlace 与初次候选不同，也必须 rewriteInitialAnalysis=true，并把 rewrittenInitialAnalysis.locationCandidate 改写为该 allowedPlace 对应地点。
-14. 如果 action 是 keep_pending，rewriteInitialAnalysis 必须为 false，rewrittenInitialAnalysis 必须为 null。
+14. 如果 action 是 keep_pending，confidence 必须低于 0.55，reason 必须解释为什么证据不足或无法定位，禁止使用「确认」「判定」「高度吻合」「创建新地点」「可绑定」等已经判断成功的表述。
 
 rewrittenInitialAnalysis 输出规则：
 

@@ -122,6 +122,8 @@ export function validateMissingInfoInferenceResult(parsed, { locale = "zh" } = {
     action: "keep_pending",
     confidence,
     reason,
+    targetPlaceId: String(parsed.target?.placeId ?? parsed.targetPlaceId ?? "").trim(),
+    candidate: normalizeInferenceTargetCandidate(parsed.target?.locationCandidate ?? parsed.candidate, reason),
     rewriteInitialAnalysis: false,
     rewrittenInitialAnalysis: undefined,
   };

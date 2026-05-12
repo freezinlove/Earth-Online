@@ -7,7 +7,7 @@ import { parseExif } from "../domain/exif-parser.mjs";
 import { geoContextFor, haversineKm, inferPreset, isUsableLocation, localizedGeoHint, normalizeLocale } from "../domain/geo.mjs";
 import { forwardLocalGeocode, reverseLocalGeocode } from "../domain/local-geocoder.mjs";
 import { mergeLocationCandidates, resolveImportedLocation, toAiEvidence } from "../domain/location-resolver.mjs";
-import { cleanPlaceName } from "../domain/place-name-selector.mjs";
+import { cleanPlaceName, isWeakPlaceName } from "../domain/place-name-selector.mjs";
 import { buildPlacesForGroup } from "../domain/place-projector.mjs";
 import { buildPhotoRoute, buildRoute } from "../domain/route-projector.mjs";
 import { makePhotoTitle } from "../domain/text-normalizer.mjs";
@@ -1976,64 +1976,95 @@ export function createImportServices({
     }
 
     if (aiResult.action === "create_place_from_candidate") {
-      const candidate = completeCandidatePoint(aiResult.candidate, locale);
-      if (!candidate?.name) return keepPending(candidate?.reason || missingInferenceText(locale, "invalidPlaceName"), candidate?.confidence ?? 0, locale);
-      if (!candidate.point) return keepPending(candidate.reason || missingInferenceText(locale, "noGeocode"), candidate.confidence ?? 0, locale);
-      const mergePlace = findMergeableContextPlace(candidate, contextPlaces);
-      if (mergePlace) {
-        const closeNeighbor = closeNeighborForPlace(photo, context, mergePlace);
-        const strongOverlap = hasStrongGeographicOverlap(candidate, mergePlace);
-        if (isMissingGpsPhoto(photo) && Number(candidate.confidence ?? 0) < missingGpsLowConfidenceThreshold && !closeNeighbor && !strongOverlap) {
-          return keepPending(candidate.reason || missingInferenceText(locale, "lowConfidence"), candidate.confidence ?? 0, locale);
-        }
-        const placeName = mergePlace.displayName ?? mergePlace.name;
-        const reason = withInferenceSupportReason(
-          `${candidate.reason || missingInferenceText(locale, "clearPlace")} ${missingInferenceText(locale, "matchedExistingPlace")}: ${placeName}.`,
-          { closeNeighbor, strongOverlap },
-          locale,
-        );
-        return {
-          actionable: true,
-          confidence: candidate.confidence,
-          displayTarget: `${missingInferenceText(locale, "mergeBadge")} ${placeName}`,
-          displayTargetLabel: placeName,
-          displayTargetBadge: missingInferenceText(locale, "mergeBadge"),
-          suggestion: `${missingInferenceText(locale, "mergeBadge")} ${placeName}`,
-          reason,
-          proposal: {
-            action: "bind_photos_to_place",
-            photoIds: [photo.id],
-            placeId: mergePlace.id,
-            confidence: candidate.confidence,
-            reason,
-            rewrittenInitialAnalysis: normalizedRewriteForProposal(aiResult.rewrittenInitialAnalysis),
-          },
-        };
+      return createCandidateInferenceProposal({ candidate: aiResult.candidate, aiResult, photo, context, contextPlaces, locale });
+    }
+
+    const highConfidenceFallback = highConfidenceKeepPendingProposal({ aiResult, photo, context, contextPlaces, locale });
+    if (highConfidenceFallback) return highConfidenceFallback;
+    return keepPending(aiResult.reason || missingInferenceText(locale, "noAutoArchive"), aiResult.confidence ?? 0, locale);
+  }
+
+  function createCandidateInferenceProposal({ candidate: rawCandidate, aiResult, photo, context, contextPlaces, locale = "zh" }) {
+    const candidate = completeCandidatePoint(rawCandidate, locale);
+    if (!candidate?.name) return keepPending(candidate?.reason || missingInferenceText(locale, "invalidPlaceName"), candidate?.confidence ?? 0, locale);
+    if (!candidate.point) return keepPending(geocodeBlockedReason(candidate, locale), candidate.confidence ?? 0, locale);
+    const mergePlace = findMergeableContextPlace(candidate, contextPlaces);
+    if (mergePlace) {
+      const closeNeighbor = closeNeighborForPlace(photo, context, mergePlace);
+      const strongOverlap = hasStrongGeographicOverlap(candidate, mergePlace);
+      if (isMissingGpsPhoto(photo) && Number(candidate.confidence ?? 0) < missingGpsLowConfidenceThreshold && !closeNeighbor && !strongOverlap) {
+        return keepPending(candidate.reason || missingInferenceText(locale, "lowConfidence"), candidate.confidence ?? 0, locale);
       }
-      if (isMissingGpsPhoto(photo) && Number(candidate.confidence ?? 0) < missingGpsLowConfidenceThreshold) return keepPending(candidate.reason || missingInferenceText(locale, "lowConfidence"), candidate.confidence ?? 0, locale);
+      const placeName = mergePlace.displayName ?? mergePlace.name;
+      const reason = withInferenceSupportReason(
+        `${candidate.reason || missingInferenceText(locale, "clearPlace")} ${missingInferenceText(locale, "matchedExistingPlace")}: ${placeName}.`,
+        { closeNeighbor, strongOverlap },
+        locale,
+      );
       return {
         actionable: true,
         confidence: candidate.confidence,
-        displayTarget: `${missingInferenceText(locale, "newPlaceBadge")} ${candidate.name}`,
-        displayTargetLabel: candidate.name,
-        displayTargetBadge: missingInferenceText(locale, "newPlaceBadge"),
-        suggestion: `${missingInferenceText(locale, "newPlaceBadge")} ${candidate.name}`,
-        reason: candidate.reason,
+        displayTarget: `${missingInferenceText(locale, "mergeBadge")} ${placeName}`,
+        displayTargetLabel: placeName,
+        displayTargetBadge: missingInferenceText(locale, "mergeBadge"),
+        suggestion: `${missingInferenceText(locale, "mergeBadge")} ${placeName}`,
+        reason,
         proposal: {
-          action: "create_place_from_candidate",
-          tripId: photo.tripId,
+          action: "bind_photos_to_place",
           photoIds: [photo.id],
-          candidate: {
-            ...candidate,
-            source: "ai_context_inference",
-            precision: "estimated",
-          },
+          placeId: mergePlace.id,
+          confidence: candidate.confidence,
+          reason,
           rewrittenInitialAnalysis: normalizedRewriteForProposal(aiResult.rewrittenInitialAnalysis),
         },
       };
     }
+    if (isMissingGpsPhoto(photo) && Number(candidate.confidence ?? 0) < missingGpsLowConfidenceThreshold) return keepPending(candidate.reason || missingInferenceText(locale, "lowConfidence"), candidate.confidence ?? 0, locale);
+    return {
+      actionable: true,
+      confidence: candidate.confidence,
+      displayTarget: `${missingInferenceText(locale, "newPlaceBadge")} ${candidate.name}`,
+      displayTargetLabel: candidate.name,
+      displayTargetBadge: missingInferenceText(locale, "newPlaceBadge"),
+      suggestion: `${missingInferenceText(locale, "newPlaceBadge")} ${candidate.name}`,
+      reason: candidate.reason,
+      proposal: {
+        action: "create_place_from_candidate",
+        tripId: photo.tripId,
+        photoIds: [photo.id],
+        candidate: {
+          ...candidate,
+          source: "ai_context_inference",
+          precision: "estimated",
+        },
+        rewrittenInitialAnalysis: normalizedRewriteForProposal(aiResult.rewrittenInitialAnalysis),
+      },
+    };
+  }
 
-    return keepPending(aiResult.reason || missingInferenceText(locale, "noAutoArchive"), aiResult.confidence ?? 0, locale);
+  function highConfidenceKeepPendingProposal({ aiResult, photo, context, contextPlaces, locale = "zh" }) {
+    if (Number(aiResult.confidence ?? 0) < missingGpsLowConfidenceThreshold) return undefined;
+    const candidate = highConfidenceCandidate(aiResult, photo);
+    if (!candidate) {
+      return keepPending(missingInferenceText(locale, "highConfidenceMissingCandidate"), aiResult.confidence ?? 0, locale);
+    }
+    return createCandidateInferenceProposal({
+      candidate: {
+        ...candidate,
+        confidence: Math.max(Number(candidate.confidence ?? 0), Number(aiResult.confidence ?? 0)),
+        reason: aiResult.reason || candidate.reason,
+      },
+      aiResult,
+      photo,
+      context,
+      contextPlaces,
+      locale,
+    });
+  }
+
+  function highConfidenceCandidate(aiResult, photo) {
+    const candidates = [aiResult.candidate, bestPhotoLocationCandidate(photo)].filter(Boolean);
+    return candidates.find((candidate) => candidate?.name && !isWeakPlaceName(candidate.name));
   }
 
   function closeNeighborForPlace(photo, context, place) {
@@ -2130,10 +2161,12 @@ export function createImportServices({
 
   function completeCandidatePoint(candidate, locale = "zh") {
     if (!candidate?.name) return candidate;
+    if (isWeakPlaceName(candidate.name)) return candidate;
     const cityQuery = candidate.city || candidate.name;
     const fallback = forwardLocalGeocode(
       {
-        city: cityQuery,
+        name: candidate.name,
+        city: candidate.city || candidate.name,
         country: candidate.country,
       },
       { makeId },
@@ -2154,6 +2187,15 @@ export function createImportServices({
       source: "geocode",
       precision: "estimated",
     };
+  }
+
+  function geocodeBlockedReason(candidate, locale = "zh") {
+    const name = candidate?.name || candidate?.city;
+    const english = normalizeLocale(locale) === "en";
+    if (!name) return missingInferenceText(locale, "invalidPlaceName");
+    return english
+      ? `AI gave a high-confidence clue for ${name}, but the local gazetteer could not estimate usable coordinates, so manual placement is still required.`
+      : `AI 给出了「${name}」的高置信地点线索，但本地地名库无法估计可用坐标，仍需手动补点。`;
   }
 
   function withBackendLocationCandidates({ location, aiEvidence, locale = "zh" }) {
@@ -2179,8 +2221,9 @@ export function createImportServices({
 
   function geocodeAiLocationCandidate(candidate, locale = "zh") {
     if (!candidate?.name && !candidate?.city) return candidate;
+    if (candidate?.name && isWeakPlaceName(candidate.name)) return candidate;
     const cityQuery = candidate.city || candidate.name;
-    const fallback = forwardLocalGeocode({ city: cityQuery, country: candidate.country }, { makeId })[0];
+    const fallback = forwardLocalGeocode({ name: candidate.name, city: candidate.city || candidate.name, country: candidate.country }, { makeId })[0];
     if (!fallback?.point) return candidate;
     return {
       ...candidate,
@@ -2214,6 +2257,7 @@ export function createImportServices({
       invalidPlaceName: english ? "AI did not provide a valid place name that can be created." : "AI 未给出可创建地点的合法名称。",
       noGeocode: english ? "AI provided a place name, but the local gazetteer could not estimate usable coordinates, so manual placement is still required." : "AI 给出了地点名，但本地地名库无法估计可用坐标，仍需手动补点。",
       noAutoArchive: english ? "AI still cannot determine a reliable location for this photo." : "AI 认为当前照片仍无法可靠判断地点。",
+      highConfidenceMissingCandidate: english ? "AI returned high confidence but did not provide a concrete place candidate that can be created or bound, so manual confirmation is still required." : "AI 返回了高置信度，但没有给出可创建或可绑定的具体地点候选，仍需手动确认。",
       clearPlace: english ? "AI provided a clear place." : "AI 给出了明确地点。",
       matchedExistingPlace: english ? "It matched an existing place in the same trip" : "已匹配到同一行程中的现有地点",
       bindablePlace: english ? "AI suggested a place that can be bound to the same location." : "AI 给出了可绑定到同一地点的建议。",
@@ -2227,15 +2271,16 @@ export function createImportServices({
   }
 
   function keepPending(reason, confidence, locale = "zh") {
+    const cappedConfidence = Math.min(Number(confidence ?? 0), Math.max(0, missingGpsLowConfidenceThreshold - 0.01));
     return {
       actionable: false,
-      confidence,
+      confidence: cappedConfidence,
       displayTarget: missingInferenceText(locale, "pendingTarget"),
       displayTargetLabel: missingInferenceText(locale, "pendingLabel"),
       displayTargetBadge: missingInferenceText(locale, "pendingLabel"),
       suggestion: missingInferenceText(locale, "keepPendingSuggestion"),
       reason,
-      proposal: { action: "keep_pending", confidence, reason },
+      proposal: { action: "keep_pending", confidence: cappedConfidence, reason },
     };
   }
 

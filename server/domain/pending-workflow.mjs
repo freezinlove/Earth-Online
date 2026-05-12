@@ -1,6 +1,6 @@
 import { haversineKm } from "./geo.mjs";
 import { forwardLocalGeocode } from "./local-geocoder.mjs";
-import { cleanPlaceName } from "./place-name-selector.mjs";
+import { cleanPlaceName, isWeakPlaceName } from "./place-name-selector.mjs";
 
 const DEFAULT_PLACE_MERGE_RADIUS_KM = 25;
 const SAME_CITY_PLACE_MERGE_RADIUS_KM = 25;
@@ -213,8 +213,9 @@ function createPlaceFromCandidate(state, proposal) {
 
 function cityGeocodedCandidate(candidate) {
   if (!candidate?.name && !candidate?.city) return undefined;
+  if (candidate?.name && isWeakPlaceName(candidate.name)) return undefined;
   const cityQuery = candidate.city || candidate.name;
-  const fallback = forwardLocalGeocode({ city: cityQuery, country: candidate.country })[0];
+  const fallback = forwardLocalGeocode({ name: candidate.name, city: cityQuery, country: candidate.country })[0];
   if (!fallback?.point) return undefined;
   return {
     ...candidate,

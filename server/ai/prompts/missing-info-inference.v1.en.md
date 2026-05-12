@@ -75,7 +75,7 @@ Constraints:
 2. If the current image or initialLocationCandidate clearly gives a place, landmark, station, theater, bridge, lake, mountain, or other locatable name outside allowedPlaces, prefer create_place_from_candidate instead of keep_pending.
 3. Do not output latitude or longitude for create_place_from_candidate. The backend is responsible for geocoding new places.
 4. For create_place_from_candidate, provide at least city, country, confidence, and reason when possible. name may be a display name, landmark, or locality, but city is the coordinate lookup key.
-5. For a missing-GPS photo, confidence below 0.55 usually means keep_pending. However, if the candidate overlaps strongly with an allowedPlace, or nearby neighbors have real EXIF GPS support with the same place and no visual conflict, bind_photos_to_place is allowed.
+5. For a missing-GPS photo, use keep_pending only when confidence is below 0.55. If confidence is 0.55 or higher, output bind_photos_to_place or create_place_from_candidate unless there is no concrete place candidate at all.
 6. If the current photo has no clear landmark, city, shop name, church/building name, lake, mountain, bridge, or other locatable clue, and context is insufficient, output keep_pending.
 7. Generic semantics such as "indoor", "street", "night scene", "building", "mountain", "water", "sky", or "restaurant" are not enough unless the image or initialLocationCandidate contains a clear place name.
 8. Neighbor places can help estimate location, but they are not the current photo's real GPS.
@@ -84,7 +84,7 @@ Constraints:
 11. If the second-pass location is the same as or highly equivalent to currentPhoto.initialLocationCandidate.name/city, rewriteInitialAnalysis must be false and rewrittenInitialAnalysis must be null.
 12. If the second-pass location is clearly different from currentPhoto.initialLocationCandidate, rewriteInitialAnalysis must be true and rewrittenInitialAnalysis must fully include title, tags, caption, and locationCandidate.
 13. If action is bind_photos_to_place and the bound allowedPlace differs from the initial candidate, rewriteInitialAnalysis must be true, and rewrittenInitialAnalysis.locationCandidate must be rewritten to that allowedPlace.
-14. If action is keep_pending, rewriteInitialAnalysis must be false and rewrittenInitialAnalysis must be null.
+14. If action is keep_pending, confidence must be below 0.55, reason must explain why evidence is insufficient or unlocatable, and it must not use wording such as confirmed, determined, highly matches, create a new place, or bindable.
 
 rewrittenInitialAnalysis reuses the full initial-analysis output rules:
 
