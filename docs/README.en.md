@@ -28,17 +28,6 @@ If you already have the generated installer, run it directly:
 Earth Online Setup 0.1.0.exe
 ```
 
-After installation, launch `Earth Online` from the Start menu or installation directory.
-
-On first launch, the onboarding flow will ask you to:
-
-- Choose the interface language.
-- Choose a data storage location. A non-system drive is recommended, for example `D:\Earth_Online_Data` or `X:\Earth_Online_Data`.
-- Configure the image understanding model.
-- Optionally enable the Embedding model for fuzzy text-to-photo search.
-
-The data storage location contains photos, thumbnails, the database, vector index, and local API keys. The current version does not automatically migrate existing data when switching storage locations. Copy the old directory manually first if you need to keep existing data.
-
 ## Usage Tips
 
 - Prefer importing photos with GPS metadata.
