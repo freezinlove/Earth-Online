@@ -1322,6 +1322,7 @@ select {
 }
 
 .local-language-row::before,
+.local-storage-row::before,
 .local-model-row::before {
   display: none;
 }
@@ -1407,6 +1408,82 @@ select {
 .settings-inline-note-strong {
   margin-top: 0;
   color: #944521;
+}
+
+.data-storage-section {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+  max-width: 760px;
+}
+
+.data-storage-copy,
+.data-storage-heading p {
+  max-width: 45rem;
+  margin: 0;
+  color: #6a554b;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.65;
+}
+
+.data-storage-heading {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  text-align: center;
+}
+
+.data-storage-heading h2 {
+  margin: 0;
+  color: #3f2b22;
+  font-family: Georgia, "Times New Roman", "Noto Serif SC", serif;
+  font-size: clamp(38px, 6vw, 58px);
+  font-weight: 560;
+  line-height: 1;
+}
+
+.data-storage-paths {
+  display: grid;
+  gap: 8px;
+}
+
+.data-storage-path-line {
+  display: grid;
+  grid-template-columns: 118px minmax(0, 1fr);
+  gap: 14px;
+  align-items: baseline;
+  border-bottom: 1px solid rgba(151, 71, 35, 0.18);
+  padding: 9px 0;
+}
+
+.data-storage-path-line > span {
+  color: rgba(136, 114, 107, 0.84);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.data-storage-path-line code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #3f2b22;
+  font-family: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.55;
+}
+
+.data-storage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 18px;
+  align-items: center;
+}
+
+.data-storage-section-onboarding {
+  width: min(560px, 100%);
+  justify-self: center;
+  margin-top: 0;
 }
 
 .ai-model-toggle-group {
@@ -1947,7 +2024,20 @@ select {
   min-height: 472px;
 }
 
+.onboarding-storage-page {
+  position: relative;
+  display: grid;
+  min-height: 472px;
+  align-content: center;
+}
+
 .onboarding-language-page .onboarding-kicker {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+.onboarding-storage-page .onboarding-kicker {
   position: absolute;
   left: 0;
   top: 0;
@@ -2306,6 +2396,15 @@ select {
     justify-content: flex-start;
   }
 
+  .data-storage-path-line {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+
+  .data-storage-actions {
+    gap: 10px 16px;
+  }
+
   .onboarding-overlay {
     padding: 12px;
   }
@@ -2338,8 +2437,23 @@ select {
     min-height: 438px;
   }
 
+  .onboarding-storage-page {
+    min-height: 438px;
+    align-content: start;
+  }
+
   .onboarding-language-page h2 {
     font-size: clamp(42px, 12vw, 58px);
+  }
+
+  .data-storage-heading h2 {
+    font-size: clamp(34px, 10vw, 48px);
+  }
+
+  .data-storage-copy,
+  .data-storage-heading p {
+    font-size: 12px;
+    line-height: 1.52;
   }
 
   .onboarding-language-body {

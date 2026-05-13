@@ -1,5 +1,30 @@
 import type { DossierTripGroup, GeoPoint, GlobeMarker, ImportBatch, LocationCandidate, PendingItem, Photo, PlaceNode, Route, SearchDocument, SearchResult, TimelineSegment, Trip } from "@/domain/models";
 
+declare global {
+  interface Window {
+    earthOnlineDesktop?: {
+      apiBaseUrl?: string;
+      apiToken?: string;
+      getApiBaseUrl?: () => string | undefined;
+      getStorage?: () => DesktopStorageSettings | undefined;
+      platform?: string;
+      preferences?: {
+        onboardingComplete?: boolean;
+      };
+      storage?: DesktopStorageSettings;
+      chooseDataDirectory?: () => Promise<DesktopStorageSettings>;
+      openDataDirectory?: () => Promise<boolean>;
+      relaunch?: () => void;
+      setOnboardingComplete?: (complete: boolean) => void;
+      versions?: {
+        chrome?: string;
+        electron?: string;
+        node?: string;
+      };
+    };
+  }
+}
+
 export interface AppSnapshot {
   trips: Trip[];
   photos: Photo[];
@@ -68,6 +93,31 @@ export interface AiSettings {
   aiConfig: AiConfig;
 }
 
+export interface StorageSettings {
+  dataDir: string;
+  dbPath: string;
+  importJobDir: string;
+  photoDir: string;
+  rootDir: string;
+  source: "desktop" | "env" | "project";
+  thumbDir: string;
+  vectorPath: string;
+}
+
+export interface DesktopStorageSettings {
+  apiBaseUrl?: string;
+  backendReady: boolean;
+  canChooseDirectory: boolean;
+  configuredDataDir: string;
+  currentDataDir?: string;
+  defaultDataDir: string;
+  envOverride: boolean;
+  isConfigured: boolean;
+  needsInitialDataDir: boolean;
+  restartRequired: boolean;
+  userDataDir: string;
+}
+
 export type ImportJobPhase = "queued" | "reading" | "uploading" | "exif" | "thumbnails" | "ai" | "embedding" | "grouping" | "completed" | "failed";
 
 export interface ImportJobStepProgress {
@@ -109,13 +159,57 @@ export interface EmbeddingRebuildReport {
   mode: "all" | "retry_failed";
 }
 
+function desktopApiToken() {
+  if (typeof window === "undefined") return undefined;
+  const token = window.earthOnlineDesktop?.apiToken;
+  return typeof token === "string" && token ? token : undefined;
+}
+
+function desktopApiBaseUrl() {
+  if (typeof window === "undefined") return undefined;
+  const baseUrl = window.earthOnlineDesktop?.getApiBaseUrl?.() ?? window.earthOnlineDesktop?.apiBaseUrl;
+  return typeof baseUrl === "string" && baseUrl ? baseUrl : undefined;
+}
+
+function resolveDesktopUrl(url: string) {
+  const baseUrl = desktopApiBaseUrl();
+  if (!baseUrl || !url.startsWith("/")) return url;
+  return new URL(url, baseUrl).toString();
+}
+
+function isApiUrl(url: string) {
+  try {
+    const parsed = new URL(url, desktopApiBaseUrl() ?? window.location.href);
+    return parsed.pathname.startsWith("/api/");
+  } catch {
+    return url.startsWith("/api/");
+  }
+}
+
+function withDesktopToken(url: string) {
+  const resolvedUrl = resolveDesktopUrl(url);
+  const token = desktopApiToken();
+  if (!token || !isApiUrl(resolvedUrl)) return resolvedUrl;
+  const [withoutHash, hash] = resolvedUrl.split("#", 2);
+  const separator = withoutHash.includes("?") ? "&" : "?";
+  return `${withoutHash}${separator}desktopToken=${encodeURIComponent(token)}${hash ? `#${hash}` : ""}`;
+}
+
+function desktopTokenHeaders() {
+  const headers = new Headers();
+  const token = desktopApiToken();
+  if (token) headers.set("x-earth-online-token", token);
+  return headers;
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
+  const headers = new Headers(init?.headers);
+  headers.set("content-type", "application/json");
+  const token = desktopApiToken();
+  if (token) headers.set("x-earth-online-token", token);
+  const response = await fetch(withDesktopToken(url), {
     ...init,
-    headers: {
-      "content-type": "application/json",
-      ...init?.headers,
-    },
+    headers,
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: response.statusText }));
@@ -146,7 +240,7 @@ async function replayProgressEvents(events: ImportJobProgressEvent[], seenSequen
 
 function watchImportJobProgress(jobId: string, seenSequences: Set<number>, onProgress?: (progress: ImportJobProgress) => void) {
   if (typeof EventSource === "undefined") return () => {};
-  const source = new EventSource(`/api/import/jobs/${jobId}/events`);
+  const source = new EventSource(withDesktopToken(`/api/import/jobs/${jobId}/events`));
   source.addEventListener("progress", (message) => {
     const event = JSON.parse((message as MessageEvent).data) as ImportJobProgressEvent;
     if (seenSequences.has(event.sequence)) return;
@@ -187,6 +281,7 @@ export const apiClient = {
   updateLocalAiSettings: (body: Partial<Record<keyof LocalAiSettings, string>>) =>
     request<LocalAiSettings>("/api/settings/local-ai", { method: "PATCH", body: JSON.stringify(body) }),
   getAiSettings: () => request<AiSettings>("/api/settings/ai"),
+  getStorageSettings: () => request<StorageSettings>("/api/settings/storage"),
   updateAiSettings: (body: {
     credentials?: Partial<Record<ProviderCredentialKey, string>>;
     profileCredentials?: Partial<Record<"imageUnderstanding" | "crossModalEmbedding", Partial<Record<ProviderCredentialKey, string>>>>;
@@ -215,7 +310,7 @@ export const apiClient = {
       JSON.stringify(uploadFiles.map((file) => ({ name: file.name, type: file.type, size: file.size, lastModified: file.lastModified }))),
     );
     onProgress?.(0, uploadFiles.length);
-    const response = await fetch("/api/import/jobs", { method: "POST", body: form });
+    const response = await fetch(withDesktopToken("/api/import/jobs"), { method: "POST", body: form, headers: desktopTokenHeaders() });
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: response.statusText }));
       throw new Error(error.error ?? "Earth_Online API request failed");

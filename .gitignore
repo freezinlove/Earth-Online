@@ -3,6 +3,7 @@ node_modules/
 
 # Build, cache, and test output
 dist/
+release/
 output/
 test-results/
 coverage/

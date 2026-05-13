@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/i18n/useI18n";
 import type { LocalAiCredential } from "@/services/apiClient";
 import { useAppStore, type Locale } from "@/store/appStore";
+import { DataStorageSection } from "@/features/settings/DataStorageSection";
 import { emptyCredential, firstModel, ModelProfileSection, profileModels, type FieldStatus, useAiSettingsForm } from "@/features/settings/settingsForm";
 
 const onboardingStorageKey = "earth-online-onboarding-complete";
@@ -13,6 +14,7 @@ const cardExitDuration = 700;
 
 function shouldShowOnboarding() {
   if (typeof window === "undefined") return false;
+  if (window.earthOnlineDesktop?.preferences?.onboardingComplete === true) return false;
   return window.localStorage.getItem(onboardingStorageKey) !== "true";
 }
 
@@ -27,6 +29,13 @@ export function OnboardingGuide() {
 function OnboardingGuideDialog({ onDismiss }: { onDismiss: () => void }) {
   const { locale, t } = useI18n();
   const setLocale = useAppStore((state) => state.setLocale);
+  const loadState = useAppStore((state) => state.loadState);
+  const [isStorageReady, setIsStorageReady] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const desktopStorage = window.earthOnlineDesktop?.getStorage?.() ?? window.earthOnlineDesktop?.storage;
+    if (desktopStorage) return desktopStorage.backendReady === true && desktopStorage.restartRequired !== true;
+    return false;
+  });
   const {
     applyProfiles,
     clearField,
@@ -45,7 +54,7 @@ function OnboardingGuideDialog({ onDismiss }: { onDismiss: () => void }) {
     updateImageProvider,
     updateValue,
     values,
-  } = useAiSettingsForm();
+  } = useAiSettingsForm(isStorageReady);
   const [isClosing, setIsClosing] = useState(false);
   const [isComplete, setIsComplete] = useState(false);
   const [stage, setStage] = useState<"welcome" | "setup">("welcome");
@@ -61,6 +70,7 @@ function OnboardingGuideDialog({ onDismiss }: { onDismiss: () => void }) {
   const welcomeTimer = useRef<number | undefined>(undefined);
   const completeTimer = useRef<number | undefined>(undefined);
   const closeTimer = useRef<number | undefined>(undefined);
+  const lastSetupPageIndex = 3;
 
   useEffect(() => {
     return () => {
@@ -70,6 +80,10 @@ function OnboardingGuideDialog({ onDismiss }: { onDismiss: () => void }) {
       window.clearTimeout(closeTimer.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (isStorageReady) void loadState();
+  }, [isStorageReady, loadState]);
 
   const sourceLabel: Record<LocalAiCredential["source"], string> = {
     env: t("sourceEnv"),
@@ -123,6 +137,7 @@ function OnboardingGuideDialog({ onDismiss }: { onDismiss: () => void }) {
   const finishOnboarding = () => {
     if (isClosing || isComplete) return;
     window.localStorage.setItem(onboardingStorageKey, "true");
+    window.earthOnlineDesktop?.setOnboardingComplete?.(true);
     setIsComplete(true);
     window.clearTimeout(completeTimer.current);
     window.clearTimeout(closeTimer.current);
@@ -137,7 +152,8 @@ function OnboardingGuideDialog({ onDismiss }: { onDismiss: () => void }) {
       enterSetup();
       return;
     }
-    if (pageIndex === 2) {
+    if (pageIndex === 1 && !isStorageReady) return;
+    if (pageIndex === lastSetupPageIndex) {
       finishOnboarding();
       return;
     }
@@ -170,8 +186,12 @@ function OnboardingGuideDialog({ onDismiss }: { onDismiss: () => void }) {
         <p className="settings-inline-note">{t("languageSwitchWarning")}</p>
       </div>
     </div>,
-    <div className="onboarding-model-page" key="vision">
+    <div className="onboarding-storage-page" key="storage">
       <p className="onboarding-kicker">01</p>
+      <DataStorageSection onReadyChange={setIsStorageReady} variant="onboarding" />
+    </div>,
+    <div className="onboarding-model-page" key="vision">
+      <p className="onboarding-kicker">02</p>
       <ModelProfileSection
         credential={imageCredentialKey ? settings?.profileCredentials.imageUnderstanding[imageCredentialKey] : emptyCredential}
         credentialStatus={imageCredentialKey ? statuses.imageUnderstanding[imageCredentialKey] : profileStatus}
@@ -208,7 +228,7 @@ function OnboardingGuideDialog({ onDismiss }: { onDismiss: () => void }) {
       {statusText[profileStatus] ? <div className="local-secret-state"><span>{statusText[profileStatus]}</span></div> : null}
     </div>,
     <div className="onboarding-model-page" key="embedding">
-      <p className="onboarding-kicker">02</p>
+      <p className="onboarding-kicker">03</p>
       <ModelProfileSection
         credential={embeddingCredentialKey ? settings?.profileCredentials.crossModalEmbedding[embeddingCredentialKey] : emptyCredential}
         credentialStatus={embeddingCredentialKey ? statuses.crossModalEmbedding[embeddingCredentialKey] : profileStatus}
@@ -301,12 +321,18 @@ function OnboardingGuideDialog({ onDismiss }: { onDismiss: () => void }) {
                 <span className="onboarding-icon-button-spacer" />
               )}
               <div className="onboarding-dots" aria-hidden="true">
-                {[0, 1, 2].map((item) => (
+                {[0, 1, 2, 3].map((item) => (
                   <span className={item === pageIndex ? "is-active" : ""} key={item} />
                 ))}
               </div>
-              <button aria-label={pageIndex === 2 ? t("onboardingFinish") : t("onboardingNext")} className="onboarding-icon-button" disabled={isPageClosing} onClick={goNext} type="button">
-                {pageIndex === 2 ? <Check size={24} strokeWidth={2} /> : <ChevronRight size={24} strokeWidth={1.9} />}
+              <button
+                aria-label={pageIndex === lastSetupPageIndex ? t("onboardingFinish") : t("onboardingNext")}
+                className="onboarding-icon-button"
+                disabled={isPageClosing || (pageIndex === 1 && !isStorageReady)}
+                onClick={goNext}
+                type="button"
+              >
+                {pageIndex === lastSetupPageIndex ? <Check size={24} strokeWidth={2} /> : <ChevronRight size={24} strokeWidth={1.9} />}
               </button>
             </div>
           </>

@@ -4,6 +4,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "main": "electron/main.mjs",
   "engines": {
     "node": ">=24.0.0",
     "npm": ">=11.0.0"
@@ -23,8 +24,55 @@
     "data:reset": "node scripts/data_reset.mjs",
     "data:rebuild": "node scripts/data_rebuild_from_existing_photos.mjs",
     "seed:demo": "node scripts/seed_demo.mjs",
+    "electron:dev": "node electron/dev.mjs",
+    "electron:pack": "npm run build && electron-builder --dir && node scripts/electron_patch_icon.mjs",
+    "electron:dist": "npm run build && electron-builder --dir && node scripts/electron_patch_icon.mjs && electron-builder --win nsis --x64 --prepackaged release/win-unpacked",
+    "electron:smoke": "node scripts/electron_packaged_smoke.mjs",
     "lint": "eslint .",
     "preview": "vite preview --host 0.0.0.0"
+  },
+  "build": {
+    "appId": "com.earthonline.desktop",
+    "productName": "Earth Online",
+    "electronDist": "node_modules/electron/dist",
+    "electronVersion": "42.0.1",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "docs/gugugaga.png",
+      "electron/**/*",
+      "server/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "external/geodata/geonames.sqlite",
+        "to": "geodata/geonames.sqlite"
+      }
+    ],
+    "asarUnpack": [
+      "node_modules/sharp/**/*"
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "icon": "docs/gugugaga.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName} Setup ${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
   },
   "dependencies": {
     "@react-three/drei": "^9.122.0",
@@ -50,6 +98,8 @@
     "@types/topojson-client": "^3.1.5",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
+    "electron": "^42.0.1",
+    "electron-builder": "^26.8.1",
     "eslint": "^9.17.0",
     "eslint-plugin-react-hooks": "^5.1.0",
     "eslint-plugin-react-refresh": "^0.4.16",

@@ -320,7 +320,7 @@ function makeLoadingStatuses(): Record<ProfileKey, Record<ProviderCredentialKey,
   };
 }
 
-export function useAiSettingsForm() {
+export function useAiSettingsForm(enabled = true) {
   const [settings, setSettings] = useState<Awaited<ReturnType<typeof apiClient.getAiSettings>>>();
   const [values, setValues] = useState<Record<ProfileKey, Record<ProviderCredentialKey, string>>>(() => makeEmptyValues());
   const [statuses, setStatuses] = useState<Record<ProfileKey, Record<ProviderCredentialKey, FieldStatus>>>(() => makeLoadingStatuses());
@@ -330,6 +330,11 @@ export function useAiSettingsForm() {
   const profileSaveSeq = useRef(0);
 
   useEffect(() => {
+    if (!enabled) {
+      setStatuses({ crossModalEmbedding: { ...loadingProviderStatuses }, imageUnderstanding: { ...loadingProviderStatuses } });
+      setProfileStatus("loading");
+      return;
+    }
     let alive = true;
     apiClient
       .getAiSettings()
@@ -348,7 +353,7 @@ export function useAiSettingsForm() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [enabled]);
 
   useEffect(() => {
     return () => {

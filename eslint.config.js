@@ -12,7 +12,10 @@ export default [
     languageOptions: {
       globals: {
         Buffer: "readonly",
+        Blob: "readonly",
+        FormData: "readonly",
         URL: "readonly",
+        WebSocket: "readonly",
         fetch: "readonly",
         process: "readonly",
         setTimeout: "readonly",
@@ -31,6 +34,18 @@ export default [
     rules: {
       ...reactHooks.configs.recommended.rules,
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
+    },
+  },
+  {
+    files: ["electron/preload.cjs"],
+    languageOptions: {
+      globals: {
+        process: "readonly",
+        require: "readonly",
+      },
+    },
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
     },
   },
 ];

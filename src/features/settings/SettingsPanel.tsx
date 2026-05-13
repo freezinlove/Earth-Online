@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useI18n } from "@/i18n/useI18n";
 import { apiClient, type EmbeddingRebuildReport, type ImportJobProgress, type LocalAiCredential } from "@/services/apiClient";
 import { useAppStore, type Locale } from "@/store/appStore";
+import { DataStorageSection } from "@/features/settings/DataStorageSection";
 import { emptyCredential, embeddingProgressPercent, firstModel, ModelProfileSection, profileModels, type FieldStatus, useAiSettingsForm } from "@/features/settings/settingsForm";
 
 export function SettingsPanel({ isClosing = false }: { isClosing?: boolean }) {
@@ -114,8 +115,18 @@ export function SettingsPanel({ isClosing = false }: { isClosing?: boolean }) {
             </div>
           </article>
 
-          <article className="local-secret-row local-model-row" style={{ "--local-secret-delay": "90ms" } as CSSProperties}>
+          <article className="local-secret-row local-storage-row" style={{ "--local-secret-delay": "90ms" } as CSSProperties}>
             <div className="local-secret-index">01</div>
+            <div className="min-w-0">
+              <div className="settings-section-header">
+                <h3>{t("dataStorage")}</h3>
+              </div>
+              <DataStorageSection />
+            </div>
+          </article>
+
+          <article className="local-secret-row local-model-row" style={{ "--local-secret-delay": "180ms" } as CSSProperties}>
+            <div className="local-secret-index">02</div>
             <div className="min-w-0">
               <div className="settings-section-header">
                 <h3>{t("modelRouting")}</h3>

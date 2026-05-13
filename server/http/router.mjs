@@ -1,6 +1,19 @@
 import { readBody } from "./body.mjs";
 import { corsHeaders, send, sendError } from "./responses.mjs";
 
+function desktopApiToken() {
+  const token = process.env.EARTH_ONLINE_DESKTOP_TOKEN;
+  return typeof token === "string" && token.trim() ? token.trim() : undefined;
+}
+
+function desktopApiRequestIsAuthorized(req, url) {
+  const expected = desktopApiToken();
+  if (!expected || !url.pathname.startsWith("/api/")) return true;
+  const header = req.headers["x-earth-online-token"];
+  const headerToken = Array.isArray(header) ? header[0] : header;
+  return headerToken === expected || url.searchParams.get("desktopToken") === expected;
+}
+
 export function createRouter(handlers, paths) {
   const testRoutesEnabled = process.env.EARTH_ONLINE_ENABLE_TEST_ROUTES === "1";
 
@@ -13,6 +26,7 @@ export function createRouter(handlers, paths) {
       }
       const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
       const pathname = url.pathname;
+      if (!desktopApiRequestIsAuthorized(req, url)) return sendError(res, 403, "Forbidden");
       if (pathname.startsWith("/data/photos/") || pathname.startsWith("/data/thumbs/")) {
         return handlers.servePhoto(res, pathname, { photoDir: paths.photoDir, thumbDir: paths.thumbDir });
       }
@@ -20,6 +34,7 @@ export function createRouter(handlers, paths) {
       if (req.method === "GET" && pathname === "/api/state") return send(res, 200, await handlers.responseState());
       if (req.method === "GET" && pathname === "/api/settings/local-ai") return send(res, 200, handlers.localAiSettings());
       if (req.method === "PATCH" && pathname === "/api/settings/local-ai") return send(res, 200, handlers.updateLocalAiSettings(await readBody(req)));
+      if (req.method === "GET" && pathname === "/api/settings/storage") return send(res, 200, handlers.storageSettings());
       if (req.method === "GET" && pathname === "/api/settings/ai") return send(res, 200, handlers.aiSettings());
       if (req.method === "PATCH" && pathname === "/api/settings/ai") return send(res, 200, handlers.updateAiSettings(await readBody(req)));
       if (req.method === "GET" && pathname === "/api/geocode/reverse") return send(res, 200, handlers.reverseGeocode(url.searchParams));
