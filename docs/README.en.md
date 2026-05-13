@@ -22,7 +22,7 @@
 
 Regular users should use the desktop installer. You do not need to manually start frontend or backend services.
 
-If you already have the generated installer, run it directly:
+Get the installer from the Releases section on the right, then run it directly:
 
 ```text
 Earth Online Setup 0.1.0.exe
@@ -44,6 +44,8 @@ Development and local debugging require Node.js `24+` and npm `11+`.
 ```powershell
 winget install OpenJS.NodeJS
 ```
+
+On macOS / Linux, install Node.js `24+` from the Node.js website or through nvm.
 
 Install dependencies:
 

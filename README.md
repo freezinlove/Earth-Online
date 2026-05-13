@@ -22,7 +22,7 @@
 
 普通用户建议使用桌面安装包，不需要手动启动前端和后端服务。
 
-如果你已经拿到本项目生成的安装包，直接运行进行安装：
+从右侧 Releases 中获取安装包，直接进行安装：
 
 ```text
 Earth Online Setup 0.1.0.exe
@@ -44,6 +44,8 @@ Earth Online Setup 0.1.0.exe
 ```powershell
 winget install OpenJS.NodeJS
 ```
+
+macOS / Linux 可通过 Node.js 官网或 nvm 安装 Node.js `24+`。
 
 安装依赖：
 
