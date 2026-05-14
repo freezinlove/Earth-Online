@@ -1,3 +1,4 @@
+import { normalizeCountryDescription, normalizeCountryName } from "./country-normalizer.mjs";
 import { inferPreset } from "./geo.mjs";
 import { hasHan, zhPlaceNameOverride } from "./place-name-overrides.mjs";
 
@@ -31,6 +32,11 @@ const BROAD_NAMES = new Set(["欧洲", "北欧", "旅行", "城市", "未知", "
 const COUNTRY_NAMES = new Set([
   "挪威",
   "Norway",
+  "香港",
+  "Hong Kong",
+  "Hongkong",
+  "荷兰",
+  "Netherlands",
   "日本",
   "Japan",
   "中国",
@@ -83,6 +89,12 @@ export function isWeakPlaceName(value) {
   return false;
 }
 
+export function isPhotoTitlePlaceName(value, photos = []) {
+  const clean = cleanPlaceName(value);
+  if (!clean) return false;
+  return photos.some((photo) => [photo.title, photo.userEdits?.title].some((title) => cleanPlaceName(title) === clean));
+}
+
 export function isUsableFinalPlaceName(value) {
   const clean = cleanPlaceName(value);
   if (!clean || clean.length < 2) return false;
@@ -126,7 +138,7 @@ function specificityWeight(candidate, cleanName) {
 
 export function candidateLocalityKey(candidate) {
   if (!candidate) return undefined;
-  const country = cleanPlaceName(candidate.country ?? candidate.countryCode);
+  const country = cleanPlaceName(normalizeCountryName(candidate.country) ?? candidate.countryCode);
   const admin1 = cleanPlaceName(candidate.admin1);
   const admin2 = cleanPlaceName(candidate.admin2);
   const city = cleanPlaceName(candidate.city || candidate.name);
@@ -160,13 +172,23 @@ function cleanNames(names, fallback) {
   return Object.keys(result).length ? result : undefined;
 }
 
-function descriptionFromCandidate(candidate, name) {
+function candidateDisplayName(candidate, photos) {
+  const name = cleanPlaceName(candidate?.name);
+  const city = cleanPlaceName(candidate?.city);
+  if (city && isPhotoTitlePlaceName(name, photos)) return { name: city, preferCityNames: true };
+  return { name: cleanPlaceName(name || city), preferCityNames: false };
+}
+
+function descriptionFromCandidate(candidate, name, { preferCityNames = false } = {}) {
   const city = cleanPlaceName(candidate?.city || name);
+  const country = normalizeCountryDescription(candidate?.country, candidate?.localizedCountryNames);
+  const primaryNames = preferCityNames ? candidate?.localizedCityNames : candidate?.localizedNames ?? candidate?.localizedCityNames;
+  const fallbackNames = preferCityNames ? candidate?.localizedNames : candidate?.localizedCityNames;
   return {
     name,
-    names: cleanNames(candidate?.localizedNames ?? candidate?.localizedCityNames, name),
-    country: candidate?.country,
-    countryNames: cleanNames(candidate?.localizedCountryNames, candidate?.country),
+    names: cleanNames(primaryNames ?? fallbackNames, name),
+    country: country.country,
+    countryNames: country.countryNames,
     city,
     cityNames: cleanNames(candidate?.localizedCityNames ?? candidate?.localizedNames, city),
   };
@@ -188,7 +210,7 @@ export function collectLocationCandidates(photos) {
 }
 
 export function selectPlaceDescription(photos, center, { fallbackName, preserveName } = {}) {
-  if (preserveName && !isWeakPlaceName(preserveName)) {
+  if (preserveName && !isWeakPlaceName(preserveName) && !isPhotoTitlePlaceName(preserveName, photos)) {
     const candidate = collectLocationCandidates(photos).find((item) => cleanPlaceName(item.name) === cleanPlaceName(preserveName) || cleanPlaceName(item.city) === cleanPlaceName(preserveName));
     return descriptionFromCandidate(candidate, cleanPlaceName(preserveName));
   }
@@ -203,8 +225,8 @@ export function selectPlaceDescription(photos, center, { fallbackName, preserveN
 
   const best = ranked[0]?.candidate;
   if (best) {
-    const name = cleanPlaceName(best.name || best.city);
-    return descriptionFromCandidate(best, name);
+    const { name, preferCityNames } = candidateDisplayName(best, photos);
+    return descriptionFromCandidate(best, name, { preferCityNames });
   }
 
   const preset = inferPreset(photos[0]?.fileName, center);
@@ -213,8 +235,8 @@ export function selectPlaceDescription(photos, center, { fallbackName, preserveN
     return {
       name: presetName,
       names: cleanNames(undefined, presetName),
-      country: preset.country,
-      countryNames: cleanNames(undefined, preset.country),
+      country: normalizeCountryName(preset.country),
+      countryNames: normalizeCountryDescription(preset.country).countryNames,
       city: presetName,
       cityNames: cleanNames(undefined, presetName),
     };
@@ -223,8 +245,8 @@ export function selectPlaceDescription(photos, center, { fallbackName, preserveN
   return {
     name: "未标地点",
     names: { zh: "未标地点", en: "Unmarked place" },
-    country: preset.country,
-    countryNames: cleanNames(undefined, preset.country),
+    country: normalizeCountryName(preset.country),
+    countryNames: normalizeCountryDescription(preset.country).countryNames,
     city: preset.city,
     cityNames: cleanNames(undefined, preset.city),
   };

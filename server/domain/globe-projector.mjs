@@ -1,21 +1,7 @@
 import { centerOf, unique } from "./projection-utils.mjs";
+import { normalizeCountryDescription, normalizeCountryName } from "./country-normalizer.mjs";
 import { inferPreset } from "./geo.mjs";
-
-const countryEnByZh = {
-  中国: "China",
-  捷克: "Czechia",
-  奥地利: "Austria",
-  德国: "Germany",
-  匈牙利: "Hungary",
-  挪威: "Norway",
-  瑞士: "Switzerland",
-  日本: "Japan",
-  法国: "France",
-  意大利: "Italy",
-  英国: "United Kingdom",
-  美国: "United States",
-  瑞典: "Sweden",
-};
+import { countryCapitalPoint } from "./local-geocoder.mjs";
 
 export function buildGlobeMarkers(state) {
   const markers = [];
@@ -25,7 +11,7 @@ export function buildGlobeMarkers(state) {
     const countryGroups = new Map();
 
     for (const place of places) {
-      const country = inferPlaceCountry(place, photos, trip);
+      const country = inferPlaceCountry(place, photos, trip) ?? "未知国家";
       const group = countryGroups.get(country) ?? { country, countryNames: inferPlaceCountryNames(place, country), places: [], photoIds: [] };
       group.places.push(place);
       group.photoIds.push(...place.photoIds);
@@ -34,6 +20,8 @@ export function buildGlobeMarkers(state) {
     }
 
     for (const group of countryGroups.values()) {
+      const placeCenters = group.places.map((place) => place.center);
+      const timeRange = groupTimeRange(group.places);
       markers.push({
         id: `country-${trip.id}-${group.country}`,
         kind: "country",
@@ -41,11 +29,13 @@ export function buildGlobeMarkers(state) {
         labelNames: group.countryNames,
         countryName: group.country,
         countryNames: group.countryNames,
-        center: centerOf(group.places.map((place) => place.center)),
+        center: countryCapitalPoint(group.country) ?? centerOf(placeCenters),
         count: unique(group.photoIds).length,
         photoIds: unique(group.photoIds),
         placeIds: group.places.map((place) => place.id),
         tripId: trip.id,
+        startTime: timeRange.start,
+        endTime: timeRange.end,
         status: group.places.some((place) => place.pending) ? "suggested" : "confirmed",
       });
     }
@@ -72,23 +62,26 @@ export function buildGlobeMarkers(state) {
   return markers.filter((marker) => marker.center);
 }
 
+function groupTimeRange(places) {
+  const starts = places.map((place) => place.timeRange?.start).filter(Boolean).sort();
+  const ends = places.map((place) => place.timeRange?.end).filter(Boolean).sort();
+  return {
+    start: starts[0],
+    end: ends.at(-1),
+  };
+}
+
 function inferPlaceCountryNames(place, fallback) {
-  if (place.countryNames) {
-    return {
-      ...place.countryNames,
-      en: /[\u4e00-\u9fff]/u.test(place.countryNames.en ?? "") ? countryEnByZh[place.countryNames.zh ?? fallback] ?? place.countryNames.en : place.countryNames.en,
-    };
-  }
-  return fallback ? { zh: fallback, en: countryEnByZh[fallback] ?? fallback, local: fallback } : undefined;
+  return normalizeCountryDescription(fallback ?? place.country, place.countryNames).countryNames;
 }
 
 function inferPlaceCountry(place, photos, trip) {
-  if (place.country && place.country !== "待确认") return place.country;
+  if (place.country && place.country !== "待确认") return normalizeCountryName(place.country);
   const placePhotos = photos.filter((photo) => place.photoIds?.includes(photo.id));
   const candidateCountry = strongestCandidateCountry(placePhotos, place.center);
   if (candidateCountry) return candidateCountry;
   const preset = inferPreset(place.name || place.displayName, place.center);
-  if (preset.country && preset.country !== "待确认") return preset.country;
+  if (preset.country && preset.country !== "待确认") return normalizeCountryName(preset.country);
   const text = [
     place.name,
     place.displayName,
@@ -103,15 +96,16 @@ function inferPlaceCountry(place, photos, trip) {
     .filter(Boolean)
     .join(" ");
   const direct = trip.countries?.find((country) => text.includes(country));
-  if (direct) return direct;
-  return trip.countries?.[0] ?? "未知国家";
+  if (direct) return normalizeCountryName(direct);
+  return normalizeCountryName(trip.countries?.[0]) ?? "未知国家";
 }
 
 function strongestCandidateCountry(photos, center) {
-  return photos
+  const country = photos
     .flatMap((photo) => photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? [])
     .filter((candidate) => candidate?.country && (!candidate.point || distanceKm(candidate.point, center) <= 35))
     .sort((left, right) => Number(right.confidence ?? 0) - Number(left.confidence ?? 0))[0]?.country;
+  return normalizeCountryName(country);
 }
 
 function distanceKm(start, end) {

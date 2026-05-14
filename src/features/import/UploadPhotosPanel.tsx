@@ -756,7 +756,7 @@ function ManualPendingResolutionModal({
   initialMode?: "bind" | "new" | "archive";
   pickedPoint?: { lat: number; lng: number; nearestLabel?: string };
   onClose: () => void;
-  onPickPoint: (pendingId: string, name: string) => void;
+  onPickPoint: (pendingId: string, name: string, nameDirty: boolean) => void;
   onSubmit: (body: { action: "bind_existing_place"; placeId: string } | { action: "create_manual_place"; name: string; lat: number; lng: number } | { action: "archive_unlocated" }) => void;
   t: (key: MessageKey) => string;
 }) {
@@ -767,10 +767,12 @@ function ManualPendingResolutionModal({
   const [mode, setMode] = useState<"bind" | "new" | "archive">("bind");
   const [placeId, setPlaceId] = useState(tripPlaces[0]?.id ?? "");
   const [name, setName] = useState(initialName ?? primaryPhoto?.title ?? primaryPhoto?.fileName ?? "");
+  const [nameDirty, setNameDirty] = useState(false);
 
   useEffect(() => {
     setPlaceId(tripPlaces[0]?.id ?? "");
     setName(initialName ?? primaryPhoto?.title ?? primaryPhoto?.fileName ?? "");
+    setNameDirty(false);
     setMode(initialMode ?? (tripPlaces.length ? "bind" : "new"));
   }, [initialMode, initialName, item.id, primaryPhoto?.fileName, primaryPhoto?.title, tripPlaces]);
 
@@ -822,11 +824,17 @@ function ManualPendingResolutionModal({
             <div className="manual-pending-grid manual-pending-grid-pick">
               <label className="manual-pending-field">
                 <span>{t("placeName")}</span>
-                <input value={name} onChange={(event) => setName(event.target.value)} />
+                <input
+                  value={name}
+                  onChange={(event) => {
+                    setName(event.target.value);
+                    setNameDirty(true);
+                  }}
+                />
               </label>
               <div className="manual-pending-field">
                 <span>{t("mapPoint")}</span>
-                <button className="manual-pending-pick-button" type="button" onClick={() => onPickPoint(item.id, name)}>
+                <button className="manual-pending-pick-button" type="button" onClick={() => onPickPoint(item.id, name, nameDirty)}>
                   <MapPin size={15} />
                   {pickedPoint ? t("reselectOnGlobe") : t("pickOnGlobe")}
                 </button>
@@ -1313,7 +1321,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
           setManualPending(undefined);
           closeManualPlacePick();
         }}
-        onPickPoint={(pendingId, name) => startManualPlacePick(pendingId, name)}
+        onPickPoint={(pendingId, name, nameDirty) => startManualPlacePick(pendingId, name, nameDirty)}
         onSubmit={(body) => void resolveManualPending(activeManualPending, body)}
         t={t}
       />,

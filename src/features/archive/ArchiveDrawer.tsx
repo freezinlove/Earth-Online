@@ -1,9 +1,9 @@
 import type { CSSProperties } from "react";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CalendarDays, Check, Image, MapPin, X } from "lucide-react";
 import { countryLabel, tripLabel } from "@/domain/labels";
 import { useI18n } from "@/i18n/useI18n";
-import type { Trip } from "@/domain/models";
+import type { Photo, Trip } from "@/domain/models";
 import { useAppStore } from "@/store/appStore";
 
 function groupTripsByYear(trips: Trip[]) {
@@ -23,9 +23,46 @@ function groupTripsByYear(trips: Trip[]) {
     }, []);
 }
 
+function tripCountryLine(trip: Trip, locale: "zh" | "en") {
+  return Array.from(new Set(trip.countries.map((country) => countryLabel(country, undefined, locale)))).join(" / ");
+}
+
+function tripCoverCandidates(trip: Trip, photos: Photo[]) {
+  return Array.from(new Set([trip.coverUrl, ...photos.flatMap((photo) => [photo.thumbnailUrl, photo.storageUrl])].filter(Boolean)));
+}
+
+function ArchiveTripCover({ photos, trip }: { photos: Photo[]; trip: Trip }) {
+  const candidates = useMemo(() => tripCoverCandidates(trip, photos), [photos, trip]);
+  const candidatesKey = candidates.join("|");
+  const [coverIndex, setCoverIndex] = useState(0);
+  const src = candidates[coverIndex];
+
+  useEffect(() => {
+    setCoverIndex(0);
+  }, [candidatesKey, trip.id]);
+
+  return (
+    <span className="archive-entry-media block h-40 w-full overflow-hidden rounded-lg bg-surface-container md:h-32">
+      {src ? (
+        <img
+          src={src}
+          alt={tripLabel(trip)}
+          className="h-full w-full object-cover"
+          onError={() => setCoverIndex((index) => Math.min(index + 1, candidates.length))}
+        />
+      ) : (
+        <span className="grid h-full w-full place-items-center text-outline">
+          <Image size={22} />
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function ArchiveDrawer({ isClosing = false }: { isClosing?: boolean }) {
   const { locale, t } = useI18n();
   const trips = useAppStore((state) => state.trips);
+  const photos = useAppStore((state) => state.photos);
   const selectTrip = useAppStore((state) => state.selectTrip);
   const deleteTrip = useAppStore((state) => state.deleteTrip);
   const [confirmingTripId, setConfirmingTripId] = useState<string>();
@@ -74,6 +111,7 @@ export function ArchiveDrawer({ isClosing = false }: { isClosing?: boolean }) {
                 {group.trips.map((trip, index) => {
                   const isConfirmingDelete = confirmingTripId === trip.id;
                   const isDeleting = deletingTripId === trip.id;
+                  const tripPhotos = photos.filter((photo) => photo.tripId === trip.id);
                   return (
                     <div
                       key={trip.id}
@@ -89,9 +127,7 @@ export function ArchiveDrawer({ isClosing = false }: { isClosing?: boolean }) {
                       style={{ "--archive-entry-delay": `${index * 80}ms` } as CSSProperties}
                       tabIndex={0}
                     >
-                      <span className="archive-entry-media block h-40 w-full overflow-hidden rounded-lg bg-surface-container md:h-32">
-                        <img src={trip.coverUrl} alt={tripLabel(trip)} className="h-full w-full object-cover" />
-                      </span>
+                      <ArchiveTripCover trip={trip} photos={tripPhotos} />
 
                       <span className="flex min-w-0 flex-col gap-4">
                         <span>
@@ -99,7 +135,7 @@ export function ArchiveDrawer({ isClosing = false }: { isClosing?: boolean }) {
                             <h3 className="archive-entry-title font-serif text-2xl font-semibold leading-tight text-on-surface md:text-3xl">{tripLabel(trip)}</h3>
                           </span>
                           <span className="mt-3 block text-sm leading-6 text-on-surface-variant">
-                            {trip.countries.map((country) => countryLabel(country, undefined, locale)).join(" / ")}
+                            {tripCountryLine(trip, locale)}
                           </span>
                         </span>
 

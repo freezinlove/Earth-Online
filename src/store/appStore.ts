@@ -19,6 +19,7 @@ export type ManualPlacePickSession = {
   mode: "bind" | "new" | "archive";
   point?: { lat: number; lng: number };
   nearestLabel?: string;
+  nameDirty?: boolean;
   isPicking: boolean;
 };
 
@@ -131,7 +132,7 @@ interface AppState {
   ) => Promise<void>;
   openManualPlacePick: (pendingId: ID, name: string) => void;
   closeManualPlacePick: () => void;
-  startManualPlacePick: (pendingId: ID, name: string) => void;
+  startManualPlacePick: (pendingId: ID, name: string, nameDirty?: boolean) => void;
   finishManualPlacePick: (point: { lat: number; lng: number }, nearestLabel?: string) => Promise<void>;
 }
 
@@ -387,11 +388,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     const snapshot = await apiClient.resolvePendingManually(pendingId, body);
     set({ ...applySnapshot(snapshot), activePanel: "upload", manualPlacePick: undefined });
   },
-  openManualPlacePick: (pendingId, name) => set({ manualPlacePick: { pendingId, name, mode: "bind", isPicking: false } }),
+  openManualPlacePick: (pendingId, name) => set({ manualPlacePick: { pendingId, name, mode: "bind", isPicking: false, nameDirty: false } }),
   closeManualPlacePick: () => set({ manualPlacePick: undefined }),
-  startManualPlacePick: (pendingId, name) =>
+  startManualPlacePick: (pendingId, name, nameDirty = false) =>
     set((state) => ({
-      manualPlacePick: { ...(state.manualPlacePick?.pendingId === pendingId ? state.manualPlacePick : {}), pendingId, name, mode: "new", isPicking: true },
+      manualPlacePick: {
+        ...(state.manualPlacePick?.pendingId === pendingId ? state.manualPlacePick : {}),
+        pendingId,
+        name,
+        nameDirty,
+        mode: "new",
+        isPicking: true,
+      },
       activePanel: "globe",
     })),
   finishManualPlacePick: async (point, nearestLabel) => {
@@ -405,7 +413,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const label = geocodeLabel(response.candidates[0], get().locale);
       set((state) => ({
         manualPlacePick: state.manualPlacePick?.point?.lat === point.lat && state.manualPlacePick.point.lng === point.lng
-          ? { ...state.manualPlacePick, nearestLabel: label ?? nearestLabel }
+          ? { ...state.manualPlacePick, nearestLabel: label ?? nearestLabel, name: !state.manualPlacePick.nameDirty && label ? label : state.manualPlacePick.name }
           : state.manualPlacePick,
       }));
     } catch {

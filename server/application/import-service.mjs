@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import { safeArray } from "../domain/arrays.mjs";
+import { multiCityCountryLabel } from "../domain/country-normalizer.mjs";
 import { toDateInput } from "../domain/dates.mjs";
 import { parseExif } from "../domain/exif-parser.mjs";
 import { geoContextFor, haversineKm, inferPreset, isUsableLocation, localizedGeoHint, normalizeLocale } from "../domain/geo.mjs";
@@ -443,7 +444,7 @@ export function createImportServices({
               title: createdTrips.some((createdTrip) => createdTrip.id === tripId)
                 ? importTripTitle({
                     month: toDateInput(tripDates[0]).slice(0, 7),
-                    city: geoSummary.cities.length > 1 ? importTripMultiCityLabel(locale) : geoSummary.cities[0],
+                    city: geoSummary.cities.length > 1 ? importTripMultiCityLabel(geoSummary.countries, locale) : geoSummary.cities[0],
                     locale,
                   })
                 : item.title,
@@ -1665,8 +1666,8 @@ export function createImportServices({
     return `${month} ${city}旅行${suffix}`;
   }
 
-  function importTripMultiCityLabel(locale = "zh") {
-    return normalizeLocale(locale) === "en" ? "Europe multi-city" : "欧洲多城";
+  function importTripMultiCityLabel(countries = [], locale = "zh") {
+    return multiCityCountryLabel(countries, locale);
   }
 
   async function embedPhotoAnalysis({ fileName, analysis, allowCloud }) {

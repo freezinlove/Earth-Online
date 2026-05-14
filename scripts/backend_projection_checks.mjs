@@ -5,7 +5,8 @@ import path from "node:path";
 import { createImportServices } from "../server/application/import-service.mjs";
 import { applyPendingDecision } from "../server/domain/pending-workflow.mjs";
 import { validatePhotoAnalysisResult } from "../server/ai/ai-schemas.mjs";
-import { forwardLocalGeocode } from "../server/domain/local-geocoder.mjs";
+import { forwardLocalGeocode, reverseLocalGeocode } from "../server/domain/local-geocoder.mjs";
+import { normalizeCountryName } from "../server/domain/country-normalizer.mjs";
 import { toAiEvidence } from "../server/domain/location-resolver.mjs";
 import { buildPlacesForGroup } from "../server/domain/place-projector.mjs";
 import { projectState } from "../server/domain/state-projector.mjs";
@@ -14,6 +15,12 @@ let sequence = 0;
 function makeId(prefix) {
   sequence += 1;
   return `${prefix}-test-${sequence}`;
+}
+
+function assertPointNear(actual, expected, tolerance = 0.0001) {
+  assert.ok(actual);
+  assert.ok(Math.abs(actual.lat - expected.lat) <= tolerance, `expected lat ${expected.lat}, received ${actual.lat}`);
+  assert.ok(Math.abs(actual.lng - expected.lng) <= tolerance, `expected lng ${expected.lng}, received ${actual.lng}`);
 }
 
 const sneakyAiCoordinate = validatePhotoAnalysisResult(
@@ -138,6 +145,144 @@ assert.equal(projectedAfter.photos[0].pendingReason, undefined);
 assert.deepEqual(projectedAfter.photos[0].location, { lat: 47.56231, lng: 13.64912 });
 assert.equal(projectedAfter.placeNodes.length, 1);
 assert.equal(projectedAfter.globeMarkers.some((marker) => marker.kind === "place" && marker.label === "哈尔施塔特"), true);
+
+const normalizedCountryProjection = projectState({
+  trips: [
+    {
+      id: "trip-country-normalize",
+      title: "2024-08 欧洲多城旅行",
+      dateRange: { start: "2024-08-01", end: "2024-08-02" },
+      countries: ["挪威", "Norway", "Netherlands"],
+      cities: ["Oslo"],
+      coverUrl: "",
+      photoCount: 0,
+      placeNodeCount: 0,
+      status: "confirmed",
+      source: "import",
+    },
+  ],
+  photos: [
+    {
+      id: "photo-oslo-normalize",
+      tripId: "trip-country-normalize",
+      placeNodeId: "place-oslo-normalize",
+      fileName: "oslo.jpg",
+      thumbnailUrl: "",
+      capturedAt: "2024-08-01T10:00:00Z",
+      location: { lat: 59.91, lng: 10.75 },
+      tags: [],
+      aiCaption: "",
+    },
+    {
+      id: "photo-amsterdam-normalize",
+      tripId: "trip-country-normalize",
+      placeNodeId: "place-amsterdam-normalize",
+      fileName: "amsterdam.jpg",
+      thumbnailUrl: "",
+      capturedAt: "2024-08-02T10:00:00Z",
+      location: { lat: 52.37, lng: 4.89 },
+      tags: [],
+      aiCaption: "",
+    },
+  ],
+  placeNodes: [
+    {
+      id: "place-oslo-normalize",
+      tripId: "trip-country-normalize",
+      name: "奥斯陆",
+      country: "Norway",
+      center: { lat: 59.91, lng: 10.75 },
+      photoIds: ["photo-oslo-normalize"],
+      timeRange: { start: "2024-08-01", end: "2024-08-01" },
+      pending: false,
+    },
+    {
+      id: "place-amsterdam-normalize",
+      tripId: "trip-country-normalize",
+      name: "Amsterdam",
+      country: "Netherlands",
+      center: { lat: 52.37, lng: 4.89 },
+      photoIds: ["photo-amsterdam-normalize"],
+      timeRange: { start: "2024-08-02", end: "2024-08-02" },
+      pending: false,
+    },
+  ],
+  routes: [],
+  importBatches: [],
+  pendingItems: [],
+});
+assert.deepEqual(normalizedCountryProjection.trips[0].countries, ["挪威", "荷兰"]);
+assert.equal(normalizedCountryProjection.trips[0].title, "2024-08 欧洲多城旅行");
+assert.deepEqual(
+  normalizedCountryProjection.dossierGroups[0].countries.map((group) => group.country),
+  ["挪威", "荷兰"],
+);
+
+const asiaTitleProjection = projectState({
+  trips: [
+    {
+      id: "trip-asia-title",
+      title: "2025-03 欧洲多城旅行",
+      dateRange: { start: "2025-03-01", end: "2025-03-02" },
+      countries: ["China", "Hong Kong"],
+      cities: ["北京", "香港"],
+      coverUrl: "",
+      photoCount: 0,
+      placeNodeCount: 0,
+      status: "confirmed",
+      source: "import",
+    },
+  ],
+  photos: [],
+  placeNodes: [],
+  routes: [],
+  importBatches: [],
+  pendingItems: [],
+});
+assert.deepEqual(asiaTitleProjection.trips[0].countries, ["中国"]);
+assert.equal(asiaTitleProjection.trips[0].title, "2025-03 中国多城旅行");
+
+assert.equal(normalizeCountryName("Argentina"), "阿根廷");
+assert.equal(normalizeCountryName("Côte d’Ivoire"), "科特迪瓦");
+assert.equal(normalizeCountryName("Hong Kong"), "中国");
+assert.equal(normalizeCountryName("HK"), "中国");
+const hongKongReverse = reverseLocalGeocode({ lat: 22.3193, lng: 114.1694 }, { preferCity: true })[0];
+assert.equal(hongKongReverse?.country, "中国");
+assert.equal(hongKongReverse?.localizedCountryNames?.en, "China");
+
+const staleCoverProjection = projectState({
+  trips: [
+    {
+      id: "trip-stale-cover",
+      title: "2025-07 多国多城旅行",
+      dateRange: { start: "2025-07-01", end: "2025-07-02" },
+      countries: ["China"],
+      cities: ["北京"],
+      coverUrl: "/data/thumbs/deleted-cover.jpg",
+      photoCount: 0,
+      placeNodeCount: 0,
+      status: "confirmed",
+      source: "import",
+    },
+  ],
+  photos: [
+    {
+      id: "photo-valid-cover",
+      tripId: "trip-stale-cover",
+      fileName: "valid.jpg",
+      thumbnailUrl: "/data/thumbs/valid.jpg",
+      storageUrl: "/data/photos/valid.jpg",
+      capturedAt: "2025-07-01T10:00:00Z",
+      tags: [],
+      aiCaption: "",
+    },
+  ],
+  placeNodes: [],
+  routes: [],
+  importBatches: [],
+  pendingItems: [],
+});
+assert.equal(staleCoverProjection.trips[0].coverUrl, "/data/thumbs/valid.jpg");
 
 const ignored = applyPendingDecision(baseState, "pending-location", { accepted: false });
 assert.equal(projectState(ignored).pendingItems[0].status, "ignored");
@@ -475,6 +620,7 @@ assert.deepEqual(
   ["捷克", "奥地利"],
 );
 assert.equal(centralEuropeProjected.globeMarkers.find((marker) => marker.kind === "place" && marker.label === "布拉格")?.countryName, "捷克");
+assertPointNear(centralEuropeProjected.globeMarkers.find((marker) => marker.kind === "country" && marker.countryName === "奥地利")?.center, { lat: 48.20849, lng: 16.37208 });
 
 const incrementalPlacePhotos = [
   {
@@ -615,6 +761,8 @@ assert.deepEqual(new Set(pragueIncrementalPlaces[0].photoIds), new Set(["photo-p
 assert.equal(incrementalProjected.globeMarkers.filter((marker) => marker.kind === "place" && marker.countryName === "捷克").length, 1);
 assert.equal(incrementalProjected.globeMarkers.find((marker) => marker.kind === "country" && marker.countryName === "捷克")?.count, 2);
 assert.equal(incrementalProjected.globeMarkers.find((marker) => marker.kind === "country" && marker.countryName === "奥地利")?.count, 2);
+assertPointNear(incrementalProjected.globeMarkers.find((marker) => marker.kind === "country" && marker.countryName === "捷克")?.center, { lat: 50.08804, lng: 14.42076 });
+assertPointNear(incrementalProjected.globeMarkers.find((marker) => marker.kind === "country" && marker.countryName === "奥地利")?.center, { lat: 48.20849, lng: 16.37208 });
 assert.deepEqual(
   incrementalProjected.dossierGroups[0].countries.flatMap((group) => group.days.map((day) => day.placeIds.length)),
   [1, 1],
@@ -804,6 +952,110 @@ const weakUpgradePlaces = buildPlacesForGroup(
 );
 assert.equal(weakUpgradePlaces[0].id, existingWeakPlace.id);
 assert.equal(weakUpgradePlaces[0].name, "Haugesund");
+
+const manualBeijingPlace = {
+  id: "manual-place-beijing",
+  tripId: "trip-manual-beijing",
+  name: "北京",
+  displayName: "北京",
+  country: "中国",
+  countryNames: { zh: "中国", en: "China", local: "中国" },
+  city: "北京",
+  center: { lat: 39.9075, lng: 116.39723 },
+  photoIds: ["photo-manual-beijing"],
+  timeRange: { start: "2024-08-10T10:00:00Z", end: "2024-08-10T10:00:00Z" },
+  pending: false,
+};
+const manualBeijingPlaces = buildPlacesForGroup(
+  [
+    {
+      id: "photo-manual-beijing",
+      fileName: "beijing-airport.jpg",
+      title: "北京手动点",
+      capturedAt: "2024-08-10T10:00:00Z",
+      tripId: "trip-manual-beijing",
+      placeNodeId: "manual-place-beijing",
+      location: { lat: 39.9075, lng: 116.39723 },
+      locationResolution: {
+        status: "confirmed",
+        effectiveName: "北京",
+        effectivePoint: { lat: 39.9075, lng: 116.39723 },
+        source: "manual_new_place",
+        candidates: [
+          {
+            id: "candidate-stale-norway",
+            name: "Norway",
+            country: "Norway",
+            confidence: 0.9,
+            source: "ai_vision",
+            reason: "stale AI country clue",
+          },
+        ],
+        requiresUserAction: false,
+      },
+    },
+  ],
+  "trip-manual-beijing",
+  { makeId, existingPlaces: [manualBeijingPlace] },
+);
+assert.equal(manualBeijingPlaces[0].country, "中国");
+
+const staleManualTitlePlaces = buildPlacesForGroup(
+  [
+    {
+      id: "photo-manual-title-beijing",
+      fileName: "beijing-airport-title.jpg",
+      title: "候机窗外的银色巨鸟",
+      capturedAt: "2024-07-31T10:00:00Z",
+      tripId: "trip-manual-title-beijing",
+      placeNodeId: "manual-place-title-beijing",
+      location: { lat: 39.9075, lng: 116.39723 },
+      locationResolution: {
+        status: "confirmed",
+        effectiveName: "候机窗外的银色巨鸟",
+        effectivePoint: { lat: 39.9075, lng: 116.39723 },
+        source: "manual_new_place",
+        candidates: [
+          {
+            id: "candidate-manual-title-beijing",
+            name: "候机窗外的银色巨鸟",
+            localizedNames: { zh: "候机窗外的银色巨鸟", en: "候机窗外的银色巨鸟", local: "候机窗外的银色巨鸟" },
+            country: "中国",
+            localizedCountryNames: { zh: "中国", en: "China", local: "中国" },
+            city: "北京",
+            localizedCityNames: { zh: "北京", en: "Beijing", local: "北京" },
+            point: { lat: 39.9075, lng: 116.39723 },
+            confidence: 1,
+            source: "manual",
+          },
+        ],
+        requiresUserAction: false,
+      },
+    },
+  ],
+  "trip-manual-title-beijing",
+  {
+    makeId,
+    existingPlaces: [
+      {
+        id: "manual-place-title-beijing",
+        tripId: "trip-manual-title-beijing",
+        name: "候机窗外的银色巨鸟",
+        names: { zh: "候机窗外的银色巨鸟", en: "候机窗外的银色巨鸟" },
+        country: "中国",
+        city: "北京",
+        center: { lat: 39.9075, lng: 116.39723 },
+        photoIds: ["photo-manual-title-beijing"],
+        timeRange: { start: "2024-07-31T10:00:00Z", end: "2024-07-31T10:00:00Z" },
+        pending: false,
+      },
+    ],
+  },
+);
+assert.equal(staleManualTitlePlaces[0].id, "manual-place-title-beijing");
+assert.equal(staleManualTitlePlaces[0].name, "北京");
+assert.equal(staleManualTitlePlaces[0].names.zh, "北京");
+assert.equal(staleManualTitlePlaces[0].country, "中国");
 
 const existingViennaPlace = {
   id: "place-vienna-existing",

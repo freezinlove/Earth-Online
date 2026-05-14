@@ -15,51 +15,16 @@ const alternateLanguagePriority = {
   zh: ["zh-CN", "zh-Hans", "zh"],
   en: ["en"],
 };
-const countryNameZh = {
-  AD: "安道尔",
-  AE: "阿联酋",
-  AF: "阿富汗",
-  AL: "阿尔巴尼亚",
-  AM: "亚美尼亚",
-  AR: "阿根廷",
-  AT: "奥地利",
-  AU: "澳大利亚",
-  BE: "比利时",
-  BG: "保加利亚",
-  BR: "巴西",
-  CA: "加拿大",
-  CH: "瑞士",
-  CL: "智利",
-  CN: "中国",
-  CZ: "捷克",
-  DE: "德国",
-  DK: "丹麦",
-  ES: "西班牙",
-  FI: "芬兰",
-  FR: "法国",
-  GB: "英国",
-  GR: "希腊",
-  HR: "克罗地亚",
-  HU: "匈牙利",
-  IE: "爱尔兰",
-  IS: "冰岛",
-  IT: "意大利",
-  JP: "日本",
-  KR: "韩国",
-  LI: "列支敦士登",
-  LU: "卢森堡",
-  MC: "摩纳哥",
-  NL: "荷兰",
-  NO: "挪威",
-  NZ: "新西兰",
-  PL: "波兰",
-  PT: "葡萄牙",
-  RO: "罗马尼亚",
-  SE: "瑞典",
-  SI: "斯洛文尼亚",
-  SK: "斯洛伐克",
-  US: "美国",
-};
+const zhRegionNames = new Intl.DisplayNames(["zh-CN"], { type: "region" });
+
+function countryNameZh(countryCode, fallback) {
+  if (countryCode === "HK" || countryCode === "MO") return "中国";
+  try {
+    return zhRegionNames.of(countryCode) || fallback || countryCode;
+  } catch {
+    return fallback || countryCode;
+  }
+}
 
 function parseTsv(text) {
   return text
@@ -297,7 +262,7 @@ try {
       Number(lng),
       countryCode,
       countryNameEn,
-      countryNameZh[countryCode] ?? countryNameEn,
+      countryNameZh(countryCode, countryNameEn),
       countryNameEn,
       admin1Code,
       admin1.get(admin1Key) ?? "",

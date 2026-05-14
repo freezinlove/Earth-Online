@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { safeArray } from "../domain/arrays.mjs";
+import { normalizeCountryDescription } from "../domain/country-normalizer.mjs";
+import { reverseLocalGeocode } from "../domain/local-geocoder.mjs";
 import { applyPendingDecision } from "../domain/pending-workflow.mjs";
 import { buildRoute } from "../domain/route-projector.mjs";
 import { rebuildTrips, rebuildTripsForPhotos } from "../domain/trip-rebuilder.mjs";
@@ -86,11 +88,14 @@ export function createEditServices({ readState, readVectorIndex, writeState, wri
   async function createPlace(body) {
     const state = await readState();
     const now = new Date().toISOString();
+    const center = { lat: Number(body.lat), lng: Number(body.lng) };
+    const geo = manualGeoDescription(center);
     const place = {
       id: makeId("manual-place"),
       tripId: body.tripId,
       name: body.name?.trim() || "手动地点",
-      center: { lat: Number(body.lat), lng: Number(body.lng) },
+      center,
+      ...geo,
       photoIds: [],
       timeRange: { start: now, end: now },
       pending: false,
@@ -304,6 +309,7 @@ export function createEditServices({ readState, readVectorIndex, writeState, wri
       if (!name) throw new Error("请输入地点名。");
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new Error("请输入有效经纬度。");
       const point = { lat, lng };
+      const geo = manualGeoDescription(point);
       const placeId = makeId("manual-place");
       const dates = photos.map((photo) => photo.capturedAt).filter(Boolean).sort();
       const place = {
@@ -312,6 +318,7 @@ export function createEditServices({ readState, readVectorIndex, writeState, wri
         name,
         displayName: name,
         center: point,
+        ...geo,
         coordinatePrecision: "estimated",
         photoIds,
         timeRange: { start: dates[0] ?? now, end: dates.at(-1) ?? dates[0] ?? now },
@@ -338,7 +345,7 @@ export function createEditServices({ readState, readVectorIndex, writeState, wri
                   confidence: 1,
                   source: "manual_new_place",
                   precision: "estimated",
-                  candidates: photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? [],
+                  candidates: [manualLocationCandidate({ name, point, geo, makeId }), ...(photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? [])],
                   requiresUserAction: false,
                   updatedAt: now,
                 },
@@ -384,6 +391,34 @@ export function createEditServices({ readState, readVectorIndex, writeState, wri
     }
 
     throw new Error("未知的手动处理方式。");
+  }
+
+  function manualGeoDescription(point) {
+    const candidate = reverseLocalGeocode(point, { makeId, preferCity: true })[0];
+    const country = normalizeCountryDescription(candidate?.country, candidate?.localizedCountryNames);
+    return {
+      country: country.country,
+      countryNames: country.countryNames,
+      city: candidate?.city,
+      cityNames: candidate?.localizedCityNames,
+    };
+  }
+
+  function manualLocationCandidate({ name, point, geo, makeId }) {
+    return {
+      id: makeId("candidate-manual"),
+      name,
+      localizedNames: { zh: name, en: name, local: name },
+      country: geo.country,
+      localizedCountryNames: geo.countryNames,
+      city: geo.city ?? name,
+      localizedCityNames: geo.cityNames,
+      point,
+      confidence: 1,
+      source: "manual",
+      precision: "confirmed",
+      reason: "用户手动在地球上标记地点，并由本地地名库反查国家/城市。",
+    };
   }
 
   function clearManualExifStatus(photo, overrides = {}) {

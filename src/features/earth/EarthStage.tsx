@@ -30,7 +30,9 @@ export type TravelMarker = {
 
 type GlobePath = {
   id: string;
-  points: Array<GeoPoint & { alt?: number }>;
+  kind: TravelMarker["kind"];
+  start: GeoPoint;
+  end: GeoPoint;
   crossCountry: boolean;
   distanceKm: number;
   longHop: boolean;
@@ -48,7 +50,13 @@ const GLOBE_RADIUS = 100;
 const GLOBE_SCALE = 0.0185;
 const MARKER_ALTITUDE = 0.022;
 const ROUTE_ENDPOINT_ALTITUDE = MARKER_ALTITUDE;
+const ROUTE_ARC_DETAIL = 72;
+const PLACE_ROUTE_LIFT_THRESHOLD_KM = 500;
+const COUNTRY_ROUTE_LIFT_THRESHOLD_KM = 1000;
+const ROUTE_MAX_ALTITUDE = 0.085;
+const ROUTE_LIFT_FACTOR = 0.045;
 const ROUTE_LONG_HOP = "#8f3f32";
+const ROUTE_COUNTRY = "#d77850";
 const ROUTE_ARROW = "#0f6f78";
 const LAND_PARTICLE = "#3f9fb3";
 const MEDIUM_LAND_PARTICLE = "#49bfd1";
@@ -180,15 +188,19 @@ function useGlobeAssetGeometry(kind: GlobeAssetKind) {
   return useMemo(() => createParticleGeometry(positions), [positions]);
 }
 
-function buildRouteStops(places: TravelMarker[]) {
-  return places
-    .filter((place) => place.kind === "place")
-    .slice()
-    .sort((a, b) => (a.startTime ?? "").localeCompare(b.startTime ?? ""));
+function routeTimeKey(marker: TravelMarker) {
+  return marker.startTime ?? marker.endTime ?? "";
 }
 
-export function applyRouteRoles(markers: TravelMarker[]) {
-  const routeStops = buildRouteStops(markers);
+function buildRouteStops(markers: TravelMarker[], kind: TravelMarker["kind"]) {
+  return markers
+    .filter((marker) => marker.kind === kind)
+    .slice()
+    .sort((a, b) => routeTimeKey(a).localeCompare(routeTimeKey(b)) || a.id.localeCompare(b.id));
+}
+
+export function applyRouteRoles(markers: TravelMarker[], kind: TravelMarker["kind"] = "place") {
+  const routeStops = buildRouteStops(markers, kind);
   const firstStop = routeStops[0];
   const lastStop = routeStops[routeStops.length - 1];
   if (!firstStop || !lastStop) return markers;
@@ -197,13 +209,18 @@ export function applyRouteRoles(markers: TravelMarker[]) {
   const lastPlaceIds = new Set(lastStop.placeIds ?? []);
   return markers.map((marker) => {
     const placeIds = marker.placeIds ?? [];
-    const routeRole: TravelMarker["routeRole"] = placeIds.some((id) => firstPlaceIds.has(id)) ? "start" : placeIds.some((id) => lastPlaceIds.has(id)) ? "end" : undefined;
+    const routeRole: TravelMarker["routeRole"] =
+      marker.id === firstStop.id || placeIds.some((id) => firstPlaceIds.has(id))
+        ? "start"
+        : marker.id === lastStop.id || placeIds.some((id) => lastPlaceIds.has(id))
+          ? "end"
+          : undefined;
     return { ...marker, routeRole };
   });
 }
 
-function routePaths(places: TravelMarker[], selected?: TravelMarker): GlobePath[] {
-  const orderedPlaces = buildRouteStops(places);
+function routePaths(markers: TravelMarker[], selected: TravelMarker | undefined, kind: TravelMarker["kind"]): GlobePath[] {
+  const orderedPlaces = buildRouteStops(markers, kind);
   if (orderedPlaces.length < 2) return [];
 
   return orderedPlaces.slice(0, -1).map((place, index) => {
@@ -211,30 +228,21 @@ function routePaths(places: TravelMarker[], selected?: TravelMarker): GlobePath[
     const point = place.center;
     const next = nextPlace.center;
     const segmentKm = distanceKm(point, next);
-    const distance = segmentKm / 6371;
     const crossCountry = place.countryName !== nextPlace.countryName;
-    const longHop = segmentKm >= 120;
-    const midAlt = longHop ? Math.min(0.13, ROUTE_ENDPOINT_ALTITUDE + distance * 0.08) : ROUTE_ENDPOINT_ALTITUDE;
+    const longHop = segmentKm >= routeLiftThresholdKm(kind);
     const active =
       !!selected &&
-      selected.kind === "place" &&
-      [point, next].some((routePoint) => distanceKm(routePoint, selected.center) < 18);
+      selected.kind === kind &&
+      (selected.id === place.id || selected.id === nextPlace.id || [point, next].some((routePoint) => distanceKm(routePoint, selected.center) < 18));
     return {
       id: `${place.id}-${nextPlace.id}`,
+      kind,
       active,
       crossCountry,
       distanceKm: segmentKm,
       longHop,
-      points: !longHop
-        ? [
-            { ...point, alt: ROUTE_ENDPOINT_ALTITUDE },
-            { ...next, alt: ROUTE_ENDPOINT_ALTITUDE },
-          ]
-        : [
-            { ...point, alt: ROUTE_ENDPOINT_ALTITUDE },
-            { lat: (point.lat + next.lat) / 2, lng: (point.lng + next.lng) / 2, alt: midAlt },
-            { ...next, alt: ROUTE_ENDPOINT_ALTITUDE },
-          ],
+      start: point,
+      end: next,
     };
   });
 }
@@ -248,6 +256,48 @@ function threeGlobeVector(point: GeoPoint, radius = GLOBE_RADIUS, altitude = 0) 
     scaledRadius * Math.cos(phi),
     scaledRadius * Math.sin(phi) * Math.sin(theta),
   );
+}
+
+function greatCircleDirection(start: THREE.Vector3, end: THREE.Vector3, angle: number, progress: number) {
+  if (angle < 0.000001) return start.clone();
+  if (Math.PI - angle < 0.0001) {
+    const reference = Math.abs(start.y) < 0.92 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+    const axis = new THREE.Vector3().crossVectors(reference, start).normalize();
+    return start.clone().applyAxisAngle(axis, angle * progress).normalize();
+  }
+
+  const sinAngle = Math.sin(angle);
+  return start
+    .clone()
+    .multiplyScalar(Math.sin((1 - progress) * angle) / sinAngle)
+    .add(end.clone().multiplyScalar(Math.sin(progress * angle) / sinAngle))
+    .normalize();
+}
+
+function routeArcLift(path: GlobePath) {
+  const centralDistance = path.distanceKm / 6371;
+  if (path.distanceKm < routeLiftThresholdKm(path.kind)) return 0;
+  const peakAltitude = Math.min(ROUTE_MAX_ALTITUDE, ROUTE_ENDPOINT_ALTITUDE + centralDistance * ROUTE_LIFT_FACTOR);
+  return Math.max(0, peakAltitude - ROUTE_ENDPOINT_ALTITUDE);
+}
+
+function routeLiftThresholdKm(kind: TravelMarker["kind"]) {
+  return kind === "country" ? COUNTRY_ROUTE_LIFT_THRESHOLD_KM : PLACE_ROUTE_LIFT_THRESHOLD_KM;
+}
+
+function greatCircleArcPoints(path: GlobePath) {
+  const startDirection = threeGlobeVector(path.start, 1).normalize();
+  const endDirection = threeGlobeVector(path.end, 1).normalize();
+  const angle = Math.acos(THREE.MathUtils.clamp(startDirection.dot(endDirection), -1, 1));
+  const segmentCount = Math.max(8, Math.ceil((angle / Math.PI) * ROUTE_ARC_DETAIL));
+  const lift = routeArcLift(path);
+
+  return Array.from({ length: segmentCount + 1 }, (_, index) => {
+    const progress = index / segmentCount;
+    const altitude = ROUTE_ENDPOINT_ALTITUDE + Math.sin(Math.PI * progress) * lift;
+    const radius = GLOBE_RADIUS * (1 + altitude);
+    return greatCircleDirection(startDirection, endDirection, angle, progress).multiplyScalar(radius);
+  });
 }
 
 function isFrontHemisphere(worldPoint: THREE.Vector3, camera: THREE.Camera, globeCenter: THREE.Vector3, threshold = 0.035) {
@@ -320,7 +370,7 @@ function LandParticleLayer() {
     if (!materialRef.current) return;
     const zoom = zoomProgress(camera);
     const fadeOut = smoothstep(0.22, 0.5, zoom);
-    materialRef.current.opacity = (0.62 + Math.sin(clock.elapsedTime * 0.7) * 0.018) * THREE.MathUtils.lerp(1, 0.035, fadeOut);
+    materialRef.current.opacity = (0.78 + Math.sin(clock.elapsedTime * 0.7) * 0.018) * THREE.MathUtils.lerp(1, 0.08, fadeOut);
   });
 
   return (
@@ -458,19 +508,18 @@ function TravelRouteLayer({ paths }: { paths: GlobePath[] }) {
   const lines = useMemo(
     () =>
       paths.map((path) => {
-        const controlPoints = path.points.map((point) => threeGlobeVector(point, GLOBE_RADIUS, point.alt ?? 0.006));
-        const curve = new THREE.CatmullRomCurve3(controlPoints);
-        const arrowPoint = curve.getPoint(0.58);
-        const arrowDirectionPoint = curve.getPoint(0.64);
+        const arcPoints = greatCircleArcPoints(path);
+        const arrowIndex = Math.min(arcPoints.length - 2, Math.max(0, Math.floor((arcPoints.length - 1) * 0.58)));
         return {
           id: path.id,
+          kind: path.kind,
           active: path.active,
           crossCountry: path.crossCountry,
           distanceKm: path.distanceKm,
           longHop: path.longHop,
-          points: curve.getPoints(42).map((point) => point.toArray() as [number, number, number]),
-          arrowPosition: arrowPoint.toArray() as [number, number, number],
-          arrowDirectionPoint: arrowDirectionPoint.toArray() as [number, number, number],
+          points: arcPoints.map((point) => point.toArray() as [number, number, number]),
+          arrowPosition: arcPoints[arrowIndex].toArray() as [number, number, number],
+          arrowDirectionPoint: arcPoints[arrowIndex + 1].toArray() as [number, number, number],
         };
       }),
     [paths],
@@ -490,6 +539,7 @@ function TravelRouteSegment({
 }: {
   line: {
     id: string;
+    kind: TravelMarker["kind"];
     active: boolean;
     crossCountry: boolean;
     longHop: boolean;
@@ -503,9 +553,14 @@ function TravelRouteSegment({
 
   useFrame(() => {
     const zoom = zoomProgress(camera);
+    const countryLodOpacity = 1 - smoothstep(0.28, 0.56, zoom);
+    const placeLodOpacity = smoothstep(0.28, 0.56, zoom);
     const intraCountryOpacity = smoothstep(0.34, 0.6, zoom) * 0.88;
     const crossCountryOpacity = THREE.MathUtils.lerp(0.92, 0.62, smoothstep(0.45, 0.82, zoom));
-    const routeOpacity = line.crossCountry ? crossCountryOpacity : intraCountryOpacity;
+    const routeOpacity =
+      line.kind === "country"
+        ? countryLodOpacity * THREE.MathUtils.lerp(0.86, 0.58, smoothstep(0.18, 0.52, zoom))
+        : placeLodOpacity * (line.crossCountry ? crossCountryOpacity : intraCountryOpacity);
     const opacity = line.active ? Math.max(routeOpacity, 0.72) : routeOpacity;
     const route = lineRef.current;
     const material = Array.isArray(route?.material) ? route?.material[0] : route?.material;
@@ -521,15 +576,15 @@ function TravelRouteSegment({
       <Line
         ref={lineRef}
         points={line.points}
-        color={ROUTE_LONG_HOP}
-        lineWidth={line.active ? 3.5 : line.longHop ? 3.05 : 2.45}
+        color={line.kind === "country" ? ROUTE_COUNTRY : ROUTE_LONG_HOP}
+        lineWidth={line.active ? 3.5 : line.kind === "country" ? 2.75 : line.longHop ? 3.05 : 2.45}
         transparent
         opacity={0}
         depthWrite={false}
         depthTest
         renderOrder={12}
       />
-      <RouteArrow color={ROUTE_ARROW} directionPoint={line.arrowDirectionPoint} position={line.arrowPosition} />
+      {line.kind === "place" ? <RouteArrow color={ROUTE_ARROW} directionPoint={line.arrowDirectionPoint} position={line.arrowPosition} /> : null}
     </group>
   );
 }
@@ -598,7 +653,7 @@ function ThreeGlobeLayer() {
       emissive: "#d8c8b9",
       emissiveIntensity: 0.18,
       transparent: true,
-      opacity: 0.86,
+      opacity: 0.78,
       depthWrite: false,
     });
 
@@ -860,8 +915,8 @@ function GlobeScene({
         <LandParticleLayer />
         <MediumLandParticleLayer />
         <NearLandParticleLayer />
-        <AssetLineLayer kind="coastLine" color={COAST_LINE} baseOpacity={0.5} renderOrder={5} />
-        <AssetLineLayer kind="countryLine" color={COUNTRY_BOUNDARY_LINE} baseOpacity={0.36} renderOrder={6} />
+        <AssetLineLayer kind="coastLine" color={COAST_LINE} baseOpacity={0.68} renderOrder={5} />
+        <AssetLineLayer kind="countryLine" color={COUNTRY_BOUNDARY_LINE} baseOpacity={0.46} renderOrder={6} />
         <AssetLineLayer kind="provinceLine" color={PROVINCE_BOUNDARY_LINE} baseOpacity={0.44} renderOrder={7} />
         <GlobeRouteOcclusionLayer />
         <TravelRouteLayer paths={paths} />
@@ -1184,7 +1239,16 @@ export function EarthStage() {
     }
     return Array.from(byTrip.values()).flatMap((tripMarkers) => applyRouteRoles(tripMarkers));
   }, [projectedMarkers]);
-  const countryMarkers = useMemo(() => projectedMarkers.filter((marker) => marker.kind === "country"), [projectedMarkers]);
+  const countryMarkers = useMemo(() => {
+    const byTrip = new Map<string, TravelMarker[]>();
+    for (const marker of projectedMarkers) {
+      if (marker.kind !== "country") continue;
+      const tripMarkers = byTrip.get(marker.tripId) ?? [];
+      tripMarkers.push(marker);
+      byTrip.set(marker.tripId, tripMarkers);
+    }
+    return Array.from(byTrip.values()).flatMap((tripMarkers) => applyRouteRoles(tripMarkers, "country"));
+  }, [projectedMarkers]);
   const selectedMarker = [...countryMarkers, ...placeMarkers].find((marker) => marker.id === selectedMapItem?.id);
   const annotationTrip = selectedMarker ? trips.find((item) => item.id === selectedMarker.tripId) : trip;
   const markers = useMemo(
@@ -1201,8 +1265,18 @@ export function EarthStage() {
       tripMarkers.push(marker);
       byTrip.set(marker.tripId, tripMarkers);
     }
-    return Array.from(byTrip.values()).flatMap((tripMarkers) => routePaths(tripMarkers, activeMarker));
-  }, [activeMarker, placeMarkers]);
+    const placePaths = Array.from(byTrip.values()).flatMap((tripMarkers) => routePaths(tripMarkers, activeMarker, "place"));
+
+    byTrip.clear();
+    for (const marker of countryMarkers) {
+      const tripMarkers = byTrip.get(marker.tripId) ?? [];
+      tripMarkers.push(marker);
+      byTrip.set(marker.tripId, tripMarkers);
+    }
+    const countryPaths = Array.from(byTrip.values()).flatMap((tripMarkers) => routePaths(tripMarkers, activeMarker, "country"));
+
+    return [...countryPaths, ...placePaths];
+  }, [activeMarker, countryMarkers, placeMarkers]);
   const previewPlace = previewPhoto?.placeNodeId ? places.find((place) => place.id === previewPhoto.placeNodeId) : undefined;
   const homeState = activePanel === "globe" ? "active" : "covered";
   const pointPicking = Boolean(manualPlacePick?.isPicking);

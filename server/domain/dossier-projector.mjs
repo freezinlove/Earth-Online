@@ -1,20 +1,5 @@
 import { dateKey, sortByDate, unique } from "./projection-utils.mjs";
-
-const countryEnByZh = {
-  中国: "China",
-  捷克: "Czechia",
-  奥地利: "Austria",
-  德国: "Germany",
-  匈牙利: "Hungary",
-  挪威: "Norway",
-  瑞士: "Switzerland",
-  日本: "Japan",
-  法国: "France",
-  意大利: "Italy",
-  英国: "United Kingdom",
-  美国: "United States",
-  瑞典: "Sweden",
-};
+import { normalizeCountryDescription, normalizeCountryName } from "./country-normalizer.mjs";
 
 export function buildDossierGroups(state) {
   return state.trips.map((trip) => {
@@ -57,12 +42,12 @@ export function buildDossierGroups(state) {
 function buildCountryGroups(days) {
   const groups = [];
   for (const day of days) {
-    const country = day.country ?? "未标国家";
+    const country = normalizeCountryName(day.country) ?? "未标国家";
     const current = groups.at(-1);
     const normalizedDay = {
       ...day,
       country,
-      countryNames: day.countryNames ?? namesFromFallback(country),
+      countryNames: normalizeCountryDescription(country, day.countryNames).countryNames ?? namesFromFallback(country),
       photoIds: unique(day.photoIds),
       placeIds: unique(day.placeIds),
     };
@@ -74,7 +59,7 @@ function buildCountryGroups(days) {
 }
 
 function namesFromFallback(value) {
-  return value ? { zh: value, en: countryEnByZh[value] ?? value, local: value } : undefined;
+  return normalizeCountryDescription(value).countryNames;
 }
 
 function inferDayCountryDescription(day, photoById, placeById, trip) {
@@ -82,9 +67,9 @@ function inferDayCountryDescription(day, photoById, placeById, trip) {
     .map((id) => placeById.get(id))
     .filter((place) => place?.country && place.country !== "待确认");
   if (placeCountries.length) {
-    const country = mostCommon(placeCountries.map((place) => place.country));
-    const place = placeCountries.find((item) => item.country === country);
-    return { country, countryNames: place?.countryNames ?? namesFromFallback(country) };
+    const country = normalizeCountryName(mostCommon(placeCountries.map((place) => place.country)));
+    const place = placeCountries.find((item) => normalizeCountryName(item.country) === country);
+    return { country, countryNames: normalizeCountryDescription(country, place?.countryNames).countryNames };
   }
 
   const candidateCountries = day.photoIds
@@ -93,9 +78,9 @@ function inferDayCountryDescription(day, photoById, placeById, trip) {
     .map((photo) => strongestCandidateCountryDescription(photo))
     .filter((item) => item.country);
   if (candidateCountries.length) {
-    const country = mostCommon(candidateCountries.map((item) => item.country));
-    const candidate = candidateCountries.find((item) => item.country === country);
-    return { country, countryNames: candidate?.countryNames ?? namesFromFallback(country) };
+    const country = normalizeCountryName(mostCommon(candidateCountries.map((item) => item.country)));
+    const candidate = candidateCountries.find((item) => normalizeCountryName(item.country) === country);
+    return { country, countryNames: normalizeCountryDescription(country, candidate?.countryNames).countryNames };
   }
 
   const fallbackPhoto = photoById.get(day.photoIds[0]);
@@ -104,7 +89,7 @@ function inferDayCountryDescription(day, photoById, placeById, trip) {
 }
 
 function inferPhotoCountry(photo, place, trip) {
-  if (place?.country && place.country !== "待确认") return place.country;
+  if (place?.country && place.country !== "待确认") return normalizeCountryName(place.country);
   const candidateCountry = strongestCandidateCountry(photo, place);
   if (candidateCountry) return candidateCountry;
   const text = [
@@ -119,8 +104,8 @@ function inferPhotoCountry(photo, place, trip) {
     .filter(Boolean)
     .join(" ");
   const direct = trip.countries?.find((country) => text.includes(country));
-  if (direct) return direct;
-  return trip.countries?.[0];
+  if (direct) return normalizeCountryName(direct);
+  return normalizeCountryName(trip.countries?.[0]);
 }
 
 function mostCommon(values) {
@@ -131,18 +116,20 @@ function mostCommon(values) {
 
 function strongestCandidateCountry(photo, place) {
   const candidates = photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? [];
-  return candidates
+  const country = candidates
     .filter((candidate) => candidate?.country && (!candidate.point || !place?.center || distanceKm(candidate.point, place.center) <= 35))
     .sort((left, right) => Number(right.confidence ?? 0) - Number(left.confidence ?? 0))[0]?.country;
+  return normalizeCountryName(country);
 }
 
 function strongestCandidateCountryDescription(photo, place) {
   const candidate = (photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? [])
     .filter((item) => item?.country && (!item.point || !place?.center || distanceKm(item.point, place.center) <= 35))
     .sort((left, right) => Number(right.confidence ?? 0) - Number(left.confidence ?? 0))[0];
+  const country = normalizeCountryName(candidate?.country);
   return {
-    country: candidate?.country,
-    countryNames: candidate?.localizedCountryNames ?? namesFromFallback(candidate?.country),
+    country,
+    countryNames: normalizeCountryDescription(country, candidate?.localizedCountryNames).countryNames,
   };
 }
 

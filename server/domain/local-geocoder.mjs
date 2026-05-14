@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { geodataPath } from "../config/paths.mjs";
+import { countryAliasKeys, normalizeCountryDescription, normalizedCountryText } from "./country-normalizer.mjs";
 import { haversineKm, isUsableLocation } from "./geo.mjs";
 import { cityPresets } from "./geo-catalog.mjs";
 import { zhPlaceNameOverride } from "./place-name-overrides.mjs";
@@ -16,6 +17,7 @@ const englishNameOverrides = {
 };
 let db;
 let warnedMissing = false;
+const countryCapitalCache = new Map();
 
 function database() {
   if (db) return db;
@@ -87,18 +89,8 @@ function preferCityLevel(items) {
   });
 }
 
-function normalizedText(value) {
-  return String(value ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-}
-
 function countryAliases(value) {
-  const normalized = normalizedText(value).replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
-  if (!normalized) return [];
-  if (["us", "usa", "unitedstates", "unitedstatesofamerica"].includes(normalized)) return ["us", "usa", "unitedstates", "unitedstatesofamerica"];
-  return [normalized];
+  return countryAliasKeys(value);
 }
 
 function countryMatches(row, country) {
@@ -114,14 +106,14 @@ function localizedName(row) {
   const override = [row.name_zh, row.name, row.ascii_name, row.name_en].map(zhPlaceNameOverride).find(Boolean);
   if (override) return override;
   if (row.name_zh) return row.name_zh;
-  const values = [row.name, row.ascii_name].map(normalizedText);
-  const preset = cityPresets.find((item) => values.some((value) => value === normalizedText(item.keyword) || value.includes(normalizedText(item.keyword))));
+  const values = [row.name, row.ascii_name].map(normalizedCountryText);
+  const preset = cityPresets.find((item) => values.some((value) => value === normalizedCountryText(item.keyword) || value.includes(normalizedCountryText(item.keyword))));
   return preset?.city || row.name_en || row.ascii_name || row.name;
 }
 
 function localizedNames(row) {
   const zh = localizedName(row);
-  const normalizedValues = [row.name, row.ascii_name, row.name_en].map(normalizedText);
+  const normalizedValues = [row.name, row.ascii_name, row.name_en].map(normalizedCountryText);
   const en = normalizedValues.map((value) => englishNameOverrides[value]).find(Boolean) || row.name_en || row.ascii_name || row.name;
   const local = row.name;
   return {
@@ -132,13 +124,11 @@ function localizedNames(row) {
 }
 
 function countryNames(row) {
-  const zh = row.country_name_zh || row.country_name || row.country_code;
-  const en = row.country_name_en || row.country_name || row.country_code;
-  return {
-    zh,
-    en,
-    local: row.country_name || en,
-  };
+  return normalizeCountryDescription(row.country_code || row.country_name_zh || row.country_name_en || row.country_name, {
+    zh: row.country_name_zh,
+    en: row.country_name_en,
+    local: row.country_name,
+  }).countryNames;
 }
 
 function rowToCandidate(row, { point, confidence, reason, makeId, index = 0 } = {}) {
@@ -171,8 +161,8 @@ function rowToCandidate(row, { point, confidence, reason, makeId, index = 0 } = 
 }
 
 function presetCandidateForText(text) {
-  const normalized = normalizedText(text);
-  return cityPresets.find((item) => normalized.includes(normalizedText(item.keyword)) || normalized.includes(normalizedText(item.city)));
+  const normalized = normalizedCountryText(text);
+  return cityPresets.find((item) => normalized.includes(normalizedCountryText(item.keyword)) || normalized.includes(normalizedCountryText(item.city)));
 }
 
 export function forwardLocalGeocode({ name, city, country } = {}, { makeId } = {}) {
@@ -180,7 +170,7 @@ export function forwardLocalGeocode({ name, city, country } = {}, { makeId } = {
   const texts = [city, name].map((value) => String(value ?? "").trim()).filter(Boolean);
   if (!texts.length && !country) return [];
 
-  const preset = texts.map(presetCandidateForText).find((item) => !country || normalizedText(item?.country) === normalizedText(country));
+  const preset = texts.map(presetCandidateForText).find((item) => !country || countryAliases(item?.country).some((alias) => countryAliases(country).includes(alias)));
   const queries = Array.from(new Set([preset?.keyword, preset?.city, ...texts].filter(Boolean)));
   const rows = [];
   if (connection) {
@@ -209,13 +199,14 @@ export function forwardLocalGeocode({ name, city, country } = {}, { makeId } = {
   }
 
   if (preset?.point) {
+    const country = normalizeCountryDescription(preset.country);
     return [
       {
-        id: makeId?.("candidate") ?? `candidate-geocode-preset-${normalizedText(preset.keyword).replace(/[^a-z0-9]+/g, "-")}`,
+        id: makeId?.("candidate") ?? `candidate-geocode-preset-${normalizedCountryText(preset.keyword).replace(/[^a-z0-9]+/g, "-")}`,
         name: preset.city,
         localizedNames: { zh: preset.city, en: preset.keyword, local: preset.city },
-        country: preset.country,
-        localizedCountryNames: { zh: preset.country, en: preset.country, local: preset.country },
+        country: country.country,
+        localizedCountryNames: country.countryNames,
         city: preset.city,
         localizedCityNames: { zh: preset.city, en: preset.keyword, local: preset.city },
         point: preset.point,
@@ -285,4 +276,36 @@ export function reverseLocalGeocode(point, { makeId, preferCity = false } = {}) 
         distanceKm: Number(distanceKm.toFixed(3)),
       };
     });
+}
+
+export function countryCapitalPoint(country) {
+  const key = countryAliases(country)[0];
+  if (!key) return undefined;
+  if (countryCapitalCache.has(key)) return countryCapitalCache.get(key);
+
+  const connection = database();
+  if (!connection) {
+    countryCapitalCache.set(key, undefined);
+    return undefined;
+  }
+
+  const row = connection
+    .prepare(
+      `
+        SELECT *
+        FROM geoname_places
+        WHERE feature_code IN ('PPLC', 'PPLCD')
+      `,
+    )
+    .all()
+    .filter((candidate) => countryMatches(candidate, country))
+    .sort((left, right) => {
+      const leftRank = left.feature_code === "PPLC" ? 0 : 1;
+      const rightRank = right.feature_code === "PPLC" ? 0 : 1;
+      return leftRank - rightRank || Number(right.population ?? 0) - Number(left.population ?? 0);
+    })[0];
+
+  const point = row ? { lat: Number(row.lat), lng: Number(row.lng) } : undefined;
+  countryCapitalCache.set(key, point);
+  return point;
 }

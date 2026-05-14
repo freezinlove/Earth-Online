@@ -1,5 +1,6 @@
+import { normalizeCountryDescription, normalizeCountryName } from "./country-normalizer.mjs";
 import { haversineKm, inferPreset } from "./geo.mjs";
-import { bestDisplayName, candidateLocalityKey, cleanPlaceName, collectLocationCandidates, isWeakPlaceName, selectPlaceDescription } from "./place-name-selector.mjs";
+import { bestDisplayName, candidateLocalityKey, cleanPlaceName, collectLocationCandidates, isPhotoTitlePlaceName, isWeakPlaceName, selectPlaceDescription } from "./place-name-selector.mjs";
 
 const DEFAULT_CLUSTER_RADIUS_KM = 12;
 const SAME_CITY_CLUSTER_RADIUS_KM = 12;
@@ -30,16 +31,17 @@ export function buildPlacesForGroup(group, tripId, { makeId, existingPlaces = []
       if (existing?.id) usedExistingPlaceIds.add(existing.id);
       const preserveName = shouldPreserveExistingName(existing, cluster.photos) ? existing.name : undefined;
       const description = selectPlaceDescription(cluster.photos, center, { preserveName });
+      const countryDescription = existing && preserveName && existing.country ? normalizeCountryDescription(existing.country, existing.countryNames) : normalizeCountryDescription(description.country, description.countryNames);
       return {
         id: existing?.id ?? makeId("place"),
         tripId,
         name: description.name,
         names: existing && preserveName ? existing.names ?? description.names : description.names,
         displayName: existing && preserveName ? existing.displayName ?? bestDisplayName(cluster.photos, description.name) : bestDisplayName(cluster.photos, description.name),
-        country: description.country,
-        countryNames: existing && preserveName ? existing.countryNames ?? description.countryNames : description.countryNames,
-        city: description.city,
-        cityNames: existing && preserveName ? existing.cityNames ?? description.cityNames : description.cityNames,
+        country: countryDescription.country,
+        countryNames: countryDescription.countryNames,
+        city: existing && preserveName && existing.city ? existing.city : description.city,
+        cityNames: existing && preserveName && existing.cityNames ? existing.cityNames : description.cityNames,
         center,
         photoIds: cluster.photos.map((photo) => photo.id),
         timeRange: { start: cluster.photos[0]?.capturedAt, end: cluster.photos.at(-1)?.capturedAt },
@@ -102,13 +104,15 @@ function photoPlaceContext(photo) {
     addClean(names, candidate.city);
     const localityKey = candidateLocalityKey(candidate);
     if (localityKey) localityKeys.add(localityKey);
-    if (candidate.country && candidate.country !== "待确认") countries.add(candidate.country);
+    const country = normalizeCountryName(candidate.country);
+    if (country && country !== "待确认") countries.add(country);
   }
   if (!preset.city.includes("待确认")) {
     addClean(cities, preset.city);
     addClean(names, preset.city);
   }
-  if (preset.country && preset.country !== "待确认") countries.add(preset.country);
+  const presetCountry = normalizeCountryName(preset.country);
+  if (presetCountry && presetCountry !== "待确认") countries.add(presetCountry);
 
   return {
     cities,
@@ -175,7 +179,7 @@ function findExistingPlaceForCluster(cluster, existingPlaces) {
 
 function shouldPreserveExistingName(existing, photos) {
   if (!existing) return false;
-  if (String(existing.id).startsWith("manual-place")) return true;
+  if (String(existing.id).startsWith("manual-place")) return !isPhotoTitlePlaceName(existing.name, photos);
   if (isWeakPlaceName(existing.name)) return false;
   const beforeCount = existing.photoIds?.length ?? 0;
   const afterCount = photos.length;

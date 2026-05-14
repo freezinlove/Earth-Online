@@ -1,3 +1,4 @@
+import { uniqueNormalizedCountries } from "./country-normalizer.mjs";
 import { buildPlacesForGroup } from "./place-projector.mjs";
 import { buildPhotoRoute } from "./route-projector.mjs";
 
@@ -35,5 +36,17 @@ export function rebuildTrips(state, affectedTripIds, { makeId, allowExistingPlac
     }
   }
 
-  return { ...state, photos, placeNodes, routes };
+  const trips = state.trips.map((trip) => {
+    if (!affectedTripIds.has(trip.id)) return trip;
+    const tripPlaces = placeNodes.filter((place) => place.tripId === trip.id);
+    const countries = uniqueNormalizedCountries(tripPlaces.map((place) => place.country));
+    const cities = Array.from(new Set(tripPlaces.map((place) => place.city).filter(Boolean)));
+    return {
+      ...trip,
+      countries: countries.length ? countries : trip.countries,
+      cities: cities.length ? cities : trip.cities,
+    };
+  });
+
+  return { ...state, trips, photos, placeNodes, routes };
 }

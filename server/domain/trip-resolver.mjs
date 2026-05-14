@@ -1,4 +1,5 @@
 import { daysBetweenRanges, toDateInput } from "./dates.mjs";
+import { normalizeCountryName } from "./country-normalizer.mjs";
 import { inferPreset, isUsableLocation } from "./geo.mjs";
 
 export function groupImportedPhotos(photos) {
@@ -27,7 +28,8 @@ export function dominantPresetsForPhotos(photos) {
   const countryCounts = new Map();
   for (const item of geoItems) {
     if (item.city && !String(item.city).includes("待确认")) cityCounts.set(item.city, (cityCounts.get(item.city) ?? 0) + item.weight);
-    if (item.country && item.country !== "待确认") countryCounts.set(item.country, (countryCounts.get(item.country) ?? 0) + item.weight);
+    const country = normalizeCountryName(item.country);
+    if (country && country !== "待确认") countryCounts.set(country, (countryCounts.get(country) ?? 0) + item.weight);
   }
   const rankedCities = Array.from(cityCounts.entries()).sort((a, b) => b[1] - a[1]).map(([city]) => city);
   const rankedCountries = Array.from(countryCounts.entries()).sort((a, b) => b[1] - a[1]).map(([country]) => country);
@@ -44,20 +46,20 @@ function photoGeoItems(photo) {
     if (!candidate?.country && !candidate?.city && !candidate?.name) continue;
     items.push({
       city: candidate.city || candidate.name,
-      country: candidate.country,
+      country: normalizeCountryName(candidate.country),
       weight: Math.max(0.1, Number(candidate.confidence ?? 0.5)) * 2,
     });
   }
   if (photo.locationResolution?.effectiveName) {
     items.push({
       city: photo.locationResolution.effectiveName,
-      country: candidates.find((candidate) => candidate.name === photo.locationResolution.effectiveName || candidate.city === photo.locationResolution.effectiveName)?.country,
+      country: normalizeCountryName(candidates.find((candidate) => candidate.name === photo.locationResolution.effectiveName || candidate.city === photo.locationResolution.effectiveName)?.country),
       weight: photo.locationResolution.status === "confirmed" ? 2 : 1,
     });
   }
   if (isUsableLocation(photo.location)) {
     const preset = inferPreset(photo.fileName, photo.location);
-    if (!preset.city.includes("待确认")) items.push({ city: preset.city, country: preset.country, weight: 1.5 });
+    if (!preset.city.includes("待确认")) items.push({ city: preset.city, country: normalizeCountryName(preset.country), weight: 1.5 });
   }
   return items;
 }
