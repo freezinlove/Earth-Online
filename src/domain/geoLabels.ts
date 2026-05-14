@@ -34,7 +34,7 @@ for (const code of REGION_CODES) {
   registerCountryAlias(en, zh);
 }
 
-for (const alias of ["Hong Kong", "Hongkong", "Hong Kong SAR", "Hong Kong SAR China", "HK", "中国香港", "中国香港特别行政区", "香港", "Macao", "Macau", "Macao SAR", "Macao SAR China", "MO", "中国澳门", "中国澳门特别行政区", "澳门"]) {
+for (const alias of ["Hong Kong", "Hongkong", "Hong Kong SAR", "Hong Kong SAR China", "HK", "中国香港", "中国香港特别行政区", "香港", "Macao", "Macau", "Macao SAR", "Macao SAR China", "MO", "中国澳门", "中国澳门特别行政区", "澳门", "Taiwan", "Taiwan Province of China", "TW", "Republic of China", "ROC", "中国台湾", "台湾", "臺灣", "台灣"]) {
   registerCountryAlias(alias, "中国");
 }
 

@@ -3,68 +3,68 @@
 </p>
 
 <p align="center">
-  <a href="./docs/README.en.md">English</a>
+  <a href="./docs/README.zh.md">中文</a>
 </p>
 
-<h1 align="center">献给热爱旅行的你</h1>
+<h1 align="center">A Travel Gift, Made for You</h1>
 
 <p align="center">
-  一座由 AI 驱动的自动化私人旅行星球。
+  An automated private travel planet powered by AI.
 </p>
 
 <p align="center">
-  Earth_Online 会自动理解你的照片、辨认旅途中的地点、整理时间与路线，把散落在相册里的回忆重新点亮在 3D 地球、时间线和旅行档案里。
+  Earth_Online automatically understands your photos, recognizes the places in your trips, organizes time and routes, and brings scattered memories back to life on a 3D Earth, timeline, and travel archive.
 </p>
 
 <br />
 
-## 推荐使用方式：桌面版
+## Recommended Usage: Desktop App
 
-普通用户建议使用桌面安装包，不需要手动启动前端和后端服务。
+Regular users should use the desktop installer. You do not need to manually start frontend or backend services.
 
-从右侧 Releases 中获取安装包，直接进行安装：
+Get the installer from the Releases section on the right, then run it directly:
 
 ```text
-Earth Online Setup 0.1.0.exe
+Earth Online Setup 0.1.1.exe
 ```
 
-## 使用建议
+## Usage Tips
 
-- 尽量导入带有 GPS 信息的照片。
-- 无 GPS 照片可以通过前后照片上下文进行二次判断。
-- Embedding 是可选项，不启用也可以正常浏览和整理照片。
-- 可以多试试点击时间线，非常好用。
-- 照片导入速度主要受本地网络速度和云端模型供应商处理速度影响，会有明显慢尾效应。
-- 单批次导入上限为 1000 张。个人建议单次导入 400 张及以下比较稳妥，因为我没测过 400 张往上的批次。
+- Prefer importing photos with GPS metadata.
+- Photos without GPS can be resolved using nearby photo context.
+- Embedding is optional. Browsing and organizing photos still works without it.
+- Try clicking the timeline frequently. It is one of the main ways to explore the archive.
+- Photo import speed depends heavily on local network speed and cloud model provider throughput, so long-tail slowdowns are expected.
+- A single import batch supports up to 1000 photos. I personally recommend 400 or fewer photos per batch because larger batches have not been tested enough.
 
-## 面向开发者的简要说明
+## Brief Developer Notes
 
-开发或本地调试需要 Node.js `24+` 和 npm `11+`。
+Development and local debugging require Node.js `24+` and npm `11+`.
 
 ```powershell
 winget install OpenJS.NodeJS
 ```
 
-macOS / Linux 可通过 Node.js 官网或 nvm 安装 Node.js `24+`。
+On macOS / Linux, install Node.js `24+` from the Node.js website or through nvm.
 
-安装依赖：
+Install dependencies:
 
 ```bash
 npm ci
 ```
 
-启动桌面开发版：
+Start desktop development mode:
 
 ```bash
 npm run electron:dev
 ```
 
-启动 Web 开发版：
+Start Web development mode:
 
 ```bash
 npm run dev
 ```
 
-Web 开发版会打开 `http://localhost:5173/`，但浏览器里不能直接选择系统数据目录。需要改数据目录时，请在启动前设置 `EARTH_ONLINE_DATA_DIR`。
+The Web development build opens `http://localhost:5173/`, but browsers cannot directly choose a system data directory. To change the data directory, set `EARTH_ONLINE_DATA_DIR` before startup.
 
-完整开发、打包、测试和数据目录说明见 [docs/README.dev.md](./docs/README.dev.md)。
+For full development, packaging, testing, and data-directory documentation, see [docs/README.dev.en.md](./docs/README.dev.en.md).

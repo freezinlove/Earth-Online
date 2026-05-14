@@ -246,9 +246,19 @@ assert.equal(normalizeCountryName("Argentina"), "阿根廷");
 assert.equal(normalizeCountryName("Côte d’Ivoire"), "科特迪瓦");
 assert.equal(normalizeCountryName("Hong Kong"), "中国");
 assert.equal(normalizeCountryName("HK"), "中国");
+assert.equal(normalizeCountryName("Taiwan"), "中国");
+assert.equal(normalizeCountryName("TW"), "中国");
+assert.equal(normalizeCountryName("台湾"), "中国");
+assert.equal(normalizeCountryName("臺灣"), "中国");
 const hongKongReverse = reverseLocalGeocode({ lat: 22.3193, lng: 114.1694 }, { preferCity: true })[0];
 assert.equal(hongKongReverse?.country, "中国");
 assert.equal(hongKongReverse?.localizedCountryNames?.en, "China");
+const taipeiReverse = reverseLocalGeocode({ lat: 25.05306, lng: 121.52639 }, { preferCity: true })[0];
+assert.equal(taipeiReverse?.country, "中国");
+assert.equal(taipeiReverse?.localizedCountryNames?.en, "China");
+const taipeiForwardAsChina = forwardLocalGeocode({ city: "Taipei", country: "China" })[0];
+assert.equal(taipeiForwardAsChina?.country, "中国");
+assert.equal(taipeiForwardAsChina?.countryCode, "TW");
 
 const staleCoverProjection = projectState({
   trips: [

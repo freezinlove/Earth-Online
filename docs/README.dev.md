@@ -6,7 +6,7 @@
 
 Earth_Online 是一个本地优先、AI 驱动的旅行照片档案工具。它会导入个人旅行照片，读取 EXIF 元数据，按需调用 AI 模型理解地点和画面内容，将照片归档成旅程，补全缺失的位置上下文，并把结果投射到 3D 地球时间线上。
 
-本文档面向开发者。面向普通用户的说明见 [README.md](../README.md)。
+本文档面向开发者。面向普通用户的中文说明见 [README.zh.md](./README.zh.md)。
 
 ## 运行环境
 
@@ -564,7 +564,7 @@ git ls-files | sort
 
 ## 发布检查表
 
-1. 确认 [README.md](../README.md) 仍是面向普通用户的文档，本文件仍是技术文档。
+1. 确认 [README.md](../README.md) 仍是默认英文用户文档，[README.zh.md](./README.zh.md) 仍是中文用户文档，本文件仍是技术文档。
 2. 运行质量门禁。
 3. 运行 `npm run electron:dist`。
 4. 运行 `npm run electron:smoke`。

@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="../README.md">中文</a>
+  <a href="./README.zh.md">中文</a>
 </p>
 
 <h1 align="center">A Travel Gift, Made for You</h1>
@@ -25,7 +25,7 @@ Regular users should use the desktop installer. You do not need to manually star
 Get the installer from the Releases section on the right, then run it directly:
 
 ```text
-Earth Online Setup 0.1.0.exe
+Earth Online Setup 0.1.1.exe
 ```
 
 ## Usage Tips

@@ -16,14 +16,19 @@ const alternateLanguagePriority = {
   en: ["en"],
 };
 const zhRegionNames = new Intl.DisplayNames(["zh-CN"], { type: "region" });
+const chinaRegionCodes = new Set(["HK", "MO", "TW"]);
 
 function countryNameZh(countryCode, fallback) {
-  if (countryCode === "HK" || countryCode === "MO") return "中国";
+  if (chinaRegionCodes.has(countryCode)) return "中国";
   try {
     return zhRegionNames.of(countryCode) || fallback || countryCode;
   } catch {
     return fallback || countryCode;
   }
+}
+
+function normalizedCountryNameEn(countryCode, fallback) {
+  return chinaRegionCodes.has(countryCode) ? "China" : fallback;
 }
 
 function parseTsv(text) {
@@ -251,7 +256,7 @@ try {
     const admin2Key = `${countryCode}.${admin1Code}.${admin2Code}`;
     const featureKey = `${featureClass}.${featureCode}`;
     const alt = alternateNames.get(geonameId);
-    const countryNameEn = countries.get(countryCode) ?? countryCode;
+    const countryNameEn = normalizedCountryNameEn(countryCode, countries.get(countryCode) ?? countryCode);
     const nameEn = chooseAlternateName(alt, "en") ?? asciiName ?? name;
     const nameZh = chooseAlternateName(alt, "zh") ?? "";
     insert.run(

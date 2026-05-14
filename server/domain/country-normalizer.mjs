@@ -30,6 +30,10 @@ const REGION_COUNTRY_OVERRIDES = {
     countryCode: "CN",
     aliases: ["Macao", "Macau", "Macao SAR", "Macao SAR China", "MO", "中国澳门", "中国澳门特别行政区", "澳门"],
   },
+  TW: {
+    countryCode: "CN",
+    aliases: ["Taiwan", "Taiwan Province of China", "TW", "Republic of China", "ROC", "中国台湾", "台湾", "臺灣", "台灣"],
+  },
 };
 
 const MANUAL_COUNTRY_ALIASES = {

@@ -2,7 +2,7 @@
   "name": "earth-online",
   "description": "Local-first travel photo archive with a 3D Earth timeline.",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "main": "electron/main.mjs",
   "engines": {

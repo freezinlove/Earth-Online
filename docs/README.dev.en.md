@@ -6,7 +6,7 @@
 
 Earth_Online is a local-first, AI-driven travel photo archive. It imports personal travel photos, extracts EXIF metadata, uses optional AI providers to understand places and scenes, groups photos into trips, resolves missing location context, and projects the result onto a 3D Earth timeline.
 
-This document is intended for developers. The user-facing guide is [README.en.md](./README.en.md).
+This document is intended for developers. The default user-facing guide is [README.md](../README.md).
 
 ## Runtime Contract
 
@@ -564,7 +564,7 @@ git ls-files | sort
 
 ## Release Checklist
 
-1. Confirm [README.en.md](./README.en.md) is still the public user guide and this file is the technical guide.
+1. Confirm [README.md](../README.md) is still the default English user guide, [README.zh.md](./README.zh.md) is still the Chinese user guide, and this file is the technical guide.
 2. Run quality gates.
 3. Run `npm run electron:dist`.
 4. Run `npm run electron:smoke`.
