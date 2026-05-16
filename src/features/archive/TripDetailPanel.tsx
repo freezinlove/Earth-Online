@@ -6,6 +6,7 @@ import { placeFocusIntent } from "@/domain/globeIntent";
 import { countryLabel, photoAltText, photoLabel, placeLabel, tripLabel } from "@/domain/labels";
 import { useI18n } from "@/i18n/useI18n";
 import type { LocalizedNames, Photo, PlaceNode } from "@/domain/models";
+import { ManualPlaceResolutionPanel, type ManualPlaceMode, type ManualPlaceResolutionAction } from "@/features/places/ManualPlaceResolutionModal";
 import { useAppStore } from "@/store/appStore";
 
 type DayGroup = {
@@ -53,14 +54,22 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
   const setActivePanel = useAppStore((state) => state.setActivePanel);
   const updateTripTitle = useAppStore((state) => state.updateTripTitle);
   const updatePhotoUserEdits = useAppStore((state) => state.updatePhotoUserEdits);
+  const bindPhotoToPlace = useAppStore((state) => state.bindPhotoToPlace);
+  const createPlaceForPhoto = useAppStore((state) => state.createPlaceForPhoto);
   const selectPhoto = useAppStore((state) => state.selectPhoto);
   const selectPlace = useAppStore((state) => state.selectPlace);
   const setGlobeViewIntent = useAppStore((state) => state.setGlobeViewIntent);
   const deletePhoto = useAppStore((state) => state.deletePhoto);
+  const manualPlacePick = useAppStore((state) => state.manualPlacePick);
+  const openManualPlacePick = useAppStore((state) => state.openManualPlacePick);
+  const closeManualPlacePick = useAppStore((state) => state.closeManualPlacePick);
+  const startManualPlacePick = useAppStore((state) => state.startManualPlacePick);
   const trip = trips.find((item) => item.id === selectedTripId);
   const [title, setTitle] = useState(tripLabel(trip));
   const [editingPhotoId, setEditingPhotoId] = useState<string>();
   const [openPhotoId, setOpenPhotoId] = useState<string>();
+  const [manualPhotoId, setManualPhotoId] = useState<string>();
+  const [manualPhotoBusy, setManualPhotoBusy] = useState(false);
   const photos = useMemo(
     () => allPhotos.filter((photo) => photo.tripId === selectedTripId).sort((left, right) => (left.capturedAt ?? "").localeCompare(right.capturedAt ?? "")),
     [allPhotos, selectedTripId],
@@ -69,8 +78,12 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
   const dossier = dossierGroups.find((group) => group.tripId === selectedTripId);
   const photoById = useMemo(() => new Map(photos.map((photo) => [photo.id, photo])), [photos]);
   const placeById = useMemo(() => new Map(places.map((place) => [place.id, place])), [places]);
-  const openPhoto = openPhotoId ? photos.find((photo) => photo.id === openPhotoId) : undefined;
+  const manualPhotoIdFromPick = manualPlacePick?.pendingId.startsWith("photo:") ? manualPlacePick.pendingId.slice("photo:".length) : undefined;
+  const activeManualPhotoId = manualPhotoId ?? manualPhotoIdFromPick;
+  const openPhoto = (openPhotoId ?? activeManualPhotoId) ? photos.find((photo) => photo.id === (openPhotoId ?? activeManualPhotoId)) : undefined;
   const openPhotoPlace = openPhoto?.placeNodeId ? placeById.get(openPhoto.placeNodeId) : undefined;
+  const activeManualPhoto = activeManualPhotoId ? photos.find((photo) => photo.id === activeManualPhotoId) : undefined;
+  const activeManualSessionId = activeManualPhoto ? `photo:${activeManualPhoto.id}` : undefined;
   const countryGroups = useMemo<CountryGroup[]>(() => {
     return (dossier?.countries ?? []).map((countryGroup) => ({
       country: countryGroup.country,
@@ -95,6 +108,26 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
   const focusPlaceOnGlobe = (place: PlaceNode) => {
     selectPlace(place.id);
     setGlobeViewIntent(placeFocusIntent(place));
+  };
+  const openManualPhotoMove = (photo: Photo) => {
+    const sessionId = `photo:${photo.id}`;
+    setOpenPhotoId(photo.id);
+    setManualPhotoId(photo.id);
+    openManualPlacePick(sessionId, photo.userEdits?.title ?? photo.title ?? photo.fileName, "tripDetail");
+  };
+  const submitManualPhotoMove = async (body: ManualPlaceResolutionAction) => {
+    if (!activeManualPhoto || body.action === "archive_unlocated") return;
+    setManualPhotoBusy(true);
+    try {
+      if (body.action === "bind_existing_place") {
+        await bindPhotoToPlace(activeManualPhoto.id, body.placeId, "tripDetail");
+      } else {
+        await createPlaceForPhoto(activeManualPhoto.id, { name: body.name, lat: body.lat, lng: body.lng }, "tripDetail");
+      }
+      setManualPhotoId(undefined);
+    } finally {
+      setManualPhotoBusy(false);
+    }
   };
 
   return (
@@ -213,6 +246,8 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
           onClose={() => {
             setOpenPhotoId(undefined);
             setEditingPhotoId(undefined);
+            setManualPhotoId(undefined);
+            closeManualPlacePick();
           }}
           onLocate={(photo) => {
             const place = photo.placeNodeId ? placeById.get(photo.placeNodeId) : undefined;
@@ -225,6 +260,31 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
             setOpenPhotoId(undefined);
           }}
           onToggleEdit={(photoId) => setEditingPhotoId(editingPhotoId === photoId ? undefined : photoId)}
+          onManualPlace={openManualPhotoMove}
+          manual={
+            activeManualPhoto && activeManualSessionId && activeManualPhoto.id === openPhoto.id
+              ? {
+                  busy: manualPhotoBusy,
+                  createLabel: t("manualCreatePlace"),
+                  bindLabel: t("moveToOtherPlace"),
+                  initialMode: manualPlacePick?.pendingId === activeManualSessionId ? manualPlacePick.mode : undefined,
+                  initialName: manualPlacePick?.pendingId === activeManualSessionId ? manualPlacePick.name : undefined,
+                  pickedPoint:
+                    manualPlacePick?.pendingId === activeManualSessionId && manualPlacePick.point
+                      ? { ...manualPlacePick.point, nearestLabel: manualPlacePick.nearestLabel }
+                      : undefined,
+                  places: allPlaces,
+                  sessionId: activeManualSessionId,
+                  title: t("moveToOtherPlace"),
+                  onClose: () => {
+                    setManualPhotoId(undefined);
+                    closeManualPlacePick();
+                  },
+                  onPickPoint: (sessionId, name, nameDirty) => startManualPlacePick(sessionId, name, nameDirty, "tripDetail"),
+                  onSubmit: (body) => void submitManualPhotoMove(body),
+                }
+              : undefined
+          }
           onPatchUserEdits={(photoId, edits) => {
             void updatePhotoUserEdits(photoId, edits);
           }}
@@ -253,6 +313,8 @@ function PhotoDetailModal({
   onClose,
   onLocate,
   onToggleEdit,
+  onManualPlace,
+  manual,
   onPatchUserEdits,
 }: {
   photo: Photo;
@@ -261,6 +323,21 @@ function PhotoDetailModal({
   onClose: () => void;
   onLocate: (photo: Photo) => void;
   onToggleEdit: (photoId: string) => void;
+  onManualPlace: (photo: Photo) => void;
+  manual?: {
+    busy: boolean;
+    bindLabel: string;
+    createLabel: string;
+    initialMode?: ManualPlaceMode;
+    initialName?: string;
+    pickedPoint?: { lat: number; lng: number; nearestLabel?: string };
+    places: PlaceNode[];
+    sessionId: string;
+    title: string;
+    onClose: () => void;
+    onPickPoint: (sessionId: string, name: string, nameDirty: boolean) => void;
+    onSubmit: (body: ManualPlaceResolutionAction) => void;
+  };
   onPatchUserEdits: (photoId: string, edits: { title?: string; caption?: string; tags?: string[] }) => void;
 }) {
   const { t } = useI18n();
@@ -343,89 +420,112 @@ function PhotoDetailModal({
         <div className="trip-photo-modal-media">
           <img src={getHighResolutionSource(photo.storageUrl ?? photo.thumbnailUrl, 2200)} alt={photoAltText(photo)} />
         </div>
-        <div className="trip-photo-modal-copy">
-          <div className="trip-photo-modal-heading">
-            <div>
-              <p>{capturedDateLabel(photo.capturedAt)}</p>
-              {editing ? (
-                <textarea
-                  ref={titleInputRef}
-                  className="trip-photo-modal-title-input"
-                  value={titleDraft}
-                  onChange={(event) => updateTitle(event.target.value)}
-                  onInput={(event) => resizeTitleElement(event.currentTarget)}
-                  aria-label="Photo title"
-                  rows={1}
-                />
-              ) : (
-                <h3>{displayedTitle}</h3>
-              )}
-            </div>
-            <button className="trip-photo-modal-close" onClick={onClose} type="button" aria-label={t("closePhotoPreview")}>
-              <X size={17} />
-            </button>
-          </div>
-
-          {editing ? (
-            <textarea
-              className="trip-photo-modal-caption-input"
-              value={captionDraft}
-              onChange={(event) => updateCaption(event.target.value)}
-              aria-label="Photo description"
-              rows={5}
-            />
-          ) : (
-            <p className="trip-photo-modal-caption">{displayedCaption}</p>
-          )}
-          <div className={`trip-photo-modal-tags${editing ? " trip-photo-modal-tags-editing" : ""}`}>
-            {(editing ? tagDrafts : displayedTags).map((tag) => (
-              <span key={tag} className="trip-photo-modal-tag">
-                {tag}
+        {manual ? (
+          <ManualPlaceResolutionPanel
+            sessionId={manual.sessionId}
+            photos={[photo]}
+            places={manual.places}
+            busy={manual.busy}
+            title={manual.title}
+            bindLabel={manual.bindLabel}
+            createLabel={manual.createLabel}
+            includeArchive={false}
+            initialName={manual.initialName}
+            initialMode={manual.initialMode}
+            pickedPoint={manual.pickedPoint}
+            panelClassName="trip-photo-modal-copy trip-photo-manual-copy manual-pending-copy"
+            onClose={manual.onClose}
+            onPickPoint={manual.onPickPoint}
+            onSubmit={manual.onSubmit}
+          />
+        ) : (
+          <div className="trip-photo-modal-copy">
+            <div className="trip-photo-modal-heading">
+              <div>
+                <p>{capturedDateLabel(photo.capturedAt)}</p>
                 {editing ? (
-                  <button type="button" aria-label={`Remove ${tag}`} onClick={() => updateTags(tagDrafts.filter((item) => item !== tag))}>
-                    <X size={10} />
-                  </button>
-                ) : null}
-              </span>
-            ))}
-            {editing ? (
-              addingTag ? (
-                <input
-                  className="trip-photo-modal-tag-input"
-                  autoFocus
-                  value={newTag}
-                  onChange={(event) => setNewTag(event.target.value)}
-                  onBlur={commitNewTag}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      commitNewTag();
-                    }
-                    if (event.key === "Escape") {
-                      setAddingTag(false);
-                      setNewTag("");
-                    }
-                  }}
-                  aria-label="New tag"
-                />
-              ) : (
-                <button className="trip-photo-modal-add-tag" type="button" onClick={() => setAddingTag(true)} aria-label="Add tag">
-                  <Plus size={13} />
-                </button>
-              )
-            ) : null}
-            {photo.pendingReason ? <span>{t("pending")}</span> : null}
-          </div>
+                  <textarea
+                    ref={titleInputRef}
+                    className="trip-photo-modal-title-input"
+                    value={titleDraft}
+                    onChange={(event) => updateTitle(event.target.value)}
+                    onInput={(event) => resizeTitleElement(event.currentTarget)}
+                    aria-label="Photo title"
+                    rows={1}
+                  />
+                ) : (
+                  <h3>{displayedTitle}</h3>
+                )}
+              </div>
+              <button className="trip-photo-modal-close" onClick={onClose} type="button" aria-label={t("closePhotoPreview")}>
+                <X size={17} />
+              </button>
+            </div>
 
-          <div className="trip-photo-modal-actions">
-            <button onClick={() => onLocate(photo)} type="button" aria-label={t("locate")} title={place ? placeLabel(place) : t("locate")}>
-              <MapPin size={19} />
-            </button>
-            <button onClick={() => onToggleEdit(photo.id)} type="button" aria-label={t("edit")} title={t("edit")} data-active={editing || undefined}>
-              <PencilLine size={19} />
-            </button>
+            {editing ? (
+              <textarea
+                className="trip-photo-modal-caption-input"
+                value={captionDraft}
+                onChange={(event) => updateCaption(event.target.value)}
+                aria-label="Photo description"
+                rows={5}
+              />
+            ) : (
+              <p className="trip-photo-modal-caption">{displayedCaption}</p>
+            )}
+            <div className={`trip-photo-modal-tags${editing ? " trip-photo-modal-tags-editing" : ""}`}>
+              {(editing ? tagDrafts : displayedTags).map((tag) => (
+                <span key={tag} className="trip-photo-modal-tag">
+                  {tag}
+                  {editing ? (
+                    <button type="button" aria-label={`Remove ${tag}`} onClick={() => updateTags(tagDrafts.filter((item) => item !== tag))}>
+                      <X size={10} />
+                    </button>
+                  ) : null}
+                </span>
+              ))}
+              {editing ? (
+                addingTag ? (
+                  <input
+                    className="trip-photo-modal-tag-input"
+                    autoFocus
+                    value={newTag}
+                    onChange={(event) => setNewTag(event.target.value)}
+                    onBlur={commitNewTag}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        commitNewTag();
+                      }
+                      if (event.key === "Escape") {
+                        setAddingTag(false);
+                        setNewTag("");
+                      }
+                    }}
+                    aria-label="New tag"
+                  />
+                ) : (
+                  <button className="trip-photo-modal-add-tag" type="button" onClick={() => setAddingTag(true)} aria-label="Add tag">
+                    <Plus size={13} />
+                  </button>
+                )
+              ) : null}
+              {photo.pendingReason ? <span>{t("pending")}</span> : null}
+            </div>
+
+            <div className="trip-photo-modal-actions">
+              <button onClick={() => onLocate(photo)} type="button" aria-label={t("locate")} title={place ? placeLabel(place) : t("locate")}>
+                <MapPin size={19} />
+              </button>
+              <button onClick={() => onToggleEdit(photo.id)} type="button" aria-label={t("edit")} title={t("edit")} data-active={editing || undefined}>
+                <PencilLine size={19} />
+              </button>
+              <button onClick={() => onManualPlace(photo)} type="button" aria-label={t("moveToOtherPlace")} title={t("moveToOtherPlace")}>
+                <Plus size={18} />
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </article>
     </div>,
     document.body,

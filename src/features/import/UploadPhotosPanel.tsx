@@ -8,6 +8,7 @@ import { useI18n } from "@/i18n/useI18n";
 import type { MessageKey } from "@/i18n/messages";
 import type { ImportBatch, PendingItem, Photo, PlaceNode, Trip } from "@/domain/models";
 import type { ImportJobProgress } from "@/services/apiClient";
+import { ManualPlaceResolutionModal, type ManualPlaceResolutionAction } from "@/features/places/ManualPlaceResolutionModal";
 import { useAppStore } from "@/store/appStore";
 
 type ImportStep = {
@@ -359,6 +360,10 @@ function groupAiFailurePreviews(batch: ImportBatch | undefined, photos: Photo[],
 
 function PhotoStrip({
   photos,
+  draggable,
+  draggingPhotoId,
+  onDragEnd,
+  onDragStart,
   onRemovePhoto,
   selectedPhotoId,
   onOpenPreview,
@@ -366,6 +371,10 @@ function PhotoStrip({
   t,
 }: {
   photos: Photo[];
+  draggable?: boolean;
+  draggingPhotoId?: string;
+  onDragEnd?: () => void;
+  onDragStart?: (photo: Photo, event: DragEvent<HTMLSpanElement>) => void;
   onRemovePhoto?: (photoId: string) => void;
   selectedPhotoId?: string;
   onOpenPreview?: (photo: Photo) => void;
@@ -375,7 +384,15 @@ function PhotoStrip({
   return (
     <div className="import-photo-strip">
       {photos.map((photo) => (
-        <span key={photo.id} className="import-thumb-shell" data-active={selectedPhotoId === photo.id || undefined}>
+        <span
+          key={photo.id}
+          className="import-thumb-shell"
+          data-active={selectedPhotoId === photo.id || undefined}
+          data-dragging={draggingPhotoId === photo.id || undefined}
+          draggable={draggable}
+          onDragEnd={onDragEnd}
+          onDragStart={(event) => onDragStart?.(photo, event)}
+        >
           <button
             className="import-thumb"
             onClick={() => {
@@ -428,19 +445,54 @@ function ProgressLine({ step, showIcon = true }: { step: ImportStep; showIcon?: 
 function ReviewTree({
   previews,
   selectedPhotoId,
+  canEdit,
   onOpenPreview,
+  onMovePhoto,
+  onRenamePlace,
   onRemovePhoto,
   onSelectPhoto,
   t,
 }: {
   previews: TripPreview[];
   selectedPhotoId?: string;
+  canEdit: boolean;
   onOpenPreview: (photo: Photo) => void;
+  onMovePhoto: (photoId: string, placeId: string) => Promise<void>;
+  onRenamePlace: (placeId: string, name: string) => Promise<void>;
   onRemovePhoto?: (photoId: string) => void;
   onSelectPhoto: (photoId: string) => void;
   t: (key: MessageKey) => string;
 }) {
+  const [editingPlaceId, setEditingPlaceId] = useState<string>();
+  const [placeNameDraft, setPlaceNameDraft] = useState("");
+  const [draggingPhotoId, setDraggingPhotoId] = useState<string>();
+  const [droppingPlaceId, setDroppingPlaceId] = useState<string>();
+  const dragPreviewRef = useRef<HTMLElement | null>(null);
   if (!previews.length) return null;
+
+  const clearDragPreview = () => {
+    dragPreviewRef.current?.remove();
+    dragPreviewRef.current = null;
+  };
+
+  const setPhotoDragPreview = (event: DragEvent<HTMLSpanElement>) => {
+    clearDragPreview();
+    const preview = event.currentTarget.cloneNode(true) as HTMLElement;
+    preview.className = "import-thumb-shell import-thumb-drag-image";
+    preview.removeAttribute("data-active");
+    preview.removeAttribute("data-dragging");
+    preview.querySelector(".import-thumb-remove")?.remove();
+    document.body.appendChild(preview);
+    dragPreviewRef.current = preview;
+    event.dataTransfer.setDragImage(preview, preview.offsetWidth / 2, preview.offsetHeight / 2);
+  };
+
+  const submitPlaceName = async (place?: PlaceNode) => {
+    const name = placeNameDraft.trim();
+    setEditingPlaceId(undefined);
+    if (!place || !name || name === placeLabel(place)) return;
+    await onRenamePlace(place.id, name);
+  };
 
   return (
     <section className="import-review-tree" aria-label={t("archiveTree")}>
@@ -453,15 +505,97 @@ function ReviewTree({
           </div>
           <div className="import-place-branch">
             {preview.places.map((placePreview) => (
-              <div key={placePreview.place?.id ?? `${preview.trip.id}-${placePreview.label}`} className="import-place-node" data-new={placePreview.isNew || undefined}>
+              <div
+                key={placePreview.place?.id ?? `${preview.trip.id}-${placePreview.label}`}
+                className="import-place-node"
+                data-new={placePreview.isNew || undefined}
+                data-drop-target={droppingPlaceId === placePreview.place?.id || undefined}
+                onDragEnter={(event) => {
+                  if (!canEdit || !placePreview.place || !draggingPhotoId || placePreview.photos.some((photo) => photo.id === draggingPhotoId)) return;
+                  event.preventDefault();
+                  setDroppingPlaceId(placePreview.place.id);
+                }}
+                onDragOver={(event) => {
+                  if (!canEdit || !placePreview.place || !draggingPhotoId || placePreview.photos.some((photo) => photo.id === draggingPhotoId)) return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                }}
+                onDragLeave={(event) => {
+                  if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+                  setDroppingPlaceId((current) => (current === placePreview.place?.id ? undefined : current));
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  const photoId = event.dataTransfer.getData("application/x-earth-online-photo-id") || draggingPhotoId;
+                  setDroppingPlaceId(undefined);
+                  setDraggingPhotoId(undefined);
+                  if (!canEdit || !placePreview.place || !photoId || placePreview.photos.some((photo) => photo.id === photoId)) return;
+                  void onMovePhoto(photoId, placePreview.place.id);
+                }}
+              >
                 <div className="import-node-label">
                   {placePreview.isNew ? <Circle size={10} /> : <span className="import-solid-dot import-solid-dot-small" />}
                   <MapPin size={14} />
-                  <span>{placePreview.label}</span>
+                  {editingPlaceId === placePreview.place?.id ? (
+                    <input
+                      className="import-place-name-input"
+                      autoFocus
+                      value={placeNameDraft}
+                      onBlur={() => void submitPlaceName(placePreview.place)}
+                      onChange={(event) => setPlaceNameDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          event.currentTarget.blur();
+                        }
+                        if (event.key === "Escape") {
+                          setEditingPlaceId(undefined);
+                          setPlaceNameDraft("");
+                        }
+                      }}
+                    />
+                  ) : (
+                    <span>{placePreview.label}</span>
+                  )}
+                  {canEdit && placePreview.place ? (
+                    <button
+                      className="import-place-rename"
+                      type="button"
+                      aria-label={t("editPlaceName")}
+                      title={t("editPlaceName")}
+                      onClick={() => {
+                        setEditingPlaceId(placePreview.place?.id);
+                        setPlaceNameDraft(placePreview.label);
+                      }}
+                    >
+                      <PencilLine size={12} />
+                    </button>
+                  ) : null}
                   <em>{placePreview.isNew ? t("newPlace") : t("merge")}</em>
                   <time>{placePreview.timeLabel}</time>
                 </div>
-                <PhotoStrip photos={placePreview.photos} selectedPhotoId={selectedPhotoId} onOpenPreview={onOpenPreview} onRemovePhoto={onRemovePhoto} onSelect={onSelectPhoto} t={t} />
+                <PhotoStrip
+                  photos={placePreview.photos}
+                  draggable={canEdit}
+                  draggingPhotoId={draggingPhotoId}
+                  selectedPhotoId={selectedPhotoId}
+                  onDragEnd={() => {
+                    setDraggingPhotoId(undefined);
+                    setDroppingPlaceId(undefined);
+                    clearDragPreview();
+                  }}
+                  onDragStart={(photo, event) => {
+                    setDraggingPhotoId(photo.id);
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData("application/x-earth-online-photo-id", photo.id);
+                    event.dataTransfer.setData("text/plain", photo.fileName);
+                    setPhotoDragPreview(event);
+                  }}
+                  onOpenPreview={onOpenPreview}
+                  onRemovePhoto={onRemovePhoto}
+                  onSelect={onSelectPhoto}
+                  t={t}
+                />
               </div>
             ))}
           </div>
@@ -733,134 +867,6 @@ function AiFailureSuggestions({
   );
 }
 
-function ManualPendingResolutionModal({
-  item,
-  locale,
-  photos,
-  places,
-  busy,
-  initialName,
-  initialMode,
-  pickedPoint,
-  onClose,
-  onPickPoint,
-  onSubmit,
-  t,
-}: {
-  item: PendingItem;
-  locale: ReturnType<typeof useI18n>["locale"];
-  photos: Photo[];
-  places: PlaceNode[];
-  busy: boolean;
-  initialName?: string;
-  initialMode?: "bind" | "new" | "archive";
-  pickedPoint?: { lat: number; lng: number; nearestLabel?: string };
-  onClose: () => void;
-  onPickPoint: (pendingId: string, name: string, nameDirty: boolean) => void;
-  onSubmit: (body: { action: "bind_existing_place"; placeId: string } | { action: "create_manual_place"; name: string; lat: number; lng: number } | { action: "archive_unlocated" }) => void;
-  t: (key: MessageKey) => string;
-}) {
-  const relatedPhotos = photos.filter((photo) => item.relatedPhotoIds.includes(photo.id));
-  const primaryPhoto = relatedPhotos[0];
-  const tripId = item.relatedTripId ?? primaryPhoto?.tripId;
-  const tripPlaces = useMemo(() => places.filter((place) => place.tripId === tripId), [places, tripId]);
-  const [mode, setMode] = useState<"bind" | "new" | "archive">("bind");
-  const [placeId, setPlaceId] = useState(tripPlaces[0]?.id ?? "");
-  const [name, setName] = useState(initialName ?? primaryPhoto?.title ?? primaryPhoto?.fileName ?? "");
-  const [nameDirty, setNameDirty] = useState(false);
-
-  useEffect(() => {
-    setPlaceId(tripPlaces[0]?.id ?? "");
-    setName(initialName ?? primaryPhoto?.title ?? primaryPhoto?.fileName ?? "");
-    setNameDirty(false);
-    setMode(initialMode ?? (tripPlaces.length ? "bind" : "new"));
-  }, [initialMode, initialName, item.id, primaryPhoto?.fileName, primaryPhoto?.title, tripPlaces]);
-
-  const submit = () => {
-    if (mode === "bind") {
-      if (placeId) onSubmit({ action: "bind_existing_place", placeId });
-      return;
-    }
-    if (mode === "new") {
-      if (!pickedPoint) return;
-      onSubmit({ action: "create_manual_place", name, lat: pickedPoint.lat, lng: pickedPoint.lng });
-      return;
-    }
-    onSubmit({ action: "archive_unlocated" });
-  };
-
-  return (
-    <div className="manual-pending-modal" role="dialog" aria-modal="true" onMouseDown={onClose}>
-      <section className="manual-pending-shell" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="manual-pending-media">
-          {primaryPhoto ? <img src={primaryPhoto.storageUrl ?? primaryPhoto.thumbnailUrl} alt={photoAltText(primaryPhoto)} /> : null}
-        </div>
-        <div className="manual-pending-copy">
-          <div className="manual-pending-heading">
-            <h3>{t("manualResolve")}</h3>
-            <button className="manual-pending-close" onClick={onClose} type="button" aria-label={t("closePreview")}>
-              <X size={18} />
-            </button>
-          </div>
-
-          <div className="manual-pending-tabs">
-            <button type="button" data-active={mode === "bind" || undefined} onClick={() => setMode("bind")} disabled={!tripPlaces.length}>{t("manualMergeExisting")}</button>
-            <button type="button" data-active={mode === "new" || undefined} onClick={() => setMode("new")}>{t("manualCreatePlace")}</button>
-            <button type="button" data-active={mode === "archive" || undefined} onClick={() => setMode("archive")}>{t("manualArchiveOnly")}</button>
-          </div>
-
-          {mode === "bind" ? (
-            <label className="manual-pending-field">
-              <span>{t("places")}</span>
-              <select value={placeId} onChange={(event) => setPlaceId(event.target.value)}>
-                {tripPlaces.map((place) => (
-                  <option key={place.id} value={place.id}>{placeLabel(place, locale)}</option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-
-          {mode === "new" ? (
-            <div className="manual-pending-grid manual-pending-grid-pick">
-              <label className="manual-pending-field">
-                <span>{t("placeName")}</span>
-                <input
-                  value={name}
-                  onChange={(event) => {
-                    setName(event.target.value);
-                    setNameDirty(true);
-                  }}
-                />
-              </label>
-              <div className="manual-pending-field">
-                <span>{t("mapPoint")}</span>
-                <button className="manual-pending-pick-button" type="button" onClick={() => onPickPoint(item.id, name, nameDirty)}>
-                  <MapPin size={15} />
-                  {pickedPoint ? t("reselectOnGlobe") : t("pickOnGlobe")}
-                </button>
-              </div>
-              <div className="manual-pending-picked">
-                <span>{pickedPoint ? t("nearestPlace") : t("noMapPointPicked")}</span>
-                <strong>{pickedPoint ? pickedPoint.nearestLabel ?? t("noGeodataPlaceFound") : t("noMapPointPicked")}</strong>
-              </div>
-            </div>
-          ) : null}
-
-          {mode === "archive" ? <p className="manual-pending-note">{t("manualArchiveOnlyNote")}</p> : null}
-
-          <div className="manual-pending-actions">
-            <button type="button" onClick={onClose}>{t("cancel")}</button>
-            <button type="button" onClick={submit} disabled={busy || (mode === "bind" && !placeId) || (mode === "new" && !pickedPoint)}>
-              {busy ? <LoaderCircle className="animate-spin" size={15} /> : <Check size={15} />}
-              {t("save")}
-            </button>
-          </div>
-        </div>
-      </section>
-    </div>
-  );
-}
-
 export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }) {
   const { locale, t } = useI18n();
   const importFiles = useAppStore((state) => state.importFiles);
@@ -875,6 +881,8 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
   const confirmLatestImport = useAppStore((state) => state.confirmLatestImport);
   const rollbackLatestImport = useAppStore((state) => state.rollbackLatestImport);
   const cancelPendingImportPhotos = useAppStore((state) => state.cancelPendingImportPhotos);
+  const bindPhotoToPlace = useAppStore((state) => state.bindPhotoToPlace);
+  const updatePlaceName = useAppStore((state) => state.updatePlaceName);
   const inferPendingLocation = useAppStore((state) => state.inferPendingLocation);
   const inferPendingLocations = useAppStore((state) => state.inferPendingLocations);
   const resolveImportAiFailure = useAppStore((state) => state.resolveImportAiFailure);
@@ -1011,10 +1019,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
     }
   };
 
-  const resolveManualPending = async (
-    item: PendingItem,
-    body: { action: "bind_existing_place"; placeId: string } | { action: "create_manual_place"; name: string; lat: number; lng: number } | { action: "archive_unlocated" },
-  ) => {
+  const resolveManualPending = async (item: PendingItem, body: ManualPlaceResolutionAction) => {
     setAcceptingIds((ids) => new Set(ids).add(item.id));
     setInferFeedback((feedback) => {
       const next = { ...feedback };
@@ -1221,12 +1226,15 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
           {tripPreviews.length ? (
             <ReviewTree
               previews={tripPreviews}
-            selectedPhotoId={selectedPhotoId}
-            onOpenPreview={openPhotoPreview}
-            onRemovePhoto={isPendingBatch(latestBatch) ? (photoId) => void cancelPendingImportPhotos([photoId]) : undefined}
-            onSelectPhoto={setSelectedPhotoId}
-            t={t}
-          />
+              canEdit={isPendingBatch(latestBatch)}
+              selectedPhotoId={selectedPhotoId}
+              onMovePhoto={(photoId, placeId) => bindPhotoToPlace(photoId, placeId, "upload")}
+              onOpenPreview={openPhotoPreview}
+              onRemovePhoto={isPendingBatch(latestBatch) ? (photoId) => void cancelPendingImportPhotos([photoId]) : undefined}
+              onRenamePlace={(placeId, name) => updatePlaceName(placeId, name)}
+              onSelectPhoto={setSelectedPhotoId}
+              t={t}
+            />
           ) : (
             <div className="import-empty-stage">
               <ImagePlus size={26} />
@@ -1304,10 +1312,9 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
     </section>
     {photoPreview ? createPortal(photoPreview, document.body) : null}
     {activeManualPending ? createPortal(
-      <ManualPendingResolutionModal
-        item={activeManualPending}
-        locale={locale}
-        photos={photos}
+      <ManualPlaceResolutionModal
+        sessionId={activeManualPending.id}
+        photos={photos.filter((photo) => activeManualPending.relatedPhotoIds.includes(photo.id))}
         places={placeNodes}
         busy={acceptingIds.has(activeManualPending.id)}
         initialName={manualPlacePick?.pendingId === activeManualPending.id ? manualPlacePick.name : undefined}
@@ -1321,9 +1328,8 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
           setManualPending(undefined);
           closeManualPlacePick();
         }}
-        onPickPoint={(pendingId, name, nameDirty) => startManualPlacePick(pendingId, name, nameDirty)}
+        onPickPoint={(pendingId, name, nameDirty) => startManualPlacePick(pendingId, name, nameDirty, "upload")}
         onSubmit={(body) => void resolveManualPending(activeManualPending, body)}
-        t={t}
       />,
       document.body,
     ) : null}

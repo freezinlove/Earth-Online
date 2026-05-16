@@ -80,6 +80,8 @@ export function createRouter(handlers, paths) {
       const tripPatch = pathname.match(/^\/api\/trips\/([^/]+)$/);
       if (req.method === "PATCH" && tripPatch) return send(res, 200, await handlers.patchTrip(tripPatch[1], await readBody(req)));
       if (req.method === "POST" && pathname === "/api/places") return send(res, 200, await handlers.createPlace(await readBody(req)));
+      const placePatch = pathname.match(/^\/api\/places\/([^/]+)$/);
+      if (req.method === "PATCH" && placePatch) return send(res, 200, await handlers.patchPlace(placePatch[1], await readBody(req)));
       const placeDelete = pathname.match(/^\/api\/places\/([^/]+)\/delete$/);
       if (req.method === "POST" && placeDelete) return send(res, 200, await handlers.deletePlace(placeDelete[1]));
       const placeReorder = pathname.match(/^\/api\/trips\/([^/]+)\/reorder-places$/);
@@ -92,6 +94,8 @@ export function createRouter(handlers, paths) {
       if (req.method === "PATCH" && photoPatch) return send(res, 200, await handlers.patchPhoto(photoPatch[1], await readBody(req)));
       const photoBind = pathname.match(/^\/api\/photos\/([^/]+)\/bind-place$/);
       if (req.method === "POST" && photoBind) return send(res, 200, await handlers.bindPhoto(photoBind[1], await readBody(req)));
+      const photoCreatePlace = pathname.match(/^\/api\/photos\/([^/]+)\/create-place$/);
+      if (req.method === "POST" && photoCreatePlace) return send(res, 200, await handlers.createPlaceForPhoto(photoCreatePlace[1], await readBody(req)));
       const pendingPatch = pathname.match(/^\/api\/pending\/([^/]+)$/);
       if (req.method === "POST" && pendingPatch) return send(res, 200, await handlers.updatePending(pendingPatch[1], await readBody(req)));
       const pendingManual = pathname.match(/^\/api\/pending\/([^/]+)\/manual$/);

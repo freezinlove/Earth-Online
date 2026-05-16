@@ -97,6 +97,17 @@ export interface Photo {
   location?: GeoPoint;
   tripId?: ID;
   placeNodeId?: ID;
+  manualPlaceAssignment?: {
+    placeId: ID;
+    originalPlaceNodeId?: ID;
+    originalLocation?: GeoPoint;
+    originalLocationResolution?: LocationResolution;
+    originalExifStatus?: {
+      time: "read" | "fallback" | "missing";
+      gps: "read" | "fallback" | "missing";
+    };
+    updatedAt: string;
+  };
   tags: string[];
   aiCaption: string;
   userEdits?: {
@@ -183,6 +194,10 @@ export interface PlaceNode {
   countryNames?: LocalizedNames;
   city?: string;
   cityNames?: LocalizedNames;
+  userEdits?: {
+    name?: string;
+    updatedAt: string;
+  };
   center: GeoPoint;
   coordinatePrecision?: "confirmed" | "estimated";
   photoIds: ID[];

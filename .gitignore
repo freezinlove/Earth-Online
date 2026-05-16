@@ -20,6 +20,7 @@ pnpm-debug.log*
 # Local environment files
 .env
 .env.*
+server/ai/local-ai-debug.mjs
 
 # Local user data
 data/**

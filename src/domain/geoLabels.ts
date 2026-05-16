@@ -87,8 +87,9 @@ export function localizedName(names: LocalizedNames | undefined, fallback: strin
   return [names?.local, fallback, names?.zh].find((value) => value && !hasHan(value)) ?? "Unmarked place";
 }
 
-export function placeLabel(place: Pick<PlaceNode, "name" | "names"> | undefined, locale: Locale) {
-  return localizedName(place?.names, place?.name, locale);
+export function placeLabel(place: Pick<PlaceNode, "name" | "names" | "displayName" | "userEdits"> | undefined, locale: Locale) {
+  const manualName = place?.userEdits?.name?.trim();
+  return manualName || localizedName(place?.names, place?.displayName ?? place?.name, locale);
 }
 
 export function countryLabel(names: LocalizedNames | undefined, fallback: string | undefined, locale: Locale) {

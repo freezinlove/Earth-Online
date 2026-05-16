@@ -17,6 +17,7 @@ export type ManualPlacePickSession = {
   pendingId: ID;
   name: string;
   mode: "bind" | "new" | "archive";
+  returnPanel?: AppPanel;
   point?: { lat: number; lng: number };
   nearestLabel?: string;
   nameDirty?: boolean;
@@ -123,16 +124,19 @@ interface AppState {
   mergeLatestImportTrips: () => Promise<void>;
   deleteTrip: (tripId: ID) => Promise<void>;
   updateTripTitle: (tripId: ID, title: string) => Promise<void>;
+  updatePlaceName: (placeId: ID, name: string) => Promise<void>;
   updatePhotoUserEdits: (photoId: ID, edits: { title?: string; caption?: string; tags?: string[] }) => Promise<void>;
+  bindPhotoToPlace: (photoId: ID, placeId: ID, activePanel?: AppPanel) => Promise<void>;
+  createPlaceForPhoto: (photoId: ID, body: { name: string; lat: number; lng: number }, activePanel?: AppPanel) => Promise<void>;
   deletePhoto: (photoId: ID) => Promise<void>;
   acknowledgePendingItem: (pendingId: ID, accepted: boolean) => Promise<void>;
   resolvePendingManually: (
     pendingId: ID,
     body: { action: "bind_existing_place"; placeId: string } | { action: "create_manual_place"; name: string; lat: number; lng: number } | { action: "archive_unlocated" },
   ) => Promise<void>;
-  openManualPlacePick: (pendingId: ID, name: string) => void;
+  openManualPlacePick: (pendingId: ID, name: string, returnPanel?: AppPanel) => void;
   closeManualPlacePick: () => void;
-  startManualPlacePick: (pendingId: ID, name: string, nameDirty?: boolean) => void;
+  startManualPlacePick: (pendingId: ID, name: string, nameDirty?: boolean, returnPanel?: AppPanel) => void;
   finishManualPlacePick: (point: { lat: number; lng: number }, nearestLabel?: string) => Promise<void>;
 }
 
@@ -372,9 +376,21 @@ export const useAppStore = create<AppState>((set, get) => ({
     const snapshot = await apiClient.updateTrip(tripId, { title });
     set(applySnapshot(snapshot));
   },
+  updatePlaceName: async (placeId, name) => {
+    const snapshot = await apiClient.updatePlace(placeId, { name });
+    set(applySnapshot(snapshot));
+  },
   updatePhotoUserEdits: async (photoId, edits) => {
     const snapshot = await apiClient.updatePhoto(photoId, { userEdits: edits });
     set(applySnapshot(snapshot));
+  },
+  bindPhotoToPlace: async (photoId, placeId, activePanel = get().activePanel) => {
+    const snapshot = await apiClient.bindPhoto(photoId, placeId);
+    set({ ...applySnapshot(snapshot), activePanel, manualPlacePick: undefined });
+  },
+  createPlaceForPhoto: async (photoId, body, activePanel = get().activePanel) => {
+    const snapshot = await apiClient.createPlaceForPhoto(photoId, body);
+    set({ ...applySnapshot(snapshot), activePanel, manualPlacePick: undefined });
   },
   deletePhoto: async (photoId) => {
     const snapshot = await apiClient.deletePhoto(photoId);
@@ -388,15 +404,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     const snapshot = await apiClient.resolvePendingManually(pendingId, body);
     set({ ...applySnapshot(snapshot), activePanel: "upload", manualPlacePick: undefined });
   },
-  openManualPlacePick: (pendingId, name) => set({ manualPlacePick: { pendingId, name, mode: "bind", isPicking: false, nameDirty: false } }),
+  openManualPlacePick: (pendingId, name, returnPanel = "upload") => set({ manualPlacePick: { pendingId, name, mode: "bind", returnPanel, isPicking: false, nameDirty: false } }),
   closeManualPlacePick: () => set({ manualPlacePick: undefined }),
-  startManualPlacePick: (pendingId, name, nameDirty = false) =>
+  startManualPlacePick: (pendingId, name, nameDirty = false, returnPanel) =>
     set((state) => ({
       manualPlacePick: {
         ...(state.manualPlacePick?.pendingId === pendingId ? state.manualPlacePick : {}),
         pendingId,
         name,
         nameDirty,
+        returnPanel: returnPanel ?? state.manualPlacePick?.returnPanel ?? "upload",
         mode: "new",
         isPicking: true,
       },
@@ -405,7 +422,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   finishManualPlacePick: async (point, nearestLabel) => {
     set((state) => ({
       manualPlacePick: state.manualPlacePick ? { ...state.manualPlacePick, point, nearestLabel, isPicking: false } : undefined,
-      activePanel: "upload",
+      activePanel: state.manualPlacePick?.returnPanel ?? "upload",
       globeViewIntent: { source: "manual" },
     }));
     try {

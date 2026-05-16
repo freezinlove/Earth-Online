@@ -55,13 +55,22 @@ export const qwenProvider = {
     missingInfoInference: true,
     embedding: true,
   },
-  async analyzeImage({ rootDir, secretProvider, mime, dataUrl, preset, geoContext, locale, modelId }) {
+  async analyzeImage({ rootDir, secretProvider, fileName, mime, dataUrl, preset, geoContext, locale, modelId }) {
     const prompt = await loadPrompt("photoAnalysis", locale);
     const apiKey = readQwenChatApiKey(rootDir, secretProvider);
     const content = await qwenChatCompletion({
       rootDir,
       apiKey,
       model: modelId,
+      debugContext: {
+        providerId: this.id,
+        operation: "photoAnalysis",
+        capability: "imageUnderstanding",
+        fileName,
+        promptId: prompt.id,
+        promptVersion: prompt.version,
+        locale: prompt.locale,
+      },
       messages: [
         {
           role: "system",
@@ -102,6 +111,15 @@ export const qwenProvider = {
       apiKey,
       model: modelId,
       temperature: 0.1,
+      debugContext: {
+        providerId: this.id,
+        operation: "missingInfoInference",
+        capability: "imageUnderstanding",
+        fileName: inferenceInput?.targetPhoto?.fileName,
+        promptId: prompt.id,
+        promptVersion: prompt.version,
+        locale: prompt.locale,
+      },
       messages: [
         {
           role: "system",

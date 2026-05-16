@@ -43,7 +43,7 @@ export function createOpenAiCompatibleProvider({
       missingInfoInference: supportsImageUnderstanding,
       embedding: supportsEmbedding,
     },
-    async analyzeImage({ rootDir, secretProvider, mime, dataUrl, preset, geoContext, locale, modelId }) {
+    async analyzeImage({ rootDir, secretProvider, fileName, mime, dataUrl, preset, geoContext, locale, modelId }) {
       const prompt = await loadPrompt("photoAnalysis", locale);
       const apiKey = readProviderApiKey(id, rootDir, secretProvider);
       const content = await openAiCompatibleChatCompletion({
@@ -52,6 +52,15 @@ export function createOpenAiCompatibleProvider({
         baseUrl,
         model: modelId,
         headers,
+        debugContext: {
+          providerId: id,
+          operation: "photoAnalysis",
+          capability: "imageUnderstanding",
+          fileName,
+          promptId: prompt.id,
+          promptVersion: prompt.version,
+          locale: prompt.locale,
+        },
         messages: [
           { role: "system", content: prompt.content },
           {
@@ -91,6 +100,15 @@ export function createOpenAiCompatibleProvider({
         model: modelId,
         temperature: 0.1,
         headers,
+        debugContext: {
+          providerId: id,
+          operation: "missingInfoInference",
+          capability: "imageUnderstanding",
+          fileName: inferenceInput?.targetPhoto?.fileName,
+          promptId: prompt.id,
+          promptVersion: prompt.version,
+          locale: prompt.locale,
+        },
         messages: [
           { role: "system", content: prompt.content },
           {

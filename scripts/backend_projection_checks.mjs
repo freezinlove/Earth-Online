@@ -1211,4 +1211,92 @@ const firstGpsPlaces = buildPlacesForGroup(
 assert.equal(firstGpsPlaces[0].id, existingEstimatedViennaPlace.id);
 assert.equal(firstGpsPlaces[0].name, "阿尔贝蒂娜博物馆");
 
+const manuallyNamedPlace = {
+  ...existingViennaPlace,
+  id: "place-vienna-manual-name",
+  name: "阿尔贝蒂娜博物馆",
+  displayName: "阿尔贝蒂娜博物馆",
+  userEdits: { name: "我改过的维也纳地点", updatedAt: "2026-05-16T00:00:00Z" },
+  photoIds: ["photo-vienna-manual-name"],
+};
+const manuallyNamedPlaces = buildPlacesForGroup(
+  [
+    {
+      ...contextBoundKarlskirchePhoto,
+      id: "photo-vienna-manual-name",
+      placeNodeId: manuallyNamedPlace.id,
+    },
+  ],
+  "trip-vienna",
+  { makeId, existingPlaces: [manuallyNamedPlace] },
+);
+assert.equal(manuallyNamedPlaces[0].id, manuallyNamedPlace.id);
+assert.equal(manuallyNamedPlaces[0].name, "我改过的维也纳地点");
+assert.equal(manuallyNamedPlaces[0].displayName, "我改过的维也纳地点");
+
+const targetPlacePhoto = {
+  id: "photo-target-place-vote",
+  fileName: "target.jpg",
+  thumbnailUrl: "",
+  capturedAt: "2025-08-01T10:00:00Z",
+  tripId: "trip-manual-vote",
+  placeNodeId: "place-target-vote",
+  location: { lat: 59.91, lng: 10.75 },
+  tags: [],
+  aiCaption: "",
+  ai: {
+    locationCandidates: [
+      {
+        id: "candidate-target-vote",
+        name: "目标海岸",
+        country: "挪威",
+        city: "奥斯陆",
+        point: { lat: 59.91, lng: 10.75 },
+        confidence: 0.72,
+        source: "ai_vision",
+      },
+    ],
+  },
+};
+const manuallyMovedPhoto = {
+  ...targetPlacePhoto,
+  id: "photo-manual-moved-vote",
+  fileName: "wrong-airport.jpg",
+  capturedAt: "2025-08-01T10:05:00Z",
+  manualPlaceAssignment: {
+    placeId: "place-target-vote",
+    originalPlaceNodeId: "place-source-vote",
+    originalLocation: { lat: 60.39, lng: 5.32 },
+    updatedAt: "2026-05-16T00:00:00Z",
+  },
+  ai: {
+    locationCandidates: [
+      {
+        id: "candidate-wrong-vote",
+        name: "错误机场",
+        country: "挪威",
+        city: "卑尔根",
+        point: { lat: 60.39, lng: 5.32 },
+        confidence: 0.99,
+        source: "ai_vision",
+      },
+    ],
+  },
+};
+const manualMoveVotePlaces = buildPlacesForGroup([targetPlacePhoto, manuallyMovedPhoto], "trip-manual-vote", {
+  makeId,
+  existingPlaces: [
+    {
+      id: "place-target-vote",
+      tripId: "trip-manual-vote",
+      name: "待确认地点",
+      center: { lat: 59.91, lng: 10.75 },
+      photoIds: ["photo-target-place-vote"],
+      timeRange: { start: "2025-08-01T10:00:00Z", end: "2025-08-01T10:00:00Z" },
+      pending: false,
+    },
+  ],
+});
+assert.equal(manualMoveVotePlaces[0].name, "目标海岸");
+
 console.log("Backend projection checks passed");

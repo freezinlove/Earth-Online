@@ -2,7 +2,7 @@ import type { GlobeMarker, LocalizedNames, Photo, PlaceNode, SearchDocument, Tim
 import { countryLabel as localizedCountryLabel, markerLabel as localizedMarkerLabel, placeLabel as localizedPlaceLabel, timelineSegmentLabel } from "@/domain/geoLabels";
 import type { Locale } from "@/store/appStore";
 
-export function placeLabel(place?: Pick<PlaceNode, "name" | "names">, locale: Locale = "zh") {
+export function placeLabel(place?: Pick<PlaceNode, "name" | "names" | "displayName" | "userEdits">, locale: Locale = "zh") {
   return localizedPlaceLabel(place, locale);
 }
 

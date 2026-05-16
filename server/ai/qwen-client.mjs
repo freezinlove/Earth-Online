@@ -1,4 +1,5 @@
 import { envValue } from "../config/env.mjs";
+import { collectRequestIds, emitAiDebugRecord, responseHeadersToObject } from "./ai-debug.mjs";
 
 const qwenCompatibleBaseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1";
 const qwenMultimodalEmbeddingUrl =
@@ -36,10 +37,12 @@ export async function qwenChatCompletion({
   messages,
   responseFormat = { type: "json_object" },
   temperature = 0.2,
+  debugContext,
 }) {
   if (!apiKey) throw new Error("missing Qwen API key");
 
-  const response = await fetch(`${qwenCompatibleBaseUrl}/chat/completions`, {
+  const endpoint = `${qwenCompatibleBaseUrl}/chat/completions`;
+  const response = await fetch(endpoint, {
     method: "POST",
     signal: requestSignal(rootDir),
     headers: {
@@ -53,12 +56,37 @@ export async function qwenChatCompletion({
       temperature,
     }),
   });
-  if (!response.ok) throw new Error(`qwen chat failed: ${response.status}`);
 
-  const json = await response.json();
-  const content = extractMessageText(json.choices?.[0]?.message?.content);
+  const rawResponse = await response.text();
+  let json;
+  let jsonParseError;
+  try {
+    json = rawResponse ? JSON.parse(rawResponse) : undefined;
+  } catch (error) {
+    jsonParseError = error instanceof Error ? error.message : String(error);
+  }
+  const headers = responseHeadersToObject(response.headers);
+  const content = extractMessageText(json?.choices?.[0]?.message?.content);
+  await emitAiDebugRecord({
+    timestamp: new Date().toISOString(),
+    client: "qwen-compatible",
+    operation: "chat.completions",
+    endpoint,
+    model,
+    status: response.status,
+    ok: response.ok,
+    requestIds: collectRequestIds({ headers, json }),
+    headers,
+    jsonParseError,
+    contentLength: content.length,
+    contentTrimmedLength: content.trim().length,
+    rawResponse,
+    debugContext,
+  });
+  if (!response.ok) throw new Error(`qwen chat failed: ${response.status}`);
+  if (jsonParseError) throw new Error(`qwen chat returned invalid JSON response: ${jsonParseError}`);
   if (content.trim()) return content;
-  const upstreamMessage = json.error?.message || json.message || json.choices?.[0]?.finish_reason;
+  const upstreamMessage = json?.error?.message || json?.message || json?.choices?.[0]?.finish_reason;
   throw new Error(`qwen chat returned empty content${upstreamMessage ? `: ${upstreamMessage}` : ""}`);
 }
 

@@ -90,10 +90,14 @@ export function createEditServices({ readState, readVectorIndex, writeState, wri
     const now = new Date().toISOString();
     const center = { lat: Number(body.lat), lng: Number(body.lng) };
     const geo = manualGeoDescription(center);
+    const name = body.name?.trim() || "手动地点";
     const place = {
       id: makeId("manual-place"),
       tripId: body.tripId,
-      name: body.name?.trim() || "手动地点",
+      name,
+      names: manualPlaceNames(name),
+      displayName: name,
+      userEdits: { name, updatedAt: now },
       center,
       ...geo,
       photoIds: [],
@@ -104,6 +108,30 @@ export function createEditServices({ readState, readVectorIndex, writeState, wri
     const tripPlaces = placeNodes.filter((item) => item.tripId === body.tripId);
     const routes = state.routes.filter((route) => route.tripId !== body.tripId).concat(buildRoute(body.tripId, tripPlaces));
     await writeState({ ...state, placeNodes, routes });
+    return responseState();
+  }
+
+  async function patchPlace(placeId, body) {
+    const state = await readState();
+    const name = String(body.name ?? "").trim();
+    if (!name) throw new Error("请输入地点名。");
+    const now = new Date().toISOString();
+    const place = state.placeNodes.find((item) => item.id === placeId);
+    if (!place) return responseState();
+    await writeState({
+      ...state,
+      placeNodes: state.placeNodes.map((item) =>
+        item.id === placeId
+          ? {
+              ...item,
+              name,
+              names: manualPlaceNames(name),
+              displayName: name,
+              userEdits: { ...(item.userEdits ?? {}), name, updatedAt: now },
+            }
+          : item,
+      ),
+    });
     return responseState();
   }
 
@@ -228,20 +256,70 @@ export function createEditServices({ readState, readVectorIndex, writeState, wri
     const state = await readState();
     const place = state.placeNodes.find((item) => item.id === body.placeId);
     const beforeTripId = state.photos.find((photo) => photo.id === photoId)?.tripId;
+    if (!place) return responseState();
+    const now = new Date().toISOString();
     const patched = {
       ...state,
       photos: state.photos.map((photo) =>
         photo.id === photoId
-          ? { ...photo, tripId: place?.tripId ?? photo.tripId, placeNodeId: place?.id, location: place?.center ?? photo.location, pendingReason: undefined }
+          ? applyManualPlaceAssignment(photo, place, {
+              now,
+              source: "manual_existing_place",
+              reason: "用户手动将照片移动到已有地点。",
+            })
           : photo,
       ),
       placeNodes: state.placeNodes.map((item) => ({
         ...item,
-        photoIds: item.id === body.placeId ? Array.from(new Set([...item.photoIds, photoId])) : item.photoIds.filter((id) => id !== photoId),
-        pending: item.id === body.placeId ? false : item.pending,
+        photoIds: item.id === place.id ? Array.from(new Set([...item.photoIds, photoId])) : item.photoIds.filter((id) => id !== photoId),
+        pending: item.id === place.id ? false : item.pending,
       })),
     };
-    await writeState(rebuildTrips(patched, new Set([beforeTripId, place?.tripId].filter(Boolean)), { makeId }));
+    await writeState(rebuildTrips(patched, new Set([beforeTripId, place.tripId].filter(Boolean)), { makeId }));
+    return responseState();
+  }
+
+  async function createPlaceForPhoto(photoId, body) {
+    const state = await readState();
+    const photo = state.photos.find((item) => item.id === photoId);
+    if (!photo?.tripId) return responseState();
+    const lat = Number(body.lat);
+    const lng = Number(body.lng);
+    const name = String(body.name ?? "").trim();
+    if (!name) throw new Error("请输入地点名。");
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new Error("请输入有效经纬度。");
+    const now = new Date().toISOString();
+    const point = { lat, lng };
+    const geo = manualGeoDescription(point);
+    const place = {
+      id: makeId("manual-place"),
+      tripId: photo.tripId,
+      name,
+      names: manualPlaceNames(name),
+      displayName: name,
+      userEdits: { name, updatedAt: now },
+      center: point,
+      ...geo,
+      coordinatePrecision: "estimated",
+      photoIds: [photo.id],
+      timeRange: { start: photo.capturedAt ?? now, end: photo.capturedAt ?? now },
+      pending: false,
+    };
+    const patched = {
+      ...state,
+      placeNodes: state.placeNodes.map((item) => ({ ...item, photoIds: item.photoIds.filter((id) => id !== photoId) })).concat(place),
+      photos: state.photos.map((item) =>
+        item.id === photoId
+          ? applyManualPlaceAssignment(item, place, {
+              now,
+              source: "manual_new_place",
+              reason: "用户手动新建地点并移动照片。",
+              candidate: manualLocationCandidate({ name, point, geo, makeId }),
+            })
+          : item,
+      ),
+    };
+    await writeState(rebuildTrips(patched, new Set([photo.tripId]), { makeId }));
     return responseState();
   }
 
@@ -274,26 +352,11 @@ export function createEditServices({ readState, readVectorIndex, writeState, wri
         ...state,
         photos: state.photos.map((photo) =>
           photoIds.includes(photo.id)
-            ? {
-                ...photo,
-                tripId: place.tripId,
-                placeNodeId: place.id,
-                location: place.center,
-                aiFailure: undefined,
-                pendingReason: undefined,
-                exifStatus: clearManualExifStatus(photo, { gps: "fallback" }),
-                locationResolution: {
-                  ...(photo.locationResolution ?? {}),
-                  status: "confirmed",
-                  effectiveName: place.displayName ?? place.name,
-                  effectivePoint: place.center,
-                  confidence: 1,
-                  source: "manual_existing_place",
-                  candidates: photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? [],
-                  requiresUserAction: false,
-                  updatedAt: now,
-                },
-              }
+            ? applyManualPlaceAssignment(photo, place, {
+                now,
+                source: "manual_existing_place",
+                reason: "用户手动合并到已有地点。",
+              })
             : photo,
         ),
         pendingItems: acceptRelatedMissingPendingItems(state.pendingItems, pending, photoIds),
@@ -316,7 +379,9 @@ export function createEditServices({ readState, readVectorIndex, writeState, wri
         id: placeId,
         tripId,
         name,
+        names: manualPlaceNames(name),
         displayName: name,
+        userEdits: { name, updatedAt: now },
         center: point,
         ...geo,
         coordinatePrecision: "estimated",
@@ -329,27 +394,13 @@ export function createEditServices({ readState, readVectorIndex, writeState, wri
         placeNodes: [...state.placeNodes, place],
         photos: state.photos.map((photo) =>
           photoIds.includes(photo.id)
-            ? {
-                ...photo,
-                tripId,
-                placeNodeId: placeId,
-                location: point,
-                aiFailure: undefined,
-                pendingReason: undefined,
-                exifStatus: clearManualExifStatus(photo, { gps: "fallback" }),
-                locationResolution: {
-                  ...(photo.locationResolution ?? {}),
-                  status: "confirmed",
-                  effectiveName: name,
-                  effectivePoint: point,
-                  confidence: 1,
-                  source: "manual_new_place",
-                  precision: "estimated",
-                  candidates: [manualLocationCandidate({ name, point, geo, makeId }), ...(photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? [])],
-                  requiresUserAction: false,
-                  updatedAt: now,
-                },
-              }
+            ? applyManualPlaceAssignment(photo, place, {
+                now,
+                source: "manual_new_place",
+                reason: "用户手动新建地点。",
+                precision: "estimated",
+                candidate: manualLocationCandidate({ name, point, geo, makeId }),
+              })
             : photo,
         ),
         pendingItems: acceptRelatedMissingPendingItems(state.pendingItems, pending, photoIds),
@@ -401,6 +452,91 @@ export function createEditServices({ readState, readVectorIndex, writeState, wri
       countryNames: country.countryNames,
       city: candidate?.city,
       cityNames: candidate?.localizedCityNames,
+    };
+  }
+
+  function manualPlaceNames(name) {
+    return { zh: name, en: name, local: name };
+  }
+
+  function visiblePlaceName(place) {
+    return place.userEdits?.name ?? place.displayName ?? place.name;
+  }
+
+  function applyManualPlaceAssignment(photo, place, { now, source, reason, precision, candidate }) {
+    const previous = photo.manualPlaceAssignment;
+    const originalPlaceNodeId = previous?.originalPlaceNodeId ?? photo.placeNodeId;
+    const originalLocation = previous?.originalLocation ?? photo.location;
+    const originalLocationResolution = previous?.originalLocationResolution ?? photo.locationResolution;
+    const originalExifStatus = previous?.originalExifStatus ?? photo.exifStatus;
+    const returningToOriginalGpsPlace = Boolean(previous?.originalPlaceNodeId && previous.originalPlaceNodeId === place.id && previous.originalLocation);
+    const alreadyInPlaceWithoutOverride = !previous && photo.placeNodeId === place.id;
+
+    if (returningToOriginalGpsPlace) {
+      return {
+        ...photo,
+        tripId: place.tripId,
+        placeNodeId: place.id,
+        location: previous.originalLocation,
+        aiFailure: undefined,
+        pendingReason: undefined,
+        exifStatus: previous.originalExifStatus ?? clearManualExifStatus({ ...photo, location: previous.originalLocation }),
+        locationResolution: previous.originalLocationResolution ?? photo.locationResolution,
+        manualPlaceAssignment: undefined,
+      };
+    }
+
+    if (alreadyInPlaceWithoutOverride) {
+      return {
+        ...photo,
+        tripId: place.tripId,
+        placeNodeId: place.id,
+        aiFailure: undefined,
+        pendingReason: undefined,
+        locationResolution: photo.locationResolution
+          ? {
+              ...photo.locationResolution,
+              status: "confirmed",
+              requiresUserAction: false,
+              updatedAt: now,
+            }
+          : photo.locationResolution,
+      };
+    }
+
+    const candidates = candidate
+      ? [candidate, ...(photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? [])]
+      : photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? [];
+
+    return {
+      ...photo,
+      tripId: place.tripId,
+      placeNodeId: place.id,
+      location: place.center,
+      aiFailure: undefined,
+      pendingReason: undefined,
+      exifStatus: clearManualExifStatus(photo, { gps: "fallback" }),
+      manualPlaceAssignment: {
+        placeId: place.id,
+        originalPlaceNodeId,
+        originalLocation,
+        originalLocationResolution,
+        originalExifStatus,
+        updatedAt: now,
+      },
+      locationResolution: {
+        ...(photo.locationResolution ?? {}),
+        status: "confirmed",
+        effectiveName: visiblePlaceName(place),
+        effectivePoint: place.center,
+        confidence: 1,
+        source,
+        precision,
+        candidates,
+        requiresUserAction: false,
+        updatedAt: now,
+        reason,
+      },
     };
   }
 
@@ -525,12 +661,14 @@ export function createEditServices({ readState, readVectorIndex, writeState, wri
     patchTrip,
     deleteTrip,
     createPlace,
+    patchPlace,
     deletePlace,
     reorderPlaces,
     movePhoto,
     deletePhoto,
     patchPhoto,
     bindPhoto,
+    createPlaceForPhoto,
     updatePending,
     resolvePendingManually,
     confirmPhotoLocation,

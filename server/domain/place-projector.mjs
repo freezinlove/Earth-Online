@@ -29,15 +29,20 @@ export function buildPlacesForGroup(group, tripId, { makeId, existingPlaces = []
         existingPlaces.filter((place) => !usedExistingPlaceIds.has(place.id)),
       );
       if (existing?.id) usedExistingPlaceIds.add(existing.id);
-      const preserveName = shouldPreserveExistingName(existing, cluster.photos) ? existing.name : undefined;
-      const description = selectPlaceDescription(cluster.photos, center, { preserveName });
+      const manualName = cleanPlaceName(existing?.userEdits?.name);
+      const votingPhotos = cluster.photos.filter((photo) => !photo.manualPlaceAssignment);
+      const descriptionPhotos = votingPhotos.length ? votingPhotos : cluster.photos;
+      const preserveName = manualName || (shouldPreserveExistingName(existing, descriptionPhotos) ? existing.name : undefined);
+      const description = selectPlaceDescription(descriptionPhotos, center, { preserveName });
       const countryDescription = existing && preserveName && existing.country ? normalizeCountryDescription(existing.country, existing.countryNames) : normalizeCountryDescription(description.country, description.countryNames);
+      const names = manualName ? manualNames(manualName, existing?.names) : existing && preserveName ? existing.names ?? description.names : description.names;
       return {
         id: existing?.id ?? makeId("place"),
         tripId,
-        name: description.name,
-        names: existing && preserveName ? existing.names ?? description.names : description.names,
-        displayName: existing && preserveName ? existing.displayName ?? bestDisplayName(cluster.photos, description.name) : bestDisplayName(cluster.photos, description.name),
+        name: manualName || description.name,
+        names,
+        displayName: manualName || (existing && preserveName ? existing.displayName ?? bestDisplayName(descriptionPhotos, description.name) : bestDisplayName(descriptionPhotos, description.name)),
+        userEdits: existing?.userEdits,
         country: countryDescription.country,
         countryNames: countryDescription.countryNames,
         city: existing && preserveName && existing.city ? existing.city : description.city,
@@ -179,6 +184,7 @@ function findExistingPlaceForCluster(cluster, existingPlaces) {
 
 function shouldPreserveExistingName(existing, photos) {
   if (!existing) return false;
+  if (cleanPlaceName(existing.userEdits?.name)) return true;
   if (String(existing.id).startsWith("manual-place")) return !isPhotoTitlePlaceName(existing.name, photos);
   if (isWeakPlaceName(existing.name)) return false;
   const beforeCount = existing.photoIds?.length ?? 0;
@@ -191,6 +197,15 @@ function shouldPreserveExistingName(existing, photos) {
   if (gainsFirstGps) return false;
   if (beforeCount < MATURITY_PHOTO_THRESHOLD && afterCount >= MATURITY_PHOTO_THRESHOLD) return false;
   return true;
+}
+
+function manualNames(name, existingNames) {
+  return {
+    ...(existingNames ?? {}),
+    zh: name,
+    en: name,
+    local: name,
+  };
 }
 
 function hasReadGps(photo) {

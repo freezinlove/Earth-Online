@@ -353,6 +353,7 @@ export const apiClient = {
   deleteTrip: (tripId: string) => request<AppSnapshot>(`/api/trips/${tripId}/delete`, { method: "POST", body: "{}" }),
   createPlace: (tripId: string, name: string, lat: number, lng: number) =>
     request<AppSnapshot>("/api/places", { method: "POST", body: JSON.stringify({ tripId, name, lat, lng }) }),
+  updatePlace: (placeId: string, body: { name?: string }) => request<AppSnapshot>(`/api/places/${placeId}`, { method: "PATCH", body: JSON.stringify(body) }),
   deletePlace: (placeId: string) => request<AppSnapshot>(`/api/places/${placeId}/delete`, { method: "POST", body: "{}" }),
   reorderPlaces: (tripId: string, placeIds: string[]) =>
     request<AppSnapshot>(`/api/trips/${tripId}/reorder-places`, { method: "POST", body: JSON.stringify({ placeIds }) }),
@@ -369,6 +370,8 @@ export const apiClient = {
   ) =>
     request<AppSnapshot>(`/api/photos/${photoId}`, { method: "PATCH", body: JSON.stringify(body) }),
   bindPhoto: (photoId: string, placeId?: string) => request<AppSnapshot>(`/api/photos/${photoId}/bind-place`, { method: "POST", body: JSON.stringify({ placeId }) }),
+  createPlaceForPhoto: (photoId: string, body: { name: string; lat: number; lng: number }) =>
+    request<AppSnapshot>(`/api/photos/${photoId}/create-place`, { method: "POST", body: JSON.stringify(body) }),
   updatePending: (pendingId: string, accepted: boolean) => request<AppSnapshot>(`/api/pending/${pendingId}`, { method: "POST", body: JSON.stringify({ accepted }) }),
   resolvePendingManually: (
     pendingId: string,

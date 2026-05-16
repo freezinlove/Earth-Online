@@ -1,4 +1,5 @@
 import { envValue } from "../config/env.mjs";
+import { collectRequestIds, emitAiDebugRecord, responseHeadersToObject } from "./ai-debug.mjs";
 
 const defaultTimeoutMs = 80000;
 
@@ -36,10 +37,12 @@ export async function openAiCompatibleChatCompletion({
   responseFormat = { type: "json_object" },
   temperature = 0.2,
   headers = {},
+  debugContext,
 }) {
   if (!apiKey) throw new Error("missing API key");
   if (!model) throw new Error("missing model id");
-  const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
+  const endpoint = `${baseUrl.replace(/\/$/, "")}/chat/completions`;
+  const response = await fetch(endpoint, {
     method: "POST",
     signal: requestSignal(rootDir, timeoutEnvKey),
     headers: {
@@ -54,10 +57,35 @@ export async function openAiCompatibleChatCompletion({
       temperature,
     }),
   });
-  const json = await response.json();
-  const upstreamMessage = json.error?.message || json.message || json.choices?.[0]?.finish_reason;
-  if (!response.ok || json.error) throw new Error(`chat completion failed: ${json.error?.code ?? response.status}${upstreamMessage ? `: ${upstreamMessage}` : ""}`);
-  const content = extractMessageText(json.choices?.[0]?.message?.content);
+  const rawResponse = await response.text();
+  let json;
+  let jsonParseError;
+  try {
+    json = rawResponse ? JSON.parse(rawResponse) : undefined;
+  } catch (error) {
+    jsonParseError = error instanceof Error ? error.message : String(error);
+  }
+  const responseHeaders = responseHeadersToObject(response.headers);
+  const upstreamMessage = json?.error?.message || json?.message || json?.choices?.[0]?.finish_reason;
+  const content = extractMessageText(json?.choices?.[0]?.message?.content);
+  await emitAiDebugRecord({
+    timestamp: new Date().toISOString(),
+    client: "openai-compatible",
+    operation: "chat.completions",
+    endpoint,
+    model,
+    status: response.status,
+    ok: response.ok,
+    requestIds: collectRequestIds({ headers: responseHeaders, json }),
+    headers: responseHeaders,
+    jsonParseError,
+    contentLength: content.length,
+    contentTrimmedLength: content.trim().length,
+    rawResponse,
+    debugContext,
+  });
+  if (jsonParseError) throw new Error(`chat completion returned invalid JSON response: ${jsonParseError}`);
+  if (!response.ok || json?.error) throw new Error(`chat completion failed: ${json?.error?.code ?? response.status}${upstreamMessage ? `: ${upstreamMessage}` : ""}`);
   if (content.trim()) return content;
   throw new Error(`chat completion returned empty content${upstreamMessage ? `: ${upstreamMessage}` : ""}`);
 }
