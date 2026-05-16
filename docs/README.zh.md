@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./hero.png" alt="Earth Online travel archive hero artwork" width="100%" />
+  <img src="./hero.png" alt="Earth Online travel archive hero artwork" width="900" />
 </p>
 
 <p align="center">
