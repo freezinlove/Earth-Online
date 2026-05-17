@@ -501,6 +501,10 @@ select {
   --horizontal-width: 46px;
 }
 
+.travel-map-note-mobile {
+  display: none;
+}
+
 .travel-map-note[data-kind="place"] {
   --note-accent: #0f6f78;
   --body-x: 118px;
@@ -1349,8 +1353,20 @@ select {
   line-height: 1.12;
 }
 
-.settings-section-header .local-secret-action:first-of-type {
+.settings-section-header > .local-secret-action:first-of-type {
   margin-left: auto;
+}
+
+.settings-language-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 18px;
+  margin-left: auto;
+}
+
+.settings-language-actions .local-secret-action:first-of-type {
+  margin-left: 0;
 }
 
 .ai-model-grid {
@@ -2006,13 +2022,21 @@ select {
 
 .onboarding-welcome h1 {
   position: relative;
-  max-width: 10ch;
+  display: grid;
+  gap: 6px;
+  max-width: 100%;
   margin: 0;
   color: #944521;
   font-family: Georgia, "Times New Roman", "Noto Serif SC", serif;
   font-size: clamp(54px, 7vw, 88px);
   font-weight: 560;
   line-height: 0.98;
+  letter-spacing: 0;
+}
+
+.onboarding-welcome h1 span {
+  display: block;
+  white-space: nowrap;
 }
 
 .onboarding-kicker {
@@ -2369,10 +2393,84 @@ select {
 }
 
 @media (max-width: 767px) {
+  .primary-nav button[data-tooltip]::after {
+    display: none;
+  }
+
+  .travel-map-note-mobile {
+    display: block;
+  }
+
+  .travel-map-note {
+    position: fixed;
+    left: 14px;
+    right: 14px;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 86px);
+    width: auto;
+    height: auto;
+    max-width: none;
+    transform: none;
+    z-index: 120;
+  }
+
+  .travel-map-note-line,
+  .travel-map-note-terminal {
+    display: none;
+  }
+
+  .travel-map-note-body {
+    position: relative;
+    left: auto;
+    top: auto;
+    width: 100%;
+    max-width: none;
+    transform: none;
+    border-radius: 18px 18px 16px 16px;
+    padding: 15px;
+    box-shadow: 0 24px 58px rgba(22, 33, 38, 0.24);
+  }
+
+  .travel-map-note-title-row,
+  .travel-map-note-country-row {
+    min-width: 0;
+  }
+
+  .travel-map-note-title-row h2,
+  .travel-map-note-country-row h2 {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .travel-photo-strip {
+    max-width: calc(100vw - 58px);
+  }
+
   .settings-section-header,
   .ai-model-card-heading {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .local-language-row .settings-section-header {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .settings-language-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    gap: 14px;
+    margin-left: 0;
+  }
+
+  .settings-language-actions .local-secret-action {
+    min-width: 0;
+    justify-content: center;
+    padding-inline: 0;
   }
 
   .settings-section-header h3 {
@@ -2434,8 +2532,19 @@ select {
     padding: 36px 26px 12px;
   }
 
+  .onboarding-welcome {
+    width: 100%;
+  }
+
   .onboarding-welcome h1 {
-    font-size: clamp(48px, 15vw, 66px);
+    font-size: 34px;
+    line-height: 1.05;
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+
+  .onboarding-welcome h1 span {
+    max-width: 100%;
   }
 
   .onboarding-language-page {
@@ -2968,6 +3077,12 @@ select {
   transform: scale(0.99);
 }
 
+.import-pick-column {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}
+
 .import-pick-button {
   display: inline-flex;
   align-items: center;
@@ -2996,6 +3111,15 @@ select {
 .import-pick-button:disabled {
   cursor: default;
   opacity: 0.62;
+}
+
+.import-native-privacy-hint {
+  max-width: 260px;
+  margin: 0;
+  color: #75645f;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.65;
 }
 
 .import-progress-stack {
@@ -4337,9 +4461,9 @@ select {
 
 @media (max-width: 767px) {
   .primary-nav[data-active-panel="upload"] {
-    pointer-events: none;
-    opacity: 0;
-    transform: translateX(-50%) translateY(14px);
+    pointer-events: auto;
+    opacity: 1;
+    transform: translateX(-50%);
   }
 
   .photo-import-dropzone {
@@ -4619,6 +4743,35 @@ select {
   .time-incision-shell {
     bottom: 4.7rem;
     width: min(100vw - 72px, 680px);
+    height: 66px;
+  }
+
+  .time-incision-rail,
+  .time-incision-track,
+  .time-incision-ticks {
+    right: 30px;
+  }
+
+  .time-incision-segment {
+    top: 12px;
+    height: 12px;
+  }
+
+  .time-incision-segment[data-kind="place"] {
+    top: 13px;
+    height: 10px;
+  }
+
+  .time-incision-segment > span {
+    bottom: 16px;
+    max-width: 64px;
+    font-size: 9px;
+  }
+
+  .time-incision-back {
+    width: 30px;
+    height: 30px;
+    top: 9px;
   }
 }
 
@@ -5920,16 +6073,19 @@ select {
   }
 
   .trip-dossier-body {
-    padding-left: 64px !important;
+    padding-left: 20px !important;
+    padding-right: 20px !important;
+    padding-bottom: 112px !important;
   }
 
   .trip-dossier-hero {
-    min-height: 560px;
+    min-height: 430px;
   }
 
   .trip-dossier-title-input {
-    font-size: 36px;
+    font-size: 34px;
     min-height: 2.16em;
+    overflow-wrap: anywhere;
   }
 
   .trip-country-node {
@@ -5950,15 +6106,40 @@ select {
     grid-column: span 1;
   }
 
+  .trip-photo-caption {
+    display: grid;
+    align-items: end;
+    justify-content: stretch;
+    gap: 3px;
+    padding: 34px 10px 10px;
+    opacity: 1;
+    transform: none;
+  }
+
+  .trip-photo-caption strong,
+  .trip-photo-caption em {
+    max-width: 100%;
+  }
+
+  .trip-photo-remove {
+    top: 8px;
+    right: 8px;
+    width: 30px;
+    height: 30px;
+    opacity: 1;
+    transform: none;
+  }
+
   .trip-country-section {
     grid-template-columns: 1fr;
-    gap: 14px;
-    margin-top: 34px;
+    gap: 16px;
+    margin-top: 30px;
   }
 
   .trip-timeline::before {
-    left: 5px;
-    top: 72px;
+    left: 0;
+    top: 88px;
+    bottom: 18px;
   }
 
   .trip-country-column {
@@ -5969,15 +6150,22 @@ select {
     position: static;
     max-width: 100%;
     margin-top: 0;
-    font-size: 28px;
+    font-size: 26px;
+    overflow-wrap: anywhere;
   }
 
   .trip-route-column {
     grid-column: 1;
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    gap: 10px;
+    padding-top: 0;
   }
 
   .trip-day-content {
-    grid-column: 2;
+    grid-column: 1;
+    min-width: 0;
   }
 
   .trip-country-days {
@@ -5985,8 +6173,9 @@ select {
   }
 
   .trip-day-section {
-    grid-template-columns: 58px minmax(0, 1fr);
-    gap: 12px;
+    grid-template-columns: 1fr;
+    gap: 10px;
+    padding-left: 18px;
   }
 
   .trip-route-dot {
@@ -5999,13 +6188,28 @@ select {
   }
 
   .trip-route-label {
-    max-width: 34px;
-    font-size: 10px;
+    max-width: 100%;
+    font-size: 12px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
   }
 
   .trip-route-labels {
-    max-width: 40px;
-    gap: 6px;
+    display: flex;
+    max-width: 100%;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    margin-top: 0;
+  }
+
+  .trip-day-marker {
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .trip-day-marker h3 {
+    font-size: 24px;
+    line-height: 1.05;
   }
 
   .trip-photo-modal {

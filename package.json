@@ -28,6 +28,8 @@
     "electron:pack": "npm run build && electron-builder --dir && node scripts/electron_patch_icon.mjs",
     "electron:dist": "npm run build && electron-builder --dir && node scripts/electron_patch_icon.mjs && electron-builder --win nsis --x64 --prepackaged release/win-unpacked",
     "electron:smoke": "node scripts/electron_packaged_smoke.mjs",
+    "cap:sync": "npm run build && cap sync android",
+    "android:build": "npm run cap:sync && cd android && .\\gradlew.bat assembleDebug",
     "lint": "eslint .",
     "preview": "vite preview --host 0.0.0.0"
   },
@@ -75,6 +77,8 @@
     }
   },
   "dependencies": {
+    "@capacitor/android": "^8.3.4",
+    "@capacitor/core": "^8.3.4",
     "@react-three/drei": "^9.122.0",
     "@react-three/fiber": "^8.17.10",
     "busboy": "^1.6.0",
@@ -91,6 +95,7 @@
     "zustand": "^5.0.2"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.3.4",
     "@eslint/js": "^9.17.0",
     "@types/d3-geo": "^3.1.0",
     "@types/react": "^18.3.18",

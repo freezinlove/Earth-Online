@@ -1,6 +1,7 @@
 import { FolderOpen, HardDrive, RotateCcw } from "lucide-react";
 import { useEffect, useState } from "react";
-import { apiClient, type DesktopStorageSettings, type StorageSettings } from "@/services/apiClient";
+import type { DesktopStorageSettings, StorageSettings } from "@/services/apiClient";
+import { isAndroidRuntime, platformApi } from "@/platform";
 import { useI18n } from "@/i18n/useI18n";
 
 type StorageStatus = "idle" | "loading" | "saved" | "unchanged" | "error" | "restarting";
@@ -25,6 +26,7 @@ export function DataStorageSection({ onReadyChange, variant = "settings" }: { on
   const [desktopStorageState, setDesktopStorageState] = useState<DesktopStorageSettings | undefined>(() => desktopStorage());
   const [status, setStatus] = useState<StorageStatus>(() => (desktopStorage()?.backendReady === false ? "idle" : "loading"));
   const desktopBridge = typeof window === "undefined" ? undefined : window.earthOnlineDesktop;
+  const androidRuntime = isAndroidRuntime();
   const shouldReadBackendStorage = !desktopStorageState || desktopStorageState.backendReady;
 
   useEffect(() => {
@@ -33,7 +35,7 @@ export function DataStorageSection({ onReadyChange, variant = "settings" }: { on
       return;
     }
     let alive = true;
-    apiClient
+    platformApi
       .getStorageSettings()
       .then((storage) => {
         if (!alive) return;
@@ -111,16 +113,18 @@ export function DataStorageSection({ onReadyChange, variant = "settings" }: { on
         <p className="data-storage-copy">{t("dataStorageDescription")}</p>
       )}
 
-      <div className="data-storage-paths">
+      {androidRuntime ? <p className="settings-inline-note settings-inline-note-strong">{t("dataStorageAndroid")}</p> : null}
+
+      {!androidRuntime ? <div className="data-storage-paths">
         <PathLine label={t("dataStorageCurrent")} value={activeDataDir ?? (desktopStorageState?.needsInitialDataDir ? t("dataStorageNotConfigured") : undefined)} />
         {restartRequired ? <PathLine label={t("dataStorageNext")} value={configuredDataDir} /> : null}
-      </div>
+      </div> : null}
 
-      {variant === "settings" ? <p className="settings-inline-note settings-inline-note-strong">{t("dataStorageNoMigration")}</p> : null}
-      {desktopStorageState?.envOverride ? <p className="settings-inline-note settings-inline-note-strong">{t("dataStorageEnvOverride")}</p> : null}
-      {!desktopStorageState ? <p className="settings-inline-note">{t("dataStorageDesktopOnly")}</p> : null}
+      {!androidRuntime && variant === "settings" ? <p className="settings-inline-note settings-inline-note-strong">{t("dataStorageNoMigration")}</p> : null}
+      {!androidRuntime && desktopStorageState?.envOverride ? <p className="settings-inline-note settings-inline-note-strong">{t("dataStorageEnvOverride")}</p> : null}
+      {!androidRuntime && !desktopStorageState ? <p className="settings-inline-note">{t("dataStorageDesktopOnly")}</p> : null}
 
-      <div className="data-storage-actions">
+      {!androidRuntime ? <div className="data-storage-actions">
         <button className="local-secret-action" disabled={!canChooseDirectory || status === "loading"} onClick={() => void chooseDirectory()} type="button">
           <HardDrive size={16} />
           {t("dataStorageChoose")}
@@ -135,7 +139,7 @@ export function DataStorageSection({ onReadyChange, variant = "settings" }: { on
             {t("dataStorageRestart")}
           </button>
         ) : null}
-      </div>
+      </div> : null}
 
       {statusText ? (
         <div className="local-secret-state">

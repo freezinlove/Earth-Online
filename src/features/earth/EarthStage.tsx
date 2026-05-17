@@ -48,6 +48,12 @@ type GlobeAssetKind = "landFar" | "landMid" | "landNear" | "coastLine" | "countr
 
 const GLOBE_RADIUS = 100;
 const GLOBE_SCALE = 0.0185;
+const DESKTOP_CAMERA_DISTANCE = 5.25;
+const DESKTOP_MIN_CAMERA_DISTANCE = 2.05;
+const DESKTOP_MAX_CAMERA_DISTANCE = 6.8;
+const MOBILE_CAMERA_DISTANCE = 11.2;
+const MOBILE_MIN_CAMERA_DISTANCE = 2.35;
+const MOBILE_MAX_CAMERA_DISTANCE = MOBILE_CAMERA_DISTANCE;
 const MARKER_ALTITUDE = 0.022;
 const ROUTE_ENDPOINT_ALTITUDE = MARKER_ALTITUDE;
 const ROUTE_ARC_DETAIL = 72;
@@ -105,7 +111,11 @@ function smoothstep(edge0: number, edge1: number, value: number) {
 }
 
 function zoomProgress(camera: THREE.Camera) {
-  return THREE.MathUtils.clamp((6.8 - camera.position.length()) / (6.8 - 2.05), 0, 1);
+  return THREE.MathUtils.clamp(
+    (DESKTOP_MAX_CAMERA_DISTANCE - camera.position.length()) / (DESKTOP_MAX_CAMERA_DISTANCE - DESKTOP_MIN_CAMERA_DISTANCE),
+    0,
+    1,
+  );
 }
 
 function orbitRotateSpeed(camera: THREE.Camera) {
@@ -319,16 +329,28 @@ function focusQuaternion(point?: GeoPoint) {
   return new THREE.Quaternion().setFromEuler(new THREE.Euler(0, THREE.MathUtils.degToRad(-longitude), 0));
 }
 
-function cameraTargetForIntent(intent: GlobeViewIntent, fallbackPoint?: GeoPoint) {
+function cameraTargetForIntent(intent: GlobeViewIntent, fallbackPoint?: GeoPoint, isMobileViewport = false) {
   const point = "point" in intent ? intent.point : fallbackPoint;
-  const distance =
-    intent.source === "timeline-place"
-      ? 2.18
-      : intent.source === "timeline-trip-entry" || intent.source === "timeline-trip"
-        ? 3.85
-        : intent.source === "timeline-global"
-          ? 6.05
-          : 5.25;
+  let distance: number;
+
+  if (isMobileViewport) {
+    if (intent.source === "timeline-place") {
+      distance = 2.85;
+    } else if (intent.source === "timeline-trip-entry" || intent.source === "timeline-trip") {
+      distance = 5;
+    } else {
+      distance = MOBILE_CAMERA_DISTANCE;
+    }
+  } else if (intent.source === "timeline-place") {
+    distance = 2.18;
+  } else if (intent.source === "timeline-trip-entry" || intent.source === "timeline-trip") {
+    distance = 3.85;
+  } else if (intent.source === "timeline-global") {
+    distance = 6.05;
+  } else {
+    distance = DESKTOP_CAMERA_DISTANCE;
+  }
+
   const latitude = point?.lat ?? 18;
   const latitudeStrength = intent.source === "timeline-place" ? 1 : intent.source === "timeline-trip-entry" || intent.source === "timeline-trip" ? 0.82 : 0.58;
   const latitudeClamp = intent.source === "timeline-place" ? 0.96 : 0.78;
@@ -832,6 +854,7 @@ function GlobeScene({
   isAnnotationClosing,
   locale,
   focusPoint,
+  isMobileViewport,
   viewIntent,
   pointPicking,
   onManualView,
@@ -848,6 +871,7 @@ function GlobeScene({
   isAnnotationClosing: boolean;
   locale: Locale;
   focusPoint?: GeoPoint;
+  isMobileViewport: boolean;
   viewIntent: GlobeViewIntent;
   pointPicking: boolean;
   onManualView: () => void;
@@ -876,8 +900,8 @@ function GlobeScene({
 
   useEffect(() => {
     if (viewIntent.source === "manual") return;
-    targetCameraPosition.current = cameraTargetForIntent(viewIntent, focusPoint);
-  }, [camera, focusPoint, viewIntent]);
+    targetCameraPosition.current = cameraTargetForIntent(viewIntent, focusPoint, isMobileViewport);
+  }, [camera, focusPoint, isMobileViewport, viewIntent]);
 
   useFrame((_, delta) => {
     if (controlsRef.current) {
@@ -940,9 +964,9 @@ function GlobeScene({
         dampingFactor={0.08}
         enablePan={false}
         rotateSpeed={0.58}
-        zoomSpeed={0.8}
-        minDistance={2.05}
-        maxDistance={6.8}
+        zoomSpeed={isMobileViewport ? 0.72 : 0.8}
+        minDistance={isMobileViewport ? MOBILE_MIN_CAMERA_DISTANCE : DESKTOP_MIN_CAMERA_DISTANCE}
+        maxDistance={isMobileViewport ? MOBILE_MAX_CAMERA_DISTANCE : DESKTOP_MAX_CAMERA_DISTANCE}
         target={[0, 0, 0]}
         onStart={handleManualStart}
       />
@@ -974,9 +998,18 @@ function TravelMapAnnotation({
   const photoDragRef = useRef({ isDragging: false, lastX: 0, moved: false, pointerId: -1, startX: 0 });
   const photoStripTimer = useRef<number | undefined>(undefined);
   const [showPhotoStrip, setShowPhotoStrip] = useState(false);
+  const [isMobileViewport, setIsMobileViewport] = useState(() => (typeof window === "undefined" ? false : window.matchMedia("(max-width: 767px)").matches));
   const camera = useThree((state) => state.camera);
   const localPosition = useMemo(() => (selected ? threeGlobeVector(selected.center, GLOBE_RADIUS, MARKER_ALTITUDE) : undefined), [selected]);
   const position = useMemo(() => localPosition?.toArray(), [localPosition]);
+
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 767px)");
+    const update = () => setIsMobileViewport(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
 
   useEffect(() => {
     window.clearTimeout(photoStripTimer.current);
@@ -989,6 +1022,11 @@ function TravelMapAnnotation({
 
   useFrame(() => {
     if (!localPosition || !noteRef.current) return;
+    if (isMobileViewport) {
+      noteRef.current.style.visibility = "visible";
+      noteRef.current.style.pointerEvents = "auto";
+      return;
+    }
     const parent = anchorRef.current?.parent;
     const globeCenter = parent?.localToWorld(new THREE.Vector3(0, 0, 0));
     const worldPosition = parent ? localPosition.clone().applyMatrix4(parent.matrixWorld) : localPosition;
@@ -1064,23 +1102,38 @@ function TravelMapAnnotation({
     onOpenPhoto(photo);
   };
 
-  return (
-    <group ref={anchorRef}>
-    <Html center position={position} zIndexRange={[72, 44]} transform={false}>
-      <aside
-        ref={noteRef}
-        className="travel-map-note"
-        data-kind={selected.kind}
-        data-state={isClosing ? "closing" : "open"}
-        aria-label={selected.kind === "country" ? countryLabel(undefined, selected.countryName, locale) : selected.label}
-      >
-        <span className="travel-map-note-line travel-map-note-line-diagonal" aria-hidden="true" />
-        <span className="travel-map-note-line travel-map-note-line-horizontal" aria-hidden="true" />
-        <span className="travel-map-note-terminal" aria-hidden="true" />
-        <div className="travel-map-note-body">
-          {selected.kind === "country" ? (
-            <div className="travel-map-note-country-row">
-              <h2>{countryLabel(undefined, selected.countryName, locale)}</h2>
+  const note = (
+    <aside
+      ref={noteRef}
+      className="travel-map-note"
+      data-kind={selected.kind}
+      data-state={isClosing ? "closing" : "open"}
+      aria-label={selected.kind === "country" ? countryLabel(undefined, selected.countryName, locale) : selected.label}
+    >
+      <span className="travel-map-note-line travel-map-note-line-diagonal" aria-hidden="true" />
+      <span className="travel-map-note-line travel-map-note-line-horizontal" aria-hidden="true" />
+      <span className="travel-map-note-terminal" aria-hidden="true" />
+      <div className="travel-map-note-body">
+        {selected.kind === "country" ? (
+          <div className="travel-map-note-country-row">
+            <h2>{countryLabel(undefined, selected.countryName, locale)}</h2>
+            <button
+              className="travel-map-note-action"
+              type="button"
+              aria-label={t("enterArchive")}
+              title={t("enterArchive")}
+              onClick={(event) => {
+                event.stopPropagation();
+                onOpenArchive();
+              }}
+            >
+              <Archive size={16} />
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="travel-map-note-title-row">
+              <h2>{selected.label}</h2>
               <button
                 className="travel-map-note-action"
                 type="button"
@@ -1094,57 +1147,108 @@ function TravelMapAnnotation({
                 <Archive size={16} />
               </button>
             </div>
-          ) : (
-            <>
-              <div className="travel-map-note-title-row">
-                <h2>{selected.label}</h2>
-                <button
-                  className="travel-map-note-action"
-                  type="button"
-                  aria-label={t("enterArchive")}
-                  title={t("enterArchive")}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onOpenArchive();
-                  }}
-                >
-                  <Archive size={16} />
-                </button>
+            {showPhotoStrip && relatedPhotos.length > 0 ? (
+              <div
+                ref={photoStripRef}
+                className="travel-photo-strip"
+                aria-label={t("relatedPhotos")}
+                onWheel={handlePhotoStripWheel}
+                onPointerDown={handlePhotoStripPointerDown}
+                onPointerMove={handlePhotoStripPointerMove}
+                onPointerUp={finishPhotoStripDrag}
+                onPointerCancel={finishPhotoStripDrag}
+                onPointerLeave={finishPhotoStripDrag}
+              >
+                {relatedPhotos.map((photo) => (
+                  <button
+                    key={photo.id}
+                    type="button"
+                    className="travel-photo-thumb"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openPhotoFromStrip(photo);
+                    }}
+                    aria-label={photoLabel(photo)}
+                  >
+                    <img src={photo.thumbnailUrl} alt={photoAltText(photo)} decoding="async" loading="lazy" />
+                  </button>
+                ))}
               </div>
-              {showPhotoStrip && relatedPhotos.length > 0 ? (
-                <div
-                  ref={photoStripRef}
-                  className="travel-photo-strip"
-                  aria-label={t("relatedPhotos")}
-                  onWheel={handlePhotoStripWheel}
-                  onPointerDown={handlePhotoStripPointerDown}
-                  onPointerMove={handlePhotoStripPointerMove}
-                  onPointerUp={finishPhotoStripDrag}
-                  onPointerCancel={finishPhotoStripDrag}
-                  onPointerLeave={finishPhotoStripDrag}
-                >
-                  {relatedPhotos.map((photo) => (
-                    <button
-                      key={photo.id}
-                      type="button"
-                      className="travel-photo-thumb"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        openPhotoFromStrip(photo);
-                      }}
-                      aria-label={photoLabel(photo)}
-                    >
-                      <img src={photo.thumbnailUrl} alt={photoAltText(photo)} decoding="async" loading="lazy" />
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-            </>
-          )}
-        </div>
-      </aside>
-    </Html>
+            ) : null}
+          </>
+        )}
+      </div>
+    </aside>
+  );
+
+  if (isMobileViewport) return null;
+
+  return (
+    <group ref={anchorRef}>
+      <Html center position={position} zIndexRange={[72, 44]} transform={false}>
+        {note}
+      </Html>
     </group>
+  );
+}
+
+function MobileTravelMapNote({
+  selected,
+  trip,
+  photos,
+  isClosing,
+  locale,
+  onOpenArchive,
+  onOpenPhoto,
+}: {
+  selected?: TravelMarker;
+  trip?: Trip;
+  photos: Photo[];
+  isClosing: boolean;
+  locale: Locale;
+  onOpenArchive: () => void;
+  onOpenPhoto: (photo: Photo) => void;
+}) {
+  const { t } = useI18n();
+  if (!selected || !trip) return null;
+
+  const relatedPhotos = photos.filter((photo) => selected.photoIds.includes(photo.id));
+  return (
+    <aside
+      className="travel-map-note travel-map-note-mobile"
+      data-kind={selected.kind}
+      data-state={isClosing ? "closing" : "open"}
+      aria-label={selected.kind === "country" ? countryLabel(undefined, selected.countryName, locale) : selected.label}
+    >
+      <div className="travel-map-note-body">
+        {selected.kind === "country" ? (
+          <div className="travel-map-note-country-row">
+            <h2>{countryLabel(undefined, selected.countryName, locale)}</h2>
+            <button className="travel-map-note-action" type="button" aria-label={t("enterArchive")} title={t("enterArchive")} onClick={onOpenArchive}>
+              <Archive size={16} />
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="travel-map-note-title-row">
+              <h2>{selected.label}</h2>
+              <button className="travel-map-note-action" type="button" aria-label={t("enterArchive")} title={t("enterArchive")} onClick={onOpenArchive}>
+                <Archive size={16} />
+              </button>
+            </div>
+            {relatedPhotos.length > 0 ? (
+              <div className="travel-photo-strip" aria-label={t("relatedPhotos")}>
+                {relatedPhotos.map((photo) => (
+                  <button key={photo.id} type="button" className="travel-photo-thumb" onClick={() => onOpenPhoto(photo)} aria-label={photoLabel(photo)}>
+                    <img src={photo.thumbnailUrl} alt={photoAltText(photo)} decoding="async" loading="lazy" />
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </>
+        )}
+      </div>
+    </aside>
   );
 }
 
@@ -1218,6 +1322,7 @@ export function EarthStage() {
   const [selectedMapItem, setSelectedMapItem] = useState<SelectedMapItem>();
   const [infoPanelClosing, setInfoPanelClosing] = useState(false);
   const [previewPhoto, setPreviewPhoto] = useState<Photo>();
+  const [isMobileViewport, setIsMobileViewport] = useState(() => (typeof window === "undefined" ? false : window.matchMedia("(max-width: 767px)").matches));
   const infoPanelCloseTimer = useRef<number | undefined>(undefined);
 
   const shouldShowAllTrips = timelineZoom === "global";
@@ -1280,6 +1385,8 @@ export function EarthStage() {
   const previewPlace = previewPhoto?.placeNodeId ? places.find((place) => place.id === previewPhoto.placeNodeId) : undefined;
   const homeState = activePanel === "globe" ? "active" : "covered";
   const pointPicking = Boolean(manualPlacePick?.isPicking);
+  const mobileCanvasDpr = typeof window === "undefined" ? 2 : Math.min(window.devicePixelRatio || 2, 3.5);
+  const canvasDpr = isMobileViewport ? mobileCanvasDpr : ([1, 2] as [number, number]);
 
   const handlePickPoint = useCallback(
     (point: GeoPoint) => {
@@ -1318,6 +1425,14 @@ export function EarthStage() {
   useEffect(() => () => window.clearTimeout(infoPanelCloseTimer.current), []);
 
   useEffect(() => {
+    const query = window.matchMedia("(max-width: 767px)");
+    const update = () => setIsMobileViewport(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
     if (!selectedPlaceId) return;
     const marker = placeMarkers.find((item) => item.placeIds?.includes(selectedPlaceId));
     if (marker) transitionToMapItem({ kind: "place", id: marker.id });
@@ -1351,9 +1466,9 @@ export function EarthStage() {
       <div className="pointer-events-none fixed left-1/2 top-1/2 h-[76vmin] w-[76vmin] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary-fixed/20 blur-3xl" />
       <div className="three-globe-stage fixed inset-0 z-10 h-screen w-screen">
         <Canvas
-          camera={{ position: [0, 0, 5.25], fov: 42, near: 0.1, far: 1000 }}
-          dpr={[1, 2]}
-          gl={{ antialias: true, alpha: true }}
+          camera={{ position: [0, 0, isMobileViewport ? MOBILE_CAMERA_DISTANCE : DESKTOP_CAMERA_DISTANCE], fov: isMobileViewport ? 46 : 42, near: 0.1, far: 1000 }}
+          dpr={canvasDpr}
+          gl={{ antialias: true, alpha: true, powerPreference: "high-performance" }}
           onPointerMissed={() => {
             if (!pointPicking) closeSelectedMapItem();
           }}
@@ -1367,6 +1482,7 @@ export function EarthStage() {
               photos={tripPhotos}
               isAnnotationClosing={infoPanelClosing}
               focusPoint={focusPoint}
+              isMobileViewport={isMobileViewport}
               viewIntent={globeViewIntent}
               pointPicking={pointPicking}
               locale={locale}
@@ -1379,6 +1495,15 @@ export function EarthStage() {
           </Suspense>
         </Canvas>
       </div>
+      <MobileTravelMapNote
+        selected={selectedMarker}
+        trip={annotationTrip}
+        photos={tripPhotos}
+        isClosing={infoPanelClosing}
+        locale={locale}
+        onOpenArchive={handleOpenArchive}
+        onOpenPhoto={setPreviewPhoto}
+      />
       {pointPicking ? (
         <div className="globe-point-pick-hint">
           <MapPin size={15} />

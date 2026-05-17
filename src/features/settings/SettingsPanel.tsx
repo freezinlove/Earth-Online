@@ -2,7 +2,8 @@ import { LoaderCircle, RefreshCw } from "lucide-react";
 import type { CSSProperties } from "react";
 import { useState } from "react";
 import { useI18n } from "@/i18n/useI18n";
-import { apiClient, type EmbeddingRebuildReport, type ImportJobProgress, type LocalAiCredential } from "@/services/apiClient";
+import type { EmbeddingRebuildReport, ImportJobProgress, LocalAiCredential } from "@/services/apiClient";
+import { isAndroidRuntime, platformApi } from "@/platform";
 import { useAppStore, type Locale } from "@/store/appStore";
 import { DataStorageSection } from "@/features/settings/DataStorageSection";
 import { emptyCredential, embeddingProgressPercent, firstModel, ModelProfileSection, profileModels, type FieldStatus, useAiSettingsForm } from "@/features/settings/settingsForm";
@@ -12,6 +13,7 @@ export function SettingsPanel({ isClosing = false }: { isClosing?: boolean }) {
   const setLocale = useAppStore((state) => state.setLocale);
   const photoCount = useAppStore((state) => state.photos.length);
   const loadState = useAppStore((state) => state.loadState);
+  const androidRuntime = isAndroidRuntime();
   const {
     applyProfiles,
     clearField,
@@ -73,7 +75,7 @@ export function SettingsPanel({ isClosing = false }: { isClosing?: boolean }) {
     setEmbeddingRebuildError(undefined);
     setEmbeddingRebuildProgress({ phase: "queued", done: 0, total: retryCount, steps: { embedding: { done: 0, total: retryCount } } });
     try {
-      const snapshot = await apiClient.rebuildPhotoEmbeddings(
+      const snapshot = await platformApi.rebuildPhotoEmbeddings(
         (progress) => {
           setEmbeddingRebuildProgress(progress);
         },
@@ -105,17 +107,19 @@ export function SettingsPanel({ isClosing = false }: { isClosing?: boolean }) {
             <div className="min-w-0">
               <div className="settings-section-header">
                 <h3>{t("language")}</h3>
-                {(["zh", "en"] satisfies Locale[]).map((item) => (
-                  <button className={`local-secret-action ${locale === item ? "" : "local-secret-action-subtle"}`} key={item} onClick={() => setLocale(item)} type="button">
-                    {item === "zh" ? t("simplifiedChinese") : t("english")}
-                  </button>
-                ))}
+                <div className="settings-language-actions">
+                  {(["zh", "en"] satisfies Locale[]).map((item) => (
+                    <button className={`local-secret-action ${locale === item ? "" : "local-secret-action-subtle"}`} key={item} onClick={() => setLocale(item)} type="button">
+                      {item === "zh" ? t("simplifiedChinese") : t("english")}
+                    </button>
+                  ))}
+                </div>
               </div>
               <p className="settings-inline-note">{t("languageSwitchWarning")}</p>
             </div>
           </article>
 
-          <article className="local-secret-row local-storage-row" style={{ "--local-secret-delay": "90ms" } as CSSProperties}>
+          {!androidRuntime ? <article className="local-secret-row local-storage-row" style={{ "--local-secret-delay": "90ms" } as CSSProperties}>
             <div className="local-secret-index">01</div>
             <div className="min-w-0">
               <div className="settings-section-header">
@@ -123,7 +127,7 @@ export function SettingsPanel({ isClosing = false }: { isClosing?: boolean }) {
               </div>
               <DataStorageSection />
             </div>
-          </article>
+          </article> : null}
 
           <article className="local-secret-row local-model-row" style={{ "--local-secret-delay": "180ms" } as CSSProperties}>
             <div className="local-secret-index">02</div>

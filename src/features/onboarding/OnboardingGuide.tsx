@@ -2,6 +2,7 @@ import { Check, ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/i18n/useI18n";
 import type { LocalAiCredential } from "@/services/apiClient";
+import { isAndroidRuntime } from "@/platform";
 import { useAppStore, type Locale } from "@/store/appStore";
 import { DataStorageSection } from "@/features/settings/DataStorageSection";
 import { emptyCredential, firstModel, ModelProfileSection, profileModels, type FieldStatus, useAiSettingsForm } from "@/features/settings/settingsForm";
@@ -32,6 +33,7 @@ function OnboardingGuideDialog({ onDismiss }: { onDismiss: () => void }) {
   const loadState = useAppStore((state) => state.loadState);
   const [isStorageReady, setIsStorageReady] = useState(() => {
     if (typeof window === "undefined") return false;
+    if (isAndroidRuntime()) return true;
     const desktopStorage = window.earthOnlineDesktop?.getStorage?.() ?? window.earthOnlineDesktop?.storage;
     if (desktopStorage) return desktopStorage.backendReady === true && desktopStorage.restartRequired !== true;
     return false;
@@ -296,7 +298,10 @@ function OnboardingGuideDialog({ onDismiss }: { onDismiss: () => void }) {
           <>
             <div className="onboarding-page-viewport onboarding-welcome-viewport">
               <div className="onboarding-welcome" data-state={isWelcomeClosing ? "closing" : "open"}>
-                <h1>{t("onboardingWelcomeTitle")}</h1>
+                <h1 aria-label={t("onboardingWelcomeTitle")}>
+                  <span>Welcome to</span>
+                  <span>Earth_Online</span>
+                </h1>
               </div>
             </div>
             <div className="onboarding-footer onboarding-footer-welcome">

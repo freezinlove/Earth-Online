@@ -4,7 +4,7 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
 export default [
-  { ignores: ["dist/**", "output/**", "test-results/**", "external/**", "node_modules/**"] },
+  { ignores: ["android/**/build/**", "android/app/src/main/assets/**", "dist/**", "output/**", "test-results/**", "external/**", "node_modules/**"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

@@ -9,6 +9,8 @@ import type { MessageKey } from "@/i18n/messages";
 import type { ImportBatch, PendingItem, Photo, PlaceNode, Trip } from "@/domain/models";
 import type { ImportJobProgress } from "@/services/apiClient";
 import { ManualPlaceResolutionModal, type ManualPlaceResolutionAction } from "@/features/places/ManualPlaceResolutionModal";
+import { isAndroidRuntime } from "@/platform";
+import { pickNativePhotoAssets } from "@/platform/nativePhotoLibrary";
 import { useAppStore } from "@/store/appStore";
 
 type ImportStep = {
@@ -870,6 +872,7 @@ function AiFailureSuggestions({
 export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }) {
   const { locale, t } = useI18n();
   const importFiles = useAppStore((state) => state.importFiles);
+  const importMobilePhotoAssets = useAppStore((state) => state.importMobilePhotoAssets);
   const importBatches = useAppStore((state) => state.importBatches);
   const pendingItems = useAppStore((state) => state.pendingItems);
   const trips = useAppStore((state) => state.trips);
@@ -908,6 +911,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
   const [previewPhoto, setPreviewPhoto] = useState<Photo>();
   const [manualPending, setManualPending] = useState<PendingItem>();
   const [isPreviewClosing, setIsPreviewClosing] = useState(false);
+  const nativePickerOpenRef = useRef(false);
   const lastBatch = importBatches[importBatches.length - 1];
   const latestBatch = lastBatch?.status === "rolled_back" ? undefined : lastBatch;
   const importedIds = useMemo(() => new Set(latestBatch?.addedPhotoIds ?? []), [latestBatch?.addedPhotoIds]);
@@ -923,6 +927,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
   const aiFailureGroups = useMemo(() => groupAiFailurePreviews(latestBatch, photos, pendingItems, t), [latestBatch, pendingItems, photos, t]);
   const canConfirm = isPendingBatch(latestBatch) && missingGroups.length === 0 && aiFailureGroups.length === 0 && !isSubmitting;
   const canRollback = isPendingBatch(latestBatch) && !isSubmitting;
+  const showAndroidPhotoPrivacyHint = isAndroidRuntime();
   const summaryTrips = tripPreviews.length;
   const summaryPlaces = tripPreviews.reduce((count, trip) => count + trip.places.length, 0);
   const activeManualPending = manualPending ?? (manualPlacePick ? pendingItems.find((item) => item.id === manualPlacePick.pendingId) : undefined);
@@ -986,6 +991,24 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
     const files = event.target.files;
     if (files) startImport(files);
     event.target.value = "";
+  };
+
+  const choosePhotos = async () => {
+    if (isImporting || nativePickerOpenRef.current) return;
+    if (!isAndroidRuntime()) {
+      inputRef.current?.click();
+      return;
+    }
+    nativePickerOpenRef.current = true;
+    try {
+      const assets = await pickNativePhotoAssets();
+      if (assets.length > 0) await importMobilePhotoAssets(assets);
+    } catch (error) {
+      console.error(error);
+      inputRef.current?.click();
+    } finally {
+      nativePickerOpenRef.current = false;
+    }
   };
 
   const handleDrop = (event: DragEvent<HTMLElement>) => {
@@ -1208,10 +1231,13 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
         <input ref={inputRef} className="sr-only" type="file" accept="image/*" multiple onChange={handleFileChange} />
 
         <div className="import-intake" data-dragging={isDragging || undefined}>
-          <button className="import-pick-button" type="button" onClick={() => inputRef.current?.click()} disabled={isImporting} title={t("choosePhotos")}>
-            {isImporting ? <LoaderCircle className="animate-spin" size={18} /> : <FolderOpen size={18} />}
-            <span>{isImporting ? t("importing") : t("choosePhotos")}</span>
-          </button>
+          <div className="import-pick-column">
+            <button className="import-pick-button" type="button" onClick={() => void choosePhotos()} disabled={isImporting} title={t("choosePhotos")}>
+              {isImporting ? <LoaderCircle className="animate-spin" size={18} /> : <FolderOpen size={18} />}
+              <span>{isImporting ? t("importing") : t("choosePhotos")}</span>
+            </button>
+            {showAndroidPhotoPrivacyHint ? <p className="import-native-privacy-hint">{t("androidPhotoPrivacyHint")}</p> : null}
+          </div>
 
           <div className="import-progress-stack" aria-label={t("importing")}>
             {progressSteps.map((step) => (

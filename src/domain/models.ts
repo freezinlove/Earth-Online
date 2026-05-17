@@ -91,6 +91,9 @@ export interface Photo {
   title?: string;
   thumbnailUrl: string;
   storageUrl?: string;
+  sourceUri?: string;
+  sourceWebPath?: string;
+  sourceProvider?: "android_photo_picker" | "file_input";
   originalHash?: string;
   mime?: string;
   capturedAt?: string;

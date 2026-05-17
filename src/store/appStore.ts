@@ -1,7 +1,9 @@
 import { create } from "zustand";
 import { capturedDateLabel } from "@/domain/datetime";
 import type { DossierTripGroup, GlobeMarker, ID, ImportBatch, PendingItem, Photo, PlaceNode, Route, SearchDocument, SearchResult, TimelineSegment, Trip } from "@/domain/models";
-import { apiClient, type AppSnapshot, type ImportJobProgress } from "@/services/apiClient";
+import type { AppSnapshot, ImportJobProgress } from "@/services/apiClient";
+import { platformApi } from "@/platform";
+import type { NativePhotoAsset } from "@/platform/nativePhotoLibrary";
 
 export type AppPanel = "globe" | "archive" | "tripDetail" | "search" | "settings" | "upload";
 export type TimelineZoom = "global" | "trip" | "day";
@@ -59,7 +61,7 @@ async function rollbackLatestPendingImportIfNeeded(getState: () => AppState, set
   const batches = getState().importBatches;
   const latest = batches[batches.length - 1];
   if (!latest || latest.status !== "pending_confirmation") return;
-  const snapshot = await apiClient.rollbackImport(latest.id);
+  const snapshot = await platformApi.rollbackImport(latest.id);
   setState({
     ...applySnapshot(snapshot),
     selectedTripId: snapshot.trips[0]?.id ?? "",
@@ -113,6 +115,7 @@ interface AppState {
   runSearch: (query?: string) => Promise<void>;
   setAiCloudEnabled: (enabled: boolean) => void;
   importFiles: (files: FileList | File[]) => Promise<void>;
+  importMobilePhotoAssets: (assets: NativePhotoAsset[]) => Promise<void>;
   importAppleTestPhotos: () => Promise<void>;
   confirmLatestImport: () => Promise<void>;
   rollbackLatestImport: () => Promise<void>;
@@ -169,7 +172,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   loadState: async () => {
     set({ isLoading: true, error: undefined });
     try {
-      const snapshot = await apiClient.getState();
+      const snapshot = await platformApi.getState();
       const selectedTripExists = snapshot.trips.some((trip) => trip.id === get().selectedTripId);
       const nextSelectedTripId = selectedTripExists ? get().selectedTripId : snapshot.trips[0]?.id ?? "";
       set((state) => ({
@@ -245,7 +248,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   runSearch: async (query = get().searchQuery) => {
     try {
-      const { results } = await apiClient.search(query, get().searchFilters);
+      const { results } = await platformApi.search(query, get().searchFilters);
       set({ searchResults: results, error: undefined });
     } catch (error) {
       set({ error: error instanceof Error ? error.message : "搜索失败" });
@@ -262,7 +265,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
     try {
       await rollbackLatestPendingImportIfNeeded(get, set);
-      const snapshot = await apiClient.importFiles(files, get().aiCloudEnabled, get().locale, (done, total) => {
+      const snapshot = await platformApi.importFiles(files, get().aiCloudEnabled, get().locale, (done, total) => {
         set({ importProgress: { done, total, phase: "reading", steps: { reading: { done, total } } } });
       }, (progress) => {
         set({ importProgress: progress });
@@ -280,11 +283,43 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ isImporting: false, importProgress: undefined, error: error instanceof Error ? error.message : "导入失败" });
     }
   },
+  importMobilePhotoAssets: async (assets) => {
+    if (assets.length === 0) return;
+    const importMobilePhotoAssets = platformApi.importMobilePhotoAssets;
+    if (!importMobilePhotoAssets) {
+      set({ error: "当前平台不支持系统相册导入" });
+      return;
+    }
+    set({
+      isImporting: true,
+      importProgress: { done: 0, total: assets.length, phase: "reading", steps: { reading: { done: 0, total: assets.length } } },
+      error: undefined,
+    });
+    try {
+      await rollbackLatestPendingImportIfNeeded(get, set);
+      const snapshot = await importMobilePhotoAssets(assets, get().aiCloudEnabled, get().locale, (done, total) => {
+        set({ importProgress: { done, total, phase: "reading", steps: { reading: { done, total } } } });
+      }, (progress) => {
+        set({ importProgress: progress });
+      });
+      const latest = snapshot.importBatches[snapshot.importBatches.length - 1];
+      set({
+        ...applySnapshot(snapshot),
+        isImporting: false,
+        importProgress: undefined,
+        selectedTripId: latest?.createdTripIds[0] ?? snapshot.trips[0]?.id ?? "",
+        cursorDate: snapshot.trips.find((trip) => trip.id === latest?.createdTripIds[0])?.dateRange.start ?? get().cursorDate,
+        activePanel: "upload",
+      });
+    } catch (error) {
+      set({ isImporting: false, importProgress: undefined, error: error instanceof Error ? error.message : "导入系统相册失败" });
+    }
+  },
   importAppleTestPhotos: async () => {
     set({ isImporting: true, importProgress: { done: 0, total: 149, phase: "ai", steps: { ai: { done: 0, total: 149 } } }, error: undefined });
     try {
       await rollbackLatestPendingImportIfNeeded(get, set);
-      const snapshot = await apiClient.importAppleTestPhotos(get().aiCloudEnabled);
+      const snapshot = await platformApi.importAppleTestPhotos(get().aiCloudEnabled);
       const latest = snapshot.importBatches[snapshot.importBatches.length - 1];
       set({
         ...applySnapshot(snapshot),
@@ -302,21 +337,21 @@ export const useAppStore = create<AppState>((set, get) => ({
     const batches = get().importBatches;
     const latest = batches[batches.length - 1];
     if (!latest || latest.status !== "pending_confirmation") return;
-    const snapshot = await apiClient.confirmImport(latest.id);
+    const snapshot = await platformApi.confirmImport(latest.id);
     set({ ...applySnapshot(snapshot), activePanel: "globe" });
   },
   rollbackLatestImport: async () => {
     const batches = get().importBatches;
     const latest = batches[batches.length - 1];
     if (!latest || latest.status !== "pending_confirmation") return;
-    const snapshot = await apiClient.rollbackImport(latest.id);
+    const snapshot = await platformApi.rollbackImport(latest.id);
     set({ ...applySnapshot(snapshot), selectedTripId: snapshot.trips[0]?.id ?? "", activePanel: "globe" });
   },
   cancelPendingImportPhotos: async (photoIds) => {
     const batches = get().importBatches;
     const latest = batches[batches.length - 1];
     if (!latest || latest.status !== "pending_confirmation" || photoIds.length === 0) return;
-    const snapshot = await apiClient.cancelImportPhotos(latest.id, photoIds);
+    const snapshot = await platformApi.cancelImportPhotos(latest.id, photoIds);
     const nextLatest = snapshot.importBatches[snapshot.importBatches.length - 1];
     set({
       ...applySnapshot(snapshot),
@@ -329,39 +364,39 @@ export const useAppStore = create<AppState>((set, get) => ({
     const batches = get().importBatches;
     const latest = batches[batches.length - 1];
     if (!latest || latest.status !== "pending_confirmation") return;
-    const snapshot = await apiClient.inferPendingLocation(latest.id, pendingId, get().locale);
+    const snapshot = await platformApi.inferPendingLocation(latest.id, pendingId, get().locale);
     set({ ...applySnapshot(snapshot), activePanel: "upload" });
   },
   inferPendingLocations: async (pendingIds, onProgress) => {
     const batches = get().importBatches;
     const latest = batches[batches.length - 1];
     if (!latest || latest.status !== "pending_confirmation" || pendingIds.length === 0) return;
-    const snapshot = await apiClient.inferPendingLocations(latest.id, pendingIds, get().locale, onProgress);
+    const snapshot = await platformApi.inferPendingLocations(latest.id, pendingIds, get().locale, onProgress);
     set({ ...applySnapshot(snapshot), activePanel: "upload" });
   },
   resolveImportAiFailure: async (pendingId, action) => {
     const batches = get().importBatches;
     const latest = batches[batches.length - 1];
     if (!latest || latest.status !== "pending_confirmation") return;
-    const snapshot = await apiClient.resolveImportAiFailure(latest.id, pendingId, action, get().locale);
+    const snapshot = await platformApi.resolveImportAiFailure(latest.id, pendingId, action, get().locale);
     set({ ...applySnapshot(snapshot), activePanel: "upload" });
   },
   resolveImportAiFailures: async (pendingIds, action, onProgress) => {
     const batches = get().importBatches;
     const latest = batches[batches.length - 1];
     if (!latest || latest.status !== "pending_confirmation" || pendingIds.length === 0) return;
-    const snapshot = await apiClient.resolveImportAiFailures(latest.id, pendingIds, action, get().locale, onProgress);
+    const snapshot = await platformApi.resolveImportAiFailures(latest.id, pendingIds, action, get().locale, onProgress);
     set({ ...applySnapshot(snapshot), activePanel: "upload" });
   },
   mergeLatestImportTrips: async () => {
     const batches = get().importBatches;
     const latest = batches[batches.length - 1];
     if (!latest || latest.status !== "pending_confirmation") return;
-    const snapshot = await apiClient.mergeImportTrips(latest.id);
+    const snapshot = await platformApi.mergeImportTrips(latest.id);
     set({ ...applySnapshot(snapshot), selectedTripId: latest.createdTripIds[0] ?? get().selectedTripId, activePanel: "upload" });
   },
   deleteTrip: async (tripId) => {
-    const snapshot = await apiClient.deleteTrip(tripId);
+    const snapshot = await platformApi.deleteTrip(tripId);
     const nextSelectedTripId = snapshot.trips.some((trip) => trip.id === get().selectedTripId) ? get().selectedTripId : (snapshot.trips[0]?.id ?? "");
     set({
       ...applySnapshot(snapshot),
@@ -373,35 +408,35 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
   updateTripTitle: async (tripId, title) => {
-    const snapshot = await apiClient.updateTrip(tripId, { title });
+    const snapshot = await platformApi.updateTrip(tripId, { title });
     set(applySnapshot(snapshot));
   },
   updatePlaceName: async (placeId, name) => {
-    const snapshot = await apiClient.updatePlace(placeId, { name });
+    const snapshot = await platformApi.updatePlace(placeId, { name });
     set(applySnapshot(snapshot));
   },
   updatePhotoUserEdits: async (photoId, edits) => {
-    const snapshot = await apiClient.updatePhoto(photoId, { userEdits: edits });
+    const snapshot = await platformApi.updatePhoto(photoId, { userEdits: edits });
     set(applySnapshot(snapshot));
   },
   bindPhotoToPlace: async (photoId, placeId, activePanel = get().activePanel) => {
-    const snapshot = await apiClient.bindPhoto(photoId, placeId);
+    const snapshot = await platformApi.bindPhoto(photoId, placeId);
     set({ ...applySnapshot(snapshot), activePanel, manualPlacePick: undefined });
   },
   createPlaceForPhoto: async (photoId, body, activePanel = get().activePanel) => {
-    const snapshot = await apiClient.createPlaceForPhoto(photoId, body);
+    const snapshot = await platformApi.createPlaceForPhoto(photoId, body);
     set({ ...applySnapshot(snapshot), activePanel, manualPlacePick: undefined });
   },
   deletePhoto: async (photoId) => {
-    const snapshot = await apiClient.deletePhoto(photoId);
+    const snapshot = await platformApi.deletePhoto(photoId);
     set(applySnapshot(snapshot));
   },
   acknowledgePendingItem: async (pendingId, accepted) => {
-    const snapshot = await apiClient.updatePending(pendingId, accepted);
+    const snapshot = await platformApi.updatePending(pendingId, accepted);
     set(applySnapshot(snapshot));
   },
   resolvePendingManually: async (pendingId, body) => {
-    const snapshot = await apiClient.resolvePendingManually(pendingId, body);
+    const snapshot = await platformApi.resolvePendingManually(pendingId, body);
     set({ ...applySnapshot(snapshot), activePanel: "upload", manualPlacePick: undefined });
   },
   openManualPlacePick: (pendingId, name, returnPanel = "upload") => set({ manualPlacePick: { pendingId, name, mode: "bind", returnPanel, isPicking: false, nameDirty: false } }),
@@ -426,7 +461,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       globeViewIntent: { source: "manual" },
     }));
     try {
-      const response = await apiClient.reverseGeocode(point);
+      const response = await platformApi.reverseGeocode(point);
       const label = geocodeLabel(response.candidates[0], get().locale);
       set((state) => ({
         manualPlacePick: state.manualPlacePick?.point?.lat === point.lat && state.manualPlacePick.point.lng === point.lng

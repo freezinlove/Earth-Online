@@ -17,13 +17,14 @@ export function MainLayout({ children }: { children: ReactNode }) {
   const { t } = useI18n();
   const activePanel = useAppStore((state) => state.activePanel);
   const setActivePanel = useAppStore((state) => state.setActivePanel);
+  const [isMobileViewport, setIsMobileViewport] = useState(() => (typeof window === "undefined" ? false : window.matchMedia("(max-width: 767px)").matches));
   const [indicatorMotion, setIndicatorMotion] = useState<{
     direction: "up" | "down";
     from: AppPanel;
     id: number;
     to: AppPanel;
   } | null>(null);
-  const shouldHidePrimaryNav = activePanel === "tripDetail" || activePanel === "search";
+  const shouldHidePrimaryNav = !isMobileViewport && (activePanel === "tripDetail" || activePanel === "search");
   const [shouldRenderPrimaryNav, setShouldRenderPrimaryNav] = useState(!shouldHidePrimaryNav);
   const [isPrimaryNavClosing, setIsPrimaryNavClosing] = useState(false);
   const motionTimer = useRef<number | undefined>(undefined);
@@ -47,6 +48,14 @@ export function MainLayout({ children }: { children: ReactNode }) {
     setActivePanel(panel);
   };
   const togglePanel = (panel: AppPanel) => moveToPanel(activePanel === panel ? "globe" : panel);
+
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 767px)");
+    const update = () => setIsMobileViewport(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
 
   useEffect(() => {
     if (!indicatorMotion) return;

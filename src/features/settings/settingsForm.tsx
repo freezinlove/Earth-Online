@@ -1,7 +1,8 @@
 import { Check, ChevronDown, KeyRound, LoaderCircle, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { apiClient, type AiConfig, type AiModelOption, type AiProviderOption, type ImportJobProgress, type LocalAiCredential, type ProviderCredentialKey } from "@/services/apiClient";
+import type { AiConfig, AiModelOption, AiProviderOption, ImportJobProgress, LocalAiCredential, ProviderCredentialKey } from "@/services/apiClient";
+import { platformApi } from "@/platform";
 import type { Locale } from "@/store/appStore";
 
 export type FieldStatus = "idle" | "loading" | "saving" | "saved" | "cleared" | "unchanged" | "error";
@@ -321,7 +322,7 @@ function makeLoadingStatuses(): Record<ProfileKey, Record<ProviderCredentialKey,
 }
 
 export function useAiSettingsForm(enabled = true) {
-  const [settings, setSettings] = useState<Awaited<ReturnType<typeof apiClient.getAiSettings>>>();
+  const [settings, setSettings] = useState<Awaited<ReturnType<typeof platformApi.getAiSettings>>>();
   const [values, setValues] = useState<Record<ProfileKey, Record<ProviderCredentialKey, string>>>(() => makeEmptyValues());
   const [statuses, setStatuses] = useState<Record<ProfileKey, Record<ProviderCredentialKey, FieldStatus>>>(() => makeLoadingStatuses());
   const [profileDraft, setProfileDraft] = useState<AiConfig["profiles"]>();
@@ -336,7 +337,7 @@ export function useAiSettingsForm(enabled = true) {
       return;
     }
     let alive = true;
-    apiClient
+    platformApi
       .getAiSettings()
       .then((nextSettings) => {
         if (!alive) return;
@@ -381,7 +382,7 @@ export function useAiSettingsForm(enabled = true) {
     }
     setStatuses((current) => ({ ...current, [profile]: { ...current[profile], [key]: "saving" } }));
     try {
-      const nextSettings = await apiClient.updateAiSettings({ profileCredentials: { [profile]: { [key]: nextValue } } });
+      const nextSettings = await platformApi.updateAiSettings({ profileCredentials: { [profile]: { [key]: nextValue } } });
       setSettings(nextSettings);
       setProfileDraft((current) => current ?? nextSettings.aiConfig.profiles);
       setValues((current) => ({ ...current, [profile]: { ...current[profile], [key]: "" } }));
@@ -394,7 +395,7 @@ export function useAiSettingsForm(enabled = true) {
   const clearField = async (profile: ProfileKey, key: ProviderCredentialKey) => {
     setStatuses((current) => ({ ...current, [profile]: { ...current[profile], [key]: "saving" } }));
     try {
-      const nextSettings = await apiClient.updateAiSettings({ profileCredentials: { [profile]: { [key]: "" } } });
+      const nextSettings = await platformApi.updateAiSettings({ profileCredentials: { [profile]: { [key]: "" } } });
       setSettings(nextSettings);
       setProfileDraft((current) => current ?? nextSettings.aiConfig.profiles);
       setValues((current) => ({ ...current, [profile]: { ...current[profile], [key]: "" } }));
@@ -411,7 +412,7 @@ export function useAiSettingsForm(enabled = true) {
       profileSaveSeq.current = saveSeq;
       setProfileStatus("saving");
       try {
-        const nextSettings = await apiClient.updateAiSettings({ aiConfig: { catalog: settings.aiConfig.catalog, profiles } as AiConfig });
+        const nextSettings = await platformApi.updateAiSettings({ aiConfig: { catalog: settings.aiConfig.catalog, profiles } as AiConfig });
         if (profileSaveSeq.current !== saveSeq) return;
         setSettings(nextSettings);
         setProfileDraft(nextSettings.aiConfig.profiles);
