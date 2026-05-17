@@ -1,20 +1,17 @@
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { geodataPath } from "../config/paths.mjs";
-import { countryAliasKeys, normalizeCountryDescription, normalizedCountryText } from "./country-normalizer.mjs";
-import { haversineKm, isUsableLocation } from "./geo.mjs";
-import { cityPresets } from "./geo-catalog.mjs";
-import { zhPlaceNameOverride } from "./place-name-overrides.mjs";
+import { countryAliasKeys } from "../../shared/domain/country-normalizer.mjs";
+import {
+  FORWARD_RESULT_LIMIT,
+  countryCapitalPointFromRows,
+  countryMatches,
+  forwardGeocodeFromRows,
+  forwardGeocodePlan,
+  geonameBounds,
+  reverseGeocodeFromRows,
+} from "../../shared/geodata/geocoder-core.mjs";
 
-const SEARCH_RADIUS_KM = 80;
-const RESULT_LIMIT = 5;
-const FORWARD_RESULT_LIMIT = 3;
-const CITY_LEVEL_FEATURES = new Set(["PPLC", "PPLA", "PPLA2", "PPLA3", "PPLA4"]);
-const englishNameOverrides = {
-  zurich: "Zurich",
-  zuerich: "Zurich",
-  munchen: "Munich",
-};
 let db;
 let warnedMissing = false;
 const countryCapitalCache = new Map();
@@ -32,148 +29,13 @@ function database() {
   return db;
 }
 
-function longitudeDelta(radiusKm, lat) {
-  const cos = Math.max(0.08, Math.cos((lat * Math.PI) / 180));
-  return radiusKm / (111.32 * cos);
-}
+export function forwardLocalGeocode(input = {}, { makeId } = {}) {
+  const { queries, texts } = forwardGeocodePlan(input);
+  if (!texts.length && !input.country) return [];
 
-function latitudeDelta(radiusKm) {
-  return radiusKm / 110.574;
-}
-
-function featureWeight(code) {
-  if (code === "PPLC") return 0.16;
-  if (code === "PPLA") return 0.14;
-  if (code === "PPLA2") return 0.12;
-  if (code === "PPLA3") return 0.1;
-  if (code === "PPLA4") return 0.08;
-  if (code === "PPL") return 0.05;
-  if (code === "PPLX") return -0.06;
-  return 0;
-}
-
-function confidenceFor(row, distanceKm) {
-  const distanceScore = Math.max(0, 1 - distanceKm / SEARCH_RADIUS_KM) * 0.66;
-  const populationScore = Math.min(0.14, Math.log10(Math.max(1, Number(row.population ?? 0))) / 45);
-  return Math.max(0.35, Math.min(0.96, Number((0.22 + distanceScore + featureWeight(row.feature_code) + populationScore).toFixed(3))));
-}
-
-function cityLevelRank(row) {
-  const population = Number(row.population ?? 0);
-  if (row.feature_code === "PPLC") return 6;
-  if (row.feature_code === "PPLA") return 5;
-  if (row.feature_code === "PPLA2") return 4;
-  if (row.feature_code === "PPLA3") return 3;
-  if (row.feature_code === "PPLA4") return 2;
-  if (population >= 100000) return 3;
-  if (population >= 50000) return 2;
-  if (population >= 20000) return 1;
-  return 0;
-}
-
-function cityLevelScore(row, distanceKm) {
-  const rank = cityLevelRank(row);
-  const population = Number(row.population ?? 0);
-  const populationScore = Math.min(1.4, Math.log10(Math.max(1, population)) / 4);
-  const distancePenalty = (distanceKm / SEARCH_RADIUS_KM) * 2;
-  return rank + populationScore - distancePenalty;
-}
-
-function preferCityLevel(items) {
-  const cityCandidates = items.filter((item) => CITY_LEVEL_FEATURES.has(item.row.feature_code) || Number(item.row.population ?? 0) >= 20000);
-  if (!cityCandidates.length) return items;
-  return cityCandidates.sort((left, right) => {
-    const leftScore = cityLevelScore(left.row, left.distanceKm);
-    const rightScore = cityLevelScore(right.row, right.distanceKm);
-    return rightScore - leftScore || left.distanceKm - right.distanceKm;
-  });
-}
-
-function countryAliases(value) {
-  return countryAliasKeys(value);
-}
-
-function countryMatches(row, country) {
-  const expected = countryAliases(country);
-  if (!expected.length) return true;
-  return [row.country_name_zh, row.country_name_en, row.country_name, row.country_code]
-    .flatMap(countryAliases)
-    .filter(Boolean)
-    .some((value) => expected.includes(value));
-}
-
-function localizedName(row) {
-  const override = [row.name_zh, row.name, row.ascii_name, row.name_en].map(zhPlaceNameOverride).find(Boolean);
-  if (override) return override;
-  if (row.name_zh) return row.name_zh;
-  const values = [row.name, row.ascii_name].map(normalizedCountryText);
-  const preset = cityPresets.find((item) => values.some((value) => value === normalizedCountryText(item.keyword) || value.includes(normalizedCountryText(item.keyword))));
-  return preset?.city || row.name_en || row.ascii_name || row.name;
-}
-
-function localizedNames(row) {
-  const zh = localizedName(row);
-  const normalizedValues = [row.name, row.ascii_name, row.name_en].map(normalizedCountryText);
-  const en = normalizedValues.map((value) => englishNameOverrides[value]).find(Boolean) || row.name_en || row.ascii_name || row.name;
-  const local = row.name;
-  return {
-    zh,
-    en,
-    local,
-  };
-}
-
-function countryNames(row) {
-  return normalizeCountryDescription(row.country_code || row.country_name_zh || row.country_name_en || row.country_name, {
-    zh: row.country_name_zh,
-    en: row.country_name_en,
-    local: row.country_name,
-  }).countryNames;
-}
-
-function rowToCandidate(row, { point, confidence, reason, makeId, index = 0 } = {}) {
-  const candidatePoint = point ?? { lat: Number(row.lat), lng: Number(row.lng) };
-  const localized = localizedNames(row);
-  const localizedCountry = countryNames(row);
-  const country = localizedCountry.zh ?? localizedCountry.en;
-  const name = localized.zh ?? localized.en ?? localized.local;
-  return {
-    id: makeId?.("candidate") ?? `candidate-geocode-${row.geoname_id}`,
-    name,
-    localizedNames: localized,
-    country,
-    localizedCountryNames: localizedCountry,
-    city: name,
-    localizedCityNames: localized,
-    point: candidatePoint,
-    confidence,
-    source: "geocode",
-    precision: "estimated",
-    reason,
-    admin1: row.admin1_name || undefined,
-    admin2: row.admin2_name || undefined,
-    countryCode: row.country_code,
-    featureCode: row.feature_code,
-    featureLabel: row.feature_label || undefined,
-    geocodeRank: index + 1,
-    population: Number(row.population ?? 0),
-  };
-}
-
-function presetCandidateForText(text) {
-  const normalized = normalizedCountryText(text);
-  return cityPresets.find((item) => normalized.includes(normalizedCountryText(item.keyword)) || normalized.includes(normalizedCountryText(item.city)));
-}
-
-export function forwardLocalGeocode({ name, city, country } = {}, { makeId } = {}) {
   const connection = database();
-  const texts = [city, name].map((value) => String(value ?? "").trim()).filter(Boolean);
-  if (!texts.length && !country) return [];
-
-  const preset = texts.map(presetCandidateForText).find((item) => !country || countryAliases(item?.country).some((alias) => countryAliases(country).includes(alias)));
-  const queries = Array.from(new Set([preset?.keyword, preset?.city, ...texts].filter(Boolean)));
   const rows = [];
-  if (connection) {
+  if (connection && queries.length) {
     const statement = connection.prepare(`
       SELECT *
       FROM geoname_places
@@ -184,51 +46,19 @@ export function forwardLocalGeocode({ name, city, country } = {}, { makeId } = {
       ORDER BY population DESC
       LIMIT ${FORWARD_RESULT_LIMIT}
     `);
-    for (const query of queries) rows.push(...statement.all(query, query, query, query).filter((row) => countryMatches(row, country)));
+    for (const query of queries) rows.push(...statement.all(query, query, query, query).filter((row) => countryMatches(row, input.country)));
   }
 
-  if (rows.length) {
-    return rows.slice(0, FORWARD_RESULT_LIMIT).map((row, index) =>
-      rowToCandidate(row, {
-        confidence: index === 0 ? 0.72 : 0.62,
-        reason: `GeoNames locality matched by name "${queries[0]}".`,
-        makeId,
-        index,
-      }),
-    );
-  }
-
-  if (preset?.point) {
-    const country = normalizeCountryDescription(preset.country);
-    return [
-      {
-        id: makeId?.("candidate") ?? `candidate-geocode-preset-${normalizedCountryText(preset.keyword).replace(/[^a-z0-9]+/g, "-")}`,
-        name: preset.city,
-        localizedNames: { zh: preset.city, en: preset.keyword, local: preset.city },
-        country: country.country,
-        localizedCountryNames: country.countryNames,
-        city: preset.city,
-        localizedCityNames: { zh: preset.city, en: preset.keyword, local: preset.city },
-        point: preset.point,
-        confidence: 0.68,
-        source: "geocode",
-        precision: "estimated",
-        reason: `Local city preset matched by name "${preset.keyword}".`,
-        geocodeRank: 1,
-      },
-    ];
-  }
-
-  return [];
+  return forwardGeocodeFromRows(input, rows, { makeId });
 }
 
 export function reverseLocalGeocode(point, { makeId, preferCity = false } = {}) {
-  if (!isUsableLocation(point)) return [];
+  const bounds = geonameBounds(point);
+  if (!bounds) return [];
+
   const connection = database();
   if (!connection) return [];
 
-  const latDelta = latitudeDelta(SEARCH_RADIUS_KM);
-  const lngDelta = longitudeDelta(SEARCH_RADIUS_KM, point.lat);
   const rows = connection
     .prepare(
       `
@@ -239,47 +69,13 @@ export function reverseLocalGeocode(point, { makeId, preferCity = false } = {}) 
         LIMIT 800
       `,
     )
-    .all(point.lat - latDelta, point.lat + latDelta, point.lng - lngDelta, point.lng + lngDelta);
+    .all(bounds.minLat, bounds.maxLat, bounds.minLng, bounds.maxLng);
 
-  const nearby = rows
-    .map((row) => {
-      const candidatePoint = { lat: Number(row.lat), lng: Number(row.lng) };
-      const distanceKm = haversineKm(point, candidatePoint);
-      return { row, candidatePoint, distanceKm };
-    })
-    .filter((item) => item.distanceKm <= SEARCH_RADIUS_KM);
-
-  const ranked = (preferCity ? preferCityLevel(nearby) : nearby).sort((left, right) => {
-    if (preferCity) {
-      const leftScore = cityLevelScore(left.row, left.distanceKm);
-      const rightScore = cityLevelScore(right.row, right.distanceKm);
-      return rightScore - leftScore || left.distanceKm - right.distanceKm;
-    }
-    const leftScore = confidenceFor(left.row, left.distanceKm);
-    const rightScore = confidenceFor(right.row, right.distanceKm);
-    return rightScore - leftScore || left.distanceKm - right.distanceKm;
-  });
-
-  return ranked
-    .slice(0, RESULT_LIMIT)
-    .map(({ row, candidatePoint, distanceKm }, index) => {
-      const confidence = confidenceFor(row, distanceKm);
-      return {
-        ...rowToCandidate(row, {
-          point: candidatePoint,
-          confidence,
-          reason: `GeoNames nearest locality, ${distanceKm.toFixed(1)}km, ${row.feature_code}`,
-          makeId,
-          index,
-        }),
-        confidence,
-        distanceKm: Number(distanceKm.toFixed(3)),
-      };
-    });
+  return reverseGeocodeFromRows(point, rows, { makeId, preferCity });
 }
 
 export function countryCapitalPoint(country) {
-  const key = countryAliases(country)[0];
+  const key = countryAliasKeys(country)[0];
   if (!key) return undefined;
   if (countryCapitalCache.has(key)) return countryCapitalCache.get(key);
 
@@ -289,7 +85,7 @@ export function countryCapitalPoint(country) {
     return undefined;
   }
 
-  const row = connection
+  const rows = connection
     .prepare(
       `
         SELECT *
@@ -297,15 +93,8 @@ export function countryCapitalPoint(country) {
         WHERE feature_code IN ('PPLC', 'PPLCD')
       `,
     )
-    .all()
-    .filter((candidate) => countryMatches(candidate, country))
-    .sort((left, right) => {
-      const leftRank = left.feature_code === "PPLC" ? 0 : 1;
-      const rightRank = right.feature_code === "PPLC" ? 0 : 1;
-      return leftRank - rightRank || Number(right.population ?? 0) - Number(left.population ?? 0);
-    })[0];
-
-  const point = row ? { lat: Number(row.lat), lng: Number(row.lng) } : undefined;
+    .all();
+  const point = countryCapitalPointFromRows(country, rows);
   countryCapitalCache.set(key, point);
   return point;
 }

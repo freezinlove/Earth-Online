@@ -1,3 +1,1 @@
-export function safeArray(value) {
-  return Array.isArray(value) ? value : [];
-}
+export * from "../../shared/domain/arrays.mjs";

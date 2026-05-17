@@ -67,6 +67,8 @@ export function SettingsPanel({ isClosing = false }: { isClosing?: boolean }) {
     save: t("save"),
     savedApiKey: t("savedApiKey"),
   };
+  const modelSectionIndex = androidRuntime ? "01" : "02";
+  const modelSectionDelay = androidRuntime ? "90ms" : "180ms";
 
   const rebuildEmbeddings = async (photoIds?: string[]) => {
     if (isRebuildingEmbeddings) return;
@@ -129,8 +131,8 @@ export function SettingsPanel({ isClosing = false }: { isClosing?: boolean }) {
             </div>
           </article> : null}
 
-          <article className="local-secret-row local-model-row" style={{ "--local-secret-delay": "180ms" } as CSSProperties}>
-            <div className="local-secret-index">02</div>
+          <article className="local-secret-row local-model-row" style={{ "--local-secret-delay": modelSectionDelay } as CSSProperties}>
+            <div className="local-secret-index">{modelSectionIndex}</div>
             <div className="min-w-0">
               <div className="settings-section-header">
                 <h3>{t("modelRouting")}</h3>

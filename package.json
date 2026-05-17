@@ -20,6 +20,7 @@
     "build": "tsc -b && vite build",
     "test:mvp": "node scripts/mvp_acceptance.mjs",
     "test:backend": "node scripts/backend_projection_checks.mjs",
+    "test:parity": "node scripts/android_desktop_parity_checks.mjs",
     "data:backup": "node scripts/data_backup.mjs",
     "data:reset": "node scripts/data_reset.mjs",
     "data:rebuild": "node scripts/data_rebuild_from_existing_photos.mjs",
@@ -46,6 +47,7 @@
       "docs/gugugaga.png",
       "electron/**/*",
       "server/**/*",
+      "shared/**/*",
       "package.json"
     ],
     "extraResources": [

@@ -1,0 +1,32 @@
+export const cityPresets = [
+  { keyword: "kyoto", city: "京都", country: "日本", point: { lat: 35.0116, lng: 135.7681 }, tags: ["京都", "街道", "寺庙"] },
+  { keyword: "京都", city: "京都", country: "日本", point: { lat: 35.0116, lng: 135.7681 }, tags: ["京都", "街道", "寺庙"] },
+  { keyword: "osaka", city: "大阪", country: "日本", point: { lat: 34.6937, lng: 135.5023 }, tags: ["大阪", "城市", "城堡"] },
+  { keyword: "nara", city: "奈良", country: "日本", point: { lat: 34.6851, lng: 135.843 }, tags: ["奈良", "公园", "寺庙"] },
+  { keyword: "chengdu", city: "成都", country: "中国", point: { lat: 30.5728, lng: 104.0668 }, tags: ["成都", "城市", "夜晚"] },
+  { keyword: "litang", city: "理塘", country: "中国", point: { lat: 30.0006, lng: 100.2698 }, tags: ["理塘", "高原", "草原"] },
+  { keyword: "paris", city: "巴黎", country: "法国", point: { lat: 48.8566, lng: 2.3522 }, tags: ["巴黎街景", "塞纳河", "法式建筑"] },
+  { keyword: "florence", city: "佛罗伦萨", country: "意大利", point: { lat: 43.7696, lng: 11.2558 }, tags: ["佛罗伦萨", "黄昏", "建筑"] },
+  { keyword: "prague", city: "布拉格", country: "捷克", point: { lat: 50.0755, lng: 14.4378 }, tags: ["布拉格", "查理大桥", "老城建筑"] },
+  { keyword: "praha", city: "布拉格", country: "捷克", point: { lat: 50.0755, lng: 14.4378 }, tags: ["布拉格", "查理大桥", "老城建筑"] },
+  { keyword: "vienna", city: "维也纳", country: "奥地利", point: { lat: 48.2082, lng: 16.3738 }, tags: ["维也纳", "环城大道", "奥地利建筑"] },
+  { keyword: "wien", city: "维也纳", country: "奥地利", point: { lat: 48.2082, lng: 16.3738 }, tags: ["维也纳", "奥地利", "城市街景"] },
+  { keyword: "hallstatt", city: "哈尔施塔特", country: "奥地利", point: { lat: 47.5622, lng: 13.6493 }, tags: ["哈尔施塔特", "奥地利湖区", "湖畔小镇"] },
+  { keyword: "salzburg", city: "萨尔茨堡", country: "奥地利", point: { lat: 47.8095, lng: 13.055 }, tags: ["萨尔茨堡", "奥地利", "老城"] },
+  { keyword: "budapest", city: "布达佩斯", country: "匈牙利", point: { lat: 47.4979, lng: 19.0402 }, tags: ["布达佩斯", "多瑙河", "城市建筑"] },
+  { keyword: "berlin", city: "柏林", country: "德国", point: { lat: 52.52, lng: 13.405 }, tags: ["柏林", "德国", "城市"] },
+  { keyword: "柏林", city: "柏林", country: "德国", point: { lat: 52.52, lng: 13.405 }, tags: ["柏林", "德国", "城市"] },
+  { keyword: "munich", city: "慕尼黑", country: "德国", point: { lat: 48.1372, lng: 11.5756 }, tags: ["慕尼黑", "巴伐利亚", "城市"] },
+  { keyword: "münchen", city: "慕尼黑", country: "德国", point: { lat: 48.1372, lng: 11.5756 }, tags: ["慕尼黑", "巴伐利亚", "城市"] },
+  { keyword: "zurich", city: "苏黎世", country: "瑞士", point: { lat: 47.3744, lng: 8.5417 }, tags: ["苏黎世", "瑞士", "城市"] },
+  { keyword: "zürich", city: "苏黎世", country: "瑞士", point: { lat: 47.3744, lng: 8.5417 }, tags: ["苏黎世", "瑞士", "城市"] },
+  { keyword: "garmisch", city: "加米施-帕滕基兴", country: "德国", point: { lat: 47.4917, lng: 11.0955 }, tags: ["加米施", "巴伐利亚", "阿尔卑斯山"] },
+  { keyword: "eibsee", city: "艾布湖", country: "德国", point: { lat: 47.4568, lng: 10.989 }, tags: ["艾布湖", "阿尔卑斯山", "湖景"] },
+  { keyword: "rome", city: "罗马", country: "意大利", point: { lat: 41.9028, lng: 12.4964 }, tags: ["罗马", "古城遗迹", "意大利街景"] },
+  { keyword: "london", city: "伦敦", country: "英国", point: { lat: 51.5072, lng: -0.1276 }, tags: ["伦敦", "泰晤士河", "英伦街景"] },
+];
+
+export const broadPresets = {
+  europe: { keyword: "gps-europe", city: "欧洲待确认地点", country: "待确认", point: { lat: 48.5, lng: 10.5 }, tags: ["欧洲待确认地点", "待确认街景"] },
+  unknown: { keyword: "unknown", city: "待确认地点", country: "待确认", point: { lat: 0, lng: 0 }, tags: ["旅行", "待确认"] },
+};

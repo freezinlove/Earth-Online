@@ -24,7 +24,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
     id: number;
     to: AppPanel;
   } | null>(null);
-  const shouldHidePrimaryNav = !isMobileViewport && (activePanel === "tripDetail" || activePanel === "search");
+  const shouldHidePrimaryNav = activePanel === "search" || (!isMobileViewport && activePanel === "tripDetail");
   const [shouldRenderPrimaryNav, setShouldRenderPrimaryNav] = useState(!shouldHidePrimaryNav);
   const [isPrimaryNavClosing, setIsPrimaryNavClosing] = useState(false);
   const motionTimer = useRef<number | undefined>(undefined);
@@ -99,7 +99,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
           </button>
           <div className="pointer-events-auto flex items-center gap-3">
             <button
-              className="group hidden h-11 w-11 place-items-center text-on-surface-variant transition hover:text-primary md:grid"
+              className="group pointer-events-auto grid h-11 w-11 place-items-center text-on-surface-variant transition hover:text-primary"
               aria-label={t("memorySearch")}
               title={t("memorySearch")}
               onClick={() => togglePanel("search")}

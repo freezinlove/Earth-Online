@@ -117,15 +117,6 @@ function isAiFailurePending(item: PendingItem) {
   return item.type === "ai_processing_failed";
 }
 
-function aiFailureLabel(photo: Photo, t: (key: MessageKey) => string) {
-  const vision = Boolean(photo.aiFailure?.vision);
-  const embedding = Boolean(photo.aiFailure?.embedding);
-  if (vision && embedding) return t("aiBothFailed");
-  if (vision) return t("aiVisionFailed");
-  if (embedding) return t("embeddingFailed");
-  return t("aiProcessingFailed");
-}
-
 function aiFailureError(photo: Photo) {
   return [photo.aiFailure?.vision ? `AI Vision: ${photo.aiFailure.vision}` : undefined, photo.aiFailure?.embedding ? `Embedding: ${photo.aiFailure.embedding}` : undefined]
     .filter(Boolean)
@@ -147,6 +138,20 @@ function pendingProposalTarget(item: PendingItem | undefined, fallback: string):
     label: item?.inference?.displayTargetLabel ?? item?.inference?.displayTarget ?? fallback,
     badge: item?.inference?.displayTargetBadge,
   };
+}
+
+function targetTextDensity(label: string) {
+  const length = Array.from(label.trim()).length;
+  if (length > 16) return "dense";
+  if (length > 8) return "compact";
+  return "normal";
+}
+
+function tripTitleTextDensity(label: string) {
+  const length = Array.from(label.trim()).length;
+  if (length > 42) return "dense";
+  if (length > 26) return "compact";
+  return "normal";
 }
 
 function hasActionableMissingProposal(item?: PendingItem) {
@@ -330,7 +335,7 @@ function groupMissingPreviews(batch: ImportBatch | undefined, photos: Photo[], p
       return {
         id: photo.id,
         icon,
-        label: gps && time ? t("missingGpsTime") : gps ? t("missingGps") : t("missingTime"),
+        label: gps ? t("noRealExifGps") : t("hasRealExifGps"),
         target,
         photos: [photo],
         confidence: candidate?.confidence ?? photo.locationResolution?.confidence,
@@ -350,14 +355,17 @@ function groupAiFailurePreviews(batch: ImportBatch | undefined, photos: Photo[],
   }
   return photos
     .filter((photo) => importedIds.has(photo.id) && pendingByPhoto.has(photo.id))
-    .map((photo) => ({
-      id: photo.id,
-      label: aiFailureLabel(photo, t),
-      error: aiFailureError(photo) || pendingByPhoto.get(photo.id)?.reason || t("failed"),
-      hasRealExifGps: Boolean(photo.aiFailure?.hasRealExifGps || photo.exifStatus?.gps === "read"),
-      photo,
-      pending: pendingByPhoto.get(photo.id),
-    }));
+    .map((photo) => {
+      const hasRealExifGps = Boolean(photo.aiFailure?.hasRealExifGps || photo.exifStatus?.gps === "read");
+      return {
+        id: photo.id,
+        label: hasRealExifGps ? t("hasRealExifGps") : t("noRealExifGps"),
+        error: aiFailureError(photo) || pendingByPhoto.get(photo.id)?.reason || t("failed"),
+        hasRealExifGps,
+        photo,
+        pending: pendingByPhoto.get(photo.id),
+      };
+    });
 }
 
 function PhotoStrip({
@@ -451,6 +459,7 @@ function ReviewTree({
   onOpenPreview,
   onMovePhoto,
   onRenamePlace,
+  onRenameTrip,
   onRemovePhoto,
   onSelectPhoto,
   t,
@@ -461,10 +470,13 @@ function ReviewTree({
   onOpenPreview: (photo: Photo) => void;
   onMovePhoto: (photoId: string, placeId: string) => Promise<void>;
   onRenamePlace: (placeId: string, name: string) => Promise<void>;
+  onRenameTrip: (tripId: string, title: string) => Promise<void>;
   onRemovePhoto?: (photoId: string) => void;
   onSelectPhoto: (photoId: string) => void;
   t: (key: MessageKey) => string;
 }) {
+  const [editingTripId, setEditingTripId] = useState<string>();
+  const [tripTitleDraft, setTripTitleDraft] = useState("");
   const [editingPlaceId, setEditingPlaceId] = useState<string>();
   const [placeNameDraft, setPlaceNameDraft] = useState("");
   const [draggingPhotoId, setDraggingPhotoId] = useState<string>();
@@ -496,13 +508,56 @@ function ReviewTree({
     await onRenamePlace(place.id, name);
   };
 
+  const submitTripTitle = async (trip?: Trip) => {
+    const title = tripTitleDraft.trim();
+    setEditingTripId(undefined);
+    if (!trip || !title || title === tripLabel(trip)) return;
+    await onRenameTrip(trip.id, title);
+  };
+
   return (
     <section className="import-review-tree" aria-label={t("archiveTree")}>
-      {previews.map((preview) => (
+      {previews.map((preview) => {
+        const title = tripLabel(preview.trip);
+        return (
         <div key={preview.trip.id} className="import-trip-node" data-new={preview.isNew || undefined}>
-          <div className="import-node-label import-node-label-trip">
+          <div className="import-node-label import-node-label-trip" data-density={tripTitleTextDensity(title)}>
             {preview.isNew ? <Circle size={12} /> : <span className="import-solid-dot" />}
-            <span>{tripLabel(preview.trip)}</span>
+            {editingTripId === preview.trip.id ? (
+              <input
+                className="import-trip-title-input"
+                autoFocus
+                value={tripTitleDraft}
+                onBlur={() => void submitTripTitle(preview.trip)}
+                onChange={(event) => setTripTitleDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    event.currentTarget.blur();
+                  }
+                  if (event.key === "Escape") {
+                    setEditingTripId(undefined);
+                    setTripTitleDraft("");
+                  }
+                }}
+              />
+            ) : (
+              <span className="import-trip-title-text">{title}</span>
+            )}
+            {canEdit ? (
+              <button
+                className="import-trip-rename"
+                type="button"
+                aria-label={t("edit")}
+                title={t("edit")}
+                onClick={() => {
+                  setEditingTripId(preview.trip.id);
+                  setTripTitleDraft(title);
+                }}
+              >
+                <PencilLine size={13} />
+              </button>
+            ) : null}
             <em>{preview.isNew ? t("newTrip") : t("existingTrip")}</em>
           </div>
           <div className="import-place-branch">
@@ -602,7 +657,8 @@ function ReviewTree({
             ))}
           </div>
         </div>
-      ))}
+        );
+      })}
     </section>
   );
 }
@@ -694,26 +750,16 @@ function MissingSuggestions({
           const actionable = hasActionableMissingProposal(group.pending);
           const suggestedTarget = pendingProposalTarget(group.pending, group.target);
           const feedback = group.pending ? inferFeedback[group.pending.id] : undefined;
-          const statusLabel =
-            feedback?.status === "running"
-              ? t("inferring")
-              : feedback?.status === "error"
-                ? t("failed")
-                : isInferring
-                  ? t("inferring")
-                  : actionable
-                    ? t("aiSuggestion")
-                    : group.pending?.inference?.status === "keep_pending"
-                      ? t("stillPending")
-                      : t("waitingInference");
+          const statusLabel = actionable ? t("suggestionShort") : t("undecided");
+          const statusState = actionable ? "suggestion" : "pending";
+          const targetDensity = targetTextDensity(suggestedTarget.label);
           return (
             <div key={group.id} className="import-missing-row" title={group.pending?.reason ?? group.label}>
               <PhotoStrip photos={group.photos} selectedPhotoId={selectedPhotoId} onOpenPreview={onOpenPreview} onSelect={onSelectPhoto} t={t} />
               <span className="import-missing-field">{group.label}</span>
-              <span className="import-ai-suggest" data-status={statusLabel}>{statusLabel}</span>
-              <strong className="import-missing-target">
+              <span className="import-ai-suggest" data-state={statusState}>{statusLabel}</span>
+              <strong className="import-missing-target" data-density={targetDensity}>
                 <span>{suggestedTarget.label}</span>
-                {suggestedTarget.badge ? <em>{suggestedTarget.badge}</em> : null}
               </strong>
               <button className="import-inline-cancel" onClick={() => onReject(group.photos.map((photo) => photo.id))} disabled={isRowLocked} aria-label={t("cancelImport")} type="button" data-tooltip={t("cancelImport")}>
                 <X size={13} />
@@ -823,16 +869,14 @@ function AiFailureSuggestions({
           const isRowLocked = isBulkResolving || isBusy;
           const canRetryVision = Boolean(failure.photo.aiFailure?.vision);
           const canRetryEmbedding = Boolean(failure.photo.aiFailure?.embedding);
+          const targetLabel = failure.photo.title ?? failure.photo.fileName;
           return (
             <div key={failure.id} className="import-missing-row import-ai-failure-row" title={failure.error}>
               <PhotoStrip photos={[failure.photo]} selectedPhotoId={selectedPhotoId} onOpenPreview={onOpenPreview} onSelect={onSelectPhoto} t={t} />
               <span className="import-missing-field">{failure.label}</span>
-              <span className="import-ai-suggest" data-status={t("failed")}>
-                {failure.hasRealExifGps ? t("hasRealExifGps") : t("noRealExifGps")}
-              </span>
-              <strong className="import-missing-target">
-                <span>{failure.photo.title ?? failure.photo.fileName}</span>
-                <em>{failure.hasRealExifGps ? "EXIF" : t("undecided")}</em>
+              <span className="import-ai-suggest" data-state="pending">{t("undecided")}</span>
+              <strong className="import-missing-target" data-density={targetTextDensity(targetLabel)}>
+                <span>{targetLabel}</span>
               </strong>
               <button className="import-inline-cancel" onClick={() => onReject([failure.photo.id])} disabled={isRowLocked} aria-label={t("cancelImport")} type="button" data-tooltip={t("cancelImport")}>
                 <X size={13} />
@@ -885,6 +929,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
   const rollbackLatestImport = useAppStore((state) => state.rollbackLatestImport);
   const cancelPendingImportPhotos = useAppStore((state) => state.cancelPendingImportPhotos);
   const bindPhotoToPlace = useAppStore((state) => state.bindPhotoToPlace);
+  const updateTripTitle = useAppStore((state) => state.updateTripTitle);
   const updatePlaceName = useAppStore((state) => state.updatePlaceName);
   const inferPendingLocation = useAppStore((state) => state.inferPendingLocation);
   const inferPendingLocations = useAppStore((state) => state.inferPendingLocations);
@@ -927,9 +972,9 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
   const aiFailureGroups = useMemo(() => groupAiFailurePreviews(latestBatch, photos, pendingItems, t), [latestBatch, pendingItems, photos, t]);
   const canConfirm = isPendingBatch(latestBatch) && missingGroups.length === 0 && aiFailureGroups.length === 0 && !isSubmitting;
   const canRollback = isPendingBatch(latestBatch) && !isSubmitting;
-  const showAndroidPhotoPrivacyHint = isAndroidRuntime();
   const summaryTrips = tripPreviews.length;
   const summaryPlaces = tripPreviews.reduce((count, trip) => count + trip.places.length, 0);
+  const pendingReviewCount = missingGroups.reduce((count, group) => count + group.photos.length, 0) + aiFailureGroups.length;
   const activeManualPending = manualPending ?? (manualPlacePick ? pendingItems.find((item) => item.id === manualPlacePick.pendingId) : undefined);
   const openPhotoPreview = useCallback((photo: Photo) => {
     setIsPreviewClosing(false);
@@ -1236,7 +1281,6 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
               {isImporting ? <LoaderCircle className="animate-spin" size={18} /> : <FolderOpen size={18} />}
               <span>{isImporting ? t("importing") : t("choosePhotos")}</span>
             </button>
-            {showAndroidPhotoPrivacyHint ? <p className="import-native-privacy-hint">{t("androidPhotoPrivacyHint")}</p> : null}
           </div>
 
           <div className="import-progress-stack" aria-label={t("importing")}>
@@ -1258,6 +1302,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
               onOpenPreview={openPhotoPreview}
               onRemovePhoto={isPendingBatch(latestBatch) ? (photoId) => void cancelPendingImportPhotos([photoId]) : undefined}
               onRenamePlace={(placeId, name) => updatePlaceName(placeId, name)}
+              onRenameTrip={(tripId, title) => updateTripTitle(tripId, title)}
               onSelectPhoto={setSelectedPhotoId}
               t={t}
             />
@@ -1320,7 +1365,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
                 {(latestBatch?.duplicateCount ?? 0) > 0 ? <span title={t("duplicateSkipped")}>{t("duplicateSkipped")} {latestBatch?.duplicateCount}</span> : null}
                 <span title={t("trips")}><Circle size={13} />{t("trips")} {summaryTrips}</span>
                 <span title={t("places")}><MapPin size={15} />{t("places")} {summaryPlaces}</span>
-                <span title={t("pending")}>{t("pending")} {batchPendingItems.length}</span>
+                <span title={t("pending")}>{t("pending")} {pendingReviewCount}</span>
               </div>
               <div className="import-command-actions">
                 <button className="import-undo-button" onClick={() => void rollbackBatch()} disabled={!canRollback} type="button" title={t("rollbackImport")} aria-label={t("rollbackImport")}>

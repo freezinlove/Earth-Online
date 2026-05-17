@@ -15,6 +15,7 @@ import android.os.Build;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.util.Base64;
+import android.util.Log;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -45,6 +46,7 @@ import java.util.TimeZone;
     }
 )
 public class EarthPhotoLibraryPlugin extends Plugin {
+    private static final String TAG = "EarthPhotoLibrary";
     private static final int DEFAULT_PICK_LIMIT = 80;
     private static final int THUMBNAIL_MAX_SIZE = 480;
     private static final String DEFAULT_MIME_TYPE = "image/jpeg";
@@ -77,27 +79,26 @@ public class EarthPhotoLibraryPlugin extends Plugin {
     }
 
     private void launchPhotoPicker(PluginCall call) {
-        int requestedLimit = call.getInt("limit", DEFAULT_PICK_LIMIT);
-        int maxLimit = maxPhotoPickerSelection();
-        int limit = Math.max(1, Math.min(requestedLimit, maxLimit));
+        launchDocumentPhotoPicker(call);
+    }
 
-        Intent intent;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            intent = new Intent(MediaStore.ACTION_PICK_IMAGES);
-            intent.setType("image/*");
-            if (limit > 1) {
-                intent.putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, limit);
-            }
-        } else {
-            intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-            intent.addCategory(Intent.CATEGORY_OPENABLE);
-            intent.setType("image/*");
-            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, limit > 1);
-        }
+    private void launchDocumentPhotoPicker(PluginCall call) {
+        int limit = pickerLimit(call);
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("image/*");
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, limit > 1);
 
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        intent.addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
         startActivityForResult(call, intent, "pickPhotosResult");
+    }
+
+    private int pickerLimit(PluginCall call) {
+        int requestedLimit = call.getInt("limit", DEFAULT_PICK_LIMIT);
+        int maxLimit = maxPhotoPickerSelection();
+        return Math.max(1, Math.min(requestedLimit, maxLimit));
     }
 
     @PluginMethod
@@ -124,6 +125,7 @@ public class EarthPhotoLibraryPlugin extends Plugin {
     private void pickPhotosResult(PluginCall call, androidx.activity.result.ActivityResult result) {
         if (call == null) return;
         if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null) {
+            Log.w(TAG, "Photo picker returned without data. resultCode=" + result.getResultCode());
             JSObject empty = new JSObject();
             empty.put("photos", new JSArray());
             call.resolve(empty);
@@ -132,6 +134,7 @@ public class EarthPhotoLibraryPlugin extends Plugin {
 
         Intent data = result.getData();
         List<Uri> uris = collectResultUris(data);
+        if (uris.isEmpty()) Log.w(TAG, "Photo picker returned OK but no URI was present.");
         int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
         execute(() -> resolvePickedPhotos(call, uris, flags));
     }

@@ -1,68 +1,39 @@
 import type {
-  AiConfig,
-  AiSettings,
-  AppSnapshot,
   EmbeddingRebuildReport,
+  ImportJob,
   ImportJobProgress,
   LocalAiSettings,
-  ProviderCredentialKey,
   StorageSettings,
 } from "@/services/apiClient";
 import type { NativePhotoAsset } from "@/platform/nativePhotoLibrary";
 import { releaseNativePhotoPermissions } from "@/platform/nativePhotoLibrary";
-import desktopAiCatalog from "../../server/ai/model-catalog.json";
+import { deleteNativeVectors, readNativeImportJob, readNativeVectorIndex, writeNativeImportJob, writeNativeVectorIndex } from "@/platform/nativeRepository";
+import { deleteMobileThumbnailsForPhotos, getMobilePersistedState, type MobilePersistedState, writeMobilePersistedState } from "@/platform/mobileStateStore";
+import { createThumbnail, duplicateNativeAssetIds, duplicateNativeAssetPhotoIds, hashBuffer, parseExif, photoFromNativeAsset, sourceUrisForPhotos } from "@/platform/mobileMedia";
+import { emptyCredential, readMobileAiSettings, updateMobileAiSettings, type MobileAiSettingsUpdateBody } from "@/platform/mobileAiSettings";
+import { analyzeMobilePhoto, embedMobileContent, inferMobileMissingInfoWithImage, recordMobileEmbeddingStats, vectorStatsDefaults, type MobileEmbeddingResult, type MobilePhotoAnalysis } from "@/platform/mobileAiRuntime";
+import { geocodeMobileAiCandidate, manualMobileGeoDescription, projectMobileState as projectState, reverseMobileCandidates } from "@/platform/mobileGeodata";
+import { searchMobilePhotos } from "@/platform/mobileSearch";
+import { createJobProgressRecorder as createSharedJobProgressRecorder } from "../../shared/application/job-core.mjs";
+import { inferPreset, isUsableLocation } from "../../shared/domain/geo.mjs";
+import { mergeLocationCandidates, resolveImportedLocation, toAiEvidence } from "../../shared/domain/location-resolver.mjs";
+import { applyPendingDecision } from "../../shared/domain/pending-workflow.mjs";
+import { buildRoute } from "../../shared/domain/route-projector.mjs";
+import { rebuildTrips, rebuildTripsForPhotos } from "../../shared/domain/trip-rebuilder.mjs";
+import { buildImportStateFromPhotos } from "../../shared/import/import-state-core.mjs";
+import { allowedInferencePlaces, buildInferenceContextPhotos, buildMissingInfoInferenceInput, keepPending, missingInferenceText, normalizeMissingInfoAiProposal } from "../../shared/import/missing-info-inference-core.mjs";
 import type {
-  DossierTripGroup,
   GeoPoint,
-  GlobeMarker,
   ImportBatch,
   LocationCandidate,
   PendingItem,
   Photo,
   PlaceNode,
   Route,
-  SearchDocument,
-  SearchResult,
-  TimelineSegment,
   Trip,
 } from "@/domain/models";
 
-type MobilePersistedState = {
-  trips: Trip[];
-  photos: Photo[];
-  placeNodes: PlaceNode[];
-  routes: Route[];
-  importBatches: ImportBatch[];
-  pendingItems: PendingItem[];
-};
-
-type ExifResult = {
-  capturedAt?: string;
-  location?: GeoPoint;
-};
-
-type AiSettingsUpdateBody = {
-  credentials?: Partial<Record<ProviderCredentialKey, string>>;
-  profileCredentials?: Partial<Record<"imageUnderstanding" | "crossModalEmbedding", Partial<Record<ProviderCredentialKey, string>>>>;
-  aiConfig?: Partial<AiConfig> | AiConfig;
-};
-
-type ProfileKey = keyof AiConfig["profiles"];
-
-const stateKey = "earth-online-mobile-state-v1";
-const aiSettingsKey = "earth-online-mobile-ai-settings-v1";
-const mobileDbName = "earth-online-mobile-db";
-const mobileDbVersion = 1;
-const mobileKvStore = "kv";
-const photoThumbKeyPrefix = "earth-online-mobile-photo-thumb:";
-const maxThumbSize = 720;
-
-const providerKeys: ProviderCredentialKey[] = ["aliyunApiKey", "openaiApiKey", "openrouterApiKey", "siliconflowApiKey", "voyageApiKey"];
-const mobileAiCatalog = desktopAiCatalog as AiConfig["catalog"];
-
-function hasOwn(object: object | undefined, key: string) {
-  return Boolean(object && Object.prototype.hasOwnProperty.call(object, key));
-}
+type MobileImportJob = ImportJob;
 
 function nowIso() {
   return new Date().toISOString();
@@ -72,699 +43,298 @@ function makeId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function emptyPersistedState(): MobilePersistedState {
+function safeArray<T = unknown>(value: T[] | undefined | null): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function lastItem<T>(items: T[]) {
+  return items.length ? items[items.length - 1] : undefined;
+}
+
+function mobileJobProgressRecorder(onJobProgress: ((progress: ImportJobProgress) => void) | undefined, total: number, phase: ImportJobProgress["phase"]) {
+  return createSharedJobProgressRecorder({
+    id: makeId("mobile-job"),
+    total,
+    phase,
+    now: nowIso,
+    onProgress: onJobProgress,
+    save: (job: MobileImportJob) => {
+      void writeNativeImportJob(job).catch(() => false);
+    },
+  });
+}
+
+async function enrichMobilePhotoWithAi(photo: Photo, { dataUrl, allowCloud, locale }: { dataUrl?: string; allowCloud: boolean; locale: "zh" | "en" }) {
+  const preset = inferPreset(photo.fileName, photo.location);
+  const ai: MobilePhotoAnalysis = await analyzeMobilePhoto({ fileName: photo.fileName, mime: photo.mime ?? "image/jpeg", dataUrl, preset, location: photo.location, allowCloud, locale });
+  const aiEvidenceBase = toAiEvidence(ai, { makeId });
+  const aiCandidates = await Promise.all((aiEvidenceBase.locationCandidates ?? []).map((candidate: LocationCandidate) => geocodeMobileAiCandidate(candidate, { makeId, locale })));
+  const backendCandidates = photo.location ? await reverseMobileCandidates(photo.location, { makeId }) : [];
+  const aiEvidence = {
+    ...aiEvidenceBase,
+    locationCandidates: mergeLocationCandidates(backendCandidates, aiCandidates),
+  };
   return {
-    trips: [],
-    photos: [],
-    placeNodes: [],
-    routes: [],
-    importBatches: [],
-    pendingItems: [],
+    ...photo,
+    title: ai.title || photo.title,
+    tags: ai.tags,
+    aiCaption: ai.caption,
+    ai: aiEvidence,
+    locationResolution: resolveImportedLocation({ location: photo.location, aiEvidence, pendingReason: photo.pendingReason }),
+    aiProvider: ai.provider,
+    aiModel: ai.model,
+    aiFallbackReason: ai.fallbackReason,
   };
 }
 
-let cachedState: MobilePersistedState | undefined;
-let stateHydration: Promise<MobilePersistedState> | undefined;
-
-function openMobileDb() {
-  if (typeof window === "undefined" || !window.indexedDB) return Promise.resolve(undefined);
-  return new Promise<IDBDatabase | undefined>((resolve) => {
-    const request = window.indexedDB.open(mobileDbName, mobileDbVersion);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(mobileKvStore)) db.createObjectStore(mobileKvStore);
-    };
-    request.onerror = () => resolve(undefined);
-    request.onsuccess = () => resolve(request.result);
-  });
+function mobileEmbeddingText(photo: Photo) {
+  return [photo.title, photo.aiCaption, ...(photo.tags ?? [])].filter(Boolean).join(" ");
 }
 
-async function readKv<T>(key: string): Promise<T | undefined> {
-  const db = await openMobileDb();
-  if (!db) return undefined;
-  return new Promise<T | undefined>((resolve) => {
-    const transaction = db.transaction(mobileKvStore, "readonly");
-    const request = transaction.objectStore(mobileKvStore).get(key);
-    request.onerror = () => resolve(undefined);
-    request.onsuccess = () => resolve(request.result as T | undefined);
-    transaction.oncomplete = () => db.close();
-    transaction.onerror = () => db.close();
-  });
+function manualPlaceNames(name: string) {
+  return { zh: name, en: name, local: name };
 }
 
-async function writeManyKv(entries: Array<[string, unknown]>) {
-  const db = await openMobileDb();
-  if (!db || !entries.length) return;
-  await new Promise<void>((resolve) => {
-    const transaction = db.transaction(mobileKvStore, "readwrite");
-    const store = transaction.objectStore(mobileKvStore);
-    for (const [key, value] of entries) store.put(value, key);
-    transaction.oncomplete = () => {
-      db.close();
-      resolve();
-    };
-    transaction.onerror = () => {
-      db.close();
-      resolve();
-    };
-  });
+function visiblePlaceName(place: PlaceNode) {
+  return place.userEdits?.name ?? place.displayName ?? place.name;
 }
 
-async function readManyKv<T>(keys: string[]) {
-  const db = await openMobileDb();
-  const values = new Map<string, T>();
-  if (!db || !keys.length) return values;
-  await new Promise<void>((resolve) => {
-    const transaction = db.transaction(mobileKvStore, "readonly");
-    const store = transaction.objectStore(mobileKvStore);
-    for (const key of keys) {
-      const request = store.get(key);
-      request.onsuccess = () => {
-        if (request.result !== undefined) values.set(key, request.result as T);
-      };
-    }
-    transaction.oncomplete = () => {
-      db.close();
-      resolve();
-    };
-    transaction.onerror = () => {
-      db.close();
-      resolve();
-    };
-  });
-  return values;
-}
-
-async function deleteManyKv(keys: string[]) {
-  const db = await openMobileDb();
-  if (!db || !keys.length) return;
-  await new Promise<void>((resolve) => {
-    const transaction = db.transaction(mobileKvStore, "readwrite");
-    const store = transaction.objectStore(mobileKvStore);
-    for (const key of keys) store.delete(key);
-    transaction.oncomplete = () => {
-      db.close();
-      resolve();
-    };
-    transaction.onerror = () => {
-      db.close();
-      resolve();
-    };
-  });
-}
-
-function readPersistedState(): MobilePersistedState {
-  if (cachedState) return cachedState;
-  if (typeof window === "undefined") return emptyPersistedState();
-  const raw = window.localStorage.getItem(stateKey);
-  if (!raw) return emptyPersistedState();
-  try {
-    const parsed = JSON.parse(raw) as Partial<MobilePersistedState>;
-    const next = {
-      trips: Array.isArray(parsed.trips) ? parsed.trips : [],
-      photos: Array.isArray(parsed.photos) ? parsed.photos : [],
-      placeNodes: Array.isArray(parsed.placeNodes) ? parsed.placeNodes : [],
-      routes: Array.isArray(parsed.routes) ? parsed.routes : [],
-      importBatches: Array.isArray(parsed.importBatches) ? parsed.importBatches : [],
-      pendingItems: Array.isArray(parsed.pendingItems) ? parsed.pendingItems : [],
-    };
-    cachedState = next;
-    return next;
-  } catch {
-    return emptyPersistedState();
-  }
-}
-
-async function getPersistedState(): Promise<MobilePersistedState> {
-  if (cachedState) return cachedState;
-  stateHydration ??= (async () => {
-    const indexedState = await readKv<MobilePersistedState>(stateKey);
-    if (indexedState) {
-      cachedState = await hydratePhotoThumbnails({
-        ...emptyPersistedState(),
-        ...indexedState,
-        trips: Array.isArray(indexedState.trips) ? indexedState.trips : [],
-        photos: Array.isArray(indexedState.photos) ? indexedState.photos : [],
-        placeNodes: Array.isArray(indexedState.placeNodes) ? indexedState.placeNodes : [],
-        routes: Array.isArray(indexedState.routes) ? indexedState.routes : [],
-        importBatches: Array.isArray(indexedState.importBatches) ? indexedState.importBatches : [],
-        pendingItems: Array.isArray(indexedState.pendingItems) ? indexedState.pendingItems : [],
-      });
-      return cachedState;
-    }
-    return readPersistedState();
-  })();
-  return stateHydration;
-}
-
-async function hydratePhotoThumbnails(state: MobilePersistedState): Promise<MobilePersistedState> {
-  const keys = state.photos.filter((photo) => !photo.thumbnailUrl).map((photo) => `${photoThumbKeyPrefix}${photo.id}`);
-  if (!keys.length) return state;
-  const thumbnails = await readManyKv<string>(keys);
+function clearManualExifStatus(photo: Photo, overrides: { gps?: "read" | "missing" | "fallback" } = {}) {
   return {
-    ...state,
-    photos: state.photos.map((photo) => ({
+    ...(photo.exifStatus ?? {}),
+    time: photo.exifStatus?.time ?? (photo.capturedAt ? "read" : "missing"),
+    gps: overrides.gps ?? photo.exifStatus?.gps ?? (photo.location ? "fallback" : "missing"),
+  };
+}
+
+function manualLocationCandidate({ name, point, geo }: { name: string; point: GeoPoint; geo: Awaited<ReturnType<typeof manualMobileGeoDescription>> }): LocationCandidate {
+  return {
+    id: makeId("candidate-manual"),
+    name,
+    localizedNames: { zh: name, en: name, local: name },
+    country: geo.country,
+    localizedCountryNames: geo.countryNames,
+    city: geo.city ?? name,
+    localizedCityNames: geo.cityNames,
+    point,
+    confidence: 1,
+    source: "manual",
+    precision: "confirmed",
+    reason: "用户手动在地球上标记地点，并由本地地名库反查国家/城市。",
+  };
+}
+
+function applyManualPlaceAssignment(
+  photo: Photo,
+  place: PlaceNode,
+  {
+    now,
+    source,
+    reason: _reason,
+    precision,
+    candidate,
+  }: { now: string; source: LocationCandidate["source"]; reason: string; precision?: LocationCandidate["precision"]; candidate?: LocationCandidate },
+): Photo {
+  void _reason;
+  const previous = photo.manualPlaceAssignment;
+  const originalPlaceNodeId = previous?.originalPlaceNodeId ?? photo.placeNodeId;
+  const originalLocation = previous?.originalLocation ?? photo.location;
+  const originalLocationResolution = previous?.originalLocationResolution ?? photo.locationResolution;
+  const originalExifStatus = previous?.originalExifStatus ?? photo.exifStatus;
+  const restoredLocation = previous?.originalLocation;
+  const returningToOriginalGpsPlace = Boolean(previous?.originalPlaceNodeId && previous.originalPlaceNodeId === place.id && restoredLocation);
+  const alreadyInPlaceWithoutOverride = !previous && photo.placeNodeId === place.id;
+
+  if (returningToOriginalGpsPlace) {
+    return {
       ...photo,
-      thumbnailUrl: photo.thumbnailUrl || thumbnails.get(`${photoThumbKeyPrefix}${photo.id}`) || photo.sourceWebPath || photo.storageUrl || "",
-    })),
+      tripId: place.tripId,
+      placeNodeId: place.id,
+      location: restoredLocation,
+      aiFailure: undefined,
+      pendingReason: undefined,
+      exifStatus: previous?.originalExifStatus ?? clearManualExifStatus({ ...photo, location: restoredLocation }),
+      locationResolution: previous?.originalLocationResolution ?? photo.locationResolution,
+      manualPlaceAssignment: undefined,
+    };
+  }
+
+  if (alreadyInPlaceWithoutOverride) {
+    return {
+      ...photo,
+      tripId: place.tripId,
+      placeNodeId: place.id,
+      aiFailure: undefined,
+      pendingReason: undefined,
+      locationResolution: photo.locationResolution
+        ? {
+            ...photo.locationResolution,
+            status: "confirmed",
+            requiresUserAction: false,
+            updatedAt: now,
+          }
+        : photo.locationResolution,
+    };
+  }
+
+  const candidates = candidate ? [candidate, ...(photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? [])] : (photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? []);
+
+  return {
+    ...photo,
+    tripId: place.tripId,
+    placeNodeId: place.id,
+    location: place.center,
+    aiFailure: undefined,
+    pendingReason: undefined,
+    exifStatus: clearManualExifStatus(photo, { gps: "fallback" }),
+    manualPlaceAssignment: {
+      placeId: place.id,
+      originalPlaceNodeId,
+      originalLocation,
+      originalLocationResolution,
+      originalExifStatus,
+      updatedAt: now,
+    },
+    locationResolution: {
+      ...(photo.locationResolution ?? {}),
+      status: "confirmed",
+      effectiveName: visiblePlaceName(place),
+      effectivePoint: place.center,
+      confidence: 1,
+      source,
+      precision,
+      candidates,
+      requiresUserAction: false,
+      updatedAt: now,
+    },
   };
 }
 
-function stripPhotoThumbnail(photo: Photo): Photo {
-  if (!photo.thumbnailUrl.startsWith("data:")) return photo;
-  return { ...photo, thumbnailUrl: "" };
+function hasAiProcessingFailure(photo: Photo | undefined) {
+  return Boolean(photo?.aiFailure?.vision || photo?.aiFailure?.embedding || photo?.pendingReason === "ai_processing_failed");
 }
 
-async function writePersistedState(state: MobilePersistedState) {
-  cachedState = state;
-  const storedState = { ...state, photos: state.photos.map(stripPhotoThumbnail) };
-  const thumbnailEntries = state.photos
-    .filter((photo) => photo.thumbnailUrl.startsWith("data:"))
-    .map<[string, string]>((photo) => [`${photoThumbKeyPrefix}${photo.id}`, photo.thumbnailUrl]);
-  await writeManyKv([[stateKey, storedState], ...thumbnailEntries]);
-  try {
-    window.localStorage.setItem(stateKey, JSON.stringify(storedState));
-  } catch {
-    window.localStorage.removeItem(stateKey);
+function pendingReasonFromExif(photo: Photo) {
+  if (photo.exifStatus?.gps === "missing" || !isUsableLocation(photo.location)) return "missing_gps";
+  if (photo.exifStatus?.time !== "read") return "missing_time";
+  return undefined;
+}
+
+function hasMissingImportInfo(photo: Photo) {
+  return photo.pendingReason === "missing_gps" || photo.pendingReason === "missing_time" || photo.exifStatus?.gps === "missing" || photo.exifStatus?.time !== "read";
+}
+
+function mobileAiFailurePatch(photo: Photo, embedding?: MobileEmbeddingResult): Photo {
+  const visionFailure = photo.aiFallbackReason;
+  const embeddingFailure = embedding?.embeddingMode === "failed" ? embedding.embeddingFallbackReason : photo.embeddingMode === "failed" ? photo.embeddingFallbackReason : undefined;
+  const failed = Boolean(visionFailure || embeddingFailure);
+  return {
+    ...photo,
+    aiFailure: failed
+      ? {
+          vision: visionFailure,
+          embedding: embeddingFailure,
+          hasRealExifGps: photo.exifStatus?.gps === "read" && isUsableLocation(photo.location),
+          hasRealExifTime: photo.exifStatus?.time === "read",
+          updatedAt: nowIso(),
+        }
+      : undefined,
+    pendingReason: failed ? "ai_processing_failed" : photo.pendingReason,
+    locationResolution: resolveImportedLocation({ location: photo.location, aiEvidence: photo.ai, pendingReason: failed ? "ai_processing_failed" : photo.pendingReason }),
+  };
+}
+
+function clearAiFailureForPhoto(photo: Photo): Photo {
+  const pendingReason = pendingReasonFromExif(photo);
+  return {
+    ...photo,
+    aiFailure: undefined,
+    pendingReason,
+    locationResolution: resolveImportedLocation({ location: photo.location, aiEvidence: photo.ai, pendingReason }),
+  };
+}
+
+function addMobileLocationPendingItems(photos: Photo[], pendingItems: PendingItem[]) {
+  const suggested = photos.filter((photo) => !hasAiProcessingFailure(photo) && photo.locationResolution?.status === "suggested" && photo.locationResolution.candidateId);
+  for (const photo of suggested) {
+    const candidate = photo.locationResolution?.candidates?.find((item) => item.id === photo.locationResolution?.candidateId);
+    if (!candidate?.point || !photo.tripId) continue;
+    pendingItems.push({
+      id: makeId("pending"),
+      type: "confirm_location_candidate",
+      relatedPhotoIds: [photo.id],
+      relatedTripId: photo.tripId,
+      suggestion: `AI 建议将「${photo.title ?? photo.fileName}」定位到「${photo.locationResolution?.effectiveName}」。`,
+      reason: "照片缺少可靠 EXIF GPS，但 AI 给出了可解释的地点候选，需要用户确认后才写入确定坐标。",
+      status: "open",
+      proposal: {
+        action: "create_place_from_candidate",
+        tripId: photo.tripId,
+        photoIds: [photo.id],
+        candidate,
+      },
+    });
   }
 }
 
-function deleteThumbnailsForPhotos(photos: Photo[]) {
-  void deleteManyKv(photos.map((photo) => `${photoThumbKeyPrefix}${photo.id}`));
+function addMobileMissingInfoPendingItems(photos: Photo[], pendingItems: PendingItem[]) {
+  for (const photo of photos.filter((item) => hasMissingImportInfo(item) && !hasAiProcessingFailure(item))) {
+    const missingGps = photo.exifStatus?.gps === "missing" || photo.pendingReason === "missing_gps";
+    const missingTime = photo.exifStatus?.time !== "read";
+    pendingItems.push({
+      id: makeId("pending"),
+      type: missingGps ? "missing_gps" : "missing_time",
+      relatedPhotoIds: [photo.id],
+      relatedTripId: photo.tripId,
+      suggestion: `${photo.title ?? photo.fileName} 缺少${missingGps && missingTime ? " GPS 和 EXIF 时间" : missingGps ? " GPS" : " EXIF 时间"}，可手动触发基于上下文推断。`,
+      reason: "初次导入只完成单张照片理解；需要用户在待补信息中手动触发上下文推断后再确认。",
+      status: "open",
+    });
+  }
 }
 
-function toDateInput(value?: string) {
-  if (!value) return new Date().toISOString().slice(0, 10);
-  return value.slice(0, 10);
-}
-
-function midpoint(points: GeoPoint[]): GeoPoint {
-  return {
-    lat: points.reduce((sum, point) => sum + point.lat, 0) / points.length,
-    lng: points.reduce((sum, point) => sum + point.lng, 0) / points.length,
-  };
-}
-
-function buildTimelineSegments(state: MobilePersistedState): TimelineSegment[] {
-  const tripSegments = state.trips.map<TimelineSegment>((trip) => ({
-    id: `timeline-${trip.id}`,
-    label: trip.title,
-    start: trip.dateRange.start,
-    end: trip.dateRange.end,
-    granularity: "month",
-    relatedType: "trip",
-    relatedId: trip.id,
-    photoCount: trip.photoCount,
-    status: trip.status === "confirmed" || trip.status === "archived" ? "confirmed" : "suggested",
-  }));
-
-  const placeSegments = state.placeNodes.map<TimelineSegment>((place) => ({
-    id: `timeline-${place.id}`,
-    label: place.displayName ?? place.name,
-    start: place.timeRange.start,
-    end: place.timeRange.end,
-    granularity: "day",
-    relatedType: "place",
-    relatedId: place.id,
-    photoCount: place.photoIds.length,
-    status: place.pending ? "suggested" : "confirmed",
-  }));
-
-  return [...tripSegments, ...placeSegments].sort((left, right) => left.start.localeCompare(right.start));
-}
-
-function buildGlobeMarkers(state: MobilePersistedState): GlobeMarker[] {
-  return state.placeNodes
-    .filter((place) => Number.isFinite(place.center.lat) && Number.isFinite(place.center.lng))
-    .map((place) => ({
-      id: `marker-${place.id}`,
-      kind: "place",
-      label: place.displayName ?? place.name,
-      center: place.center,
-      count: place.photoIds.length,
-      photoIds: place.photoIds,
-      placeIds: [place.id],
-      tripId: place.tripId,
-      countryName: place.country,
-      countryNames: place.countryNames,
-      startTime: place.timeRange.start,
-      endTime: place.timeRange.end,
-      status: place.pending ? "suggested" : "confirmed",
-    }));
-}
-
-function buildDossierGroups(state: MobilePersistedState): DossierTripGroup[] {
-  return state.trips.map((trip) => {
-    const tripPhotos = state.photos.filter((photo) => photo.tripId === trip.id);
-    const days = new Map<string, { country: string; photoIds: string[]; placeIds: Set<string>; status: "confirmed" | "suggested" | "missing" }>();
-    for (const photo of tripPhotos) {
-      const day = toDateInput(photo.capturedAt);
-      const country = trip.countries[0] ?? "待确认";
-      const current = days.get(day) ?? { country, photoIds: [], placeIds: new Set<string>(), status: photo.location ? "confirmed" : "missing" };
-      current.photoIds.push(photo.id);
-      if (photo.placeNodeId) current.placeIds.add(photo.placeNodeId);
-      if (!photo.location) current.status = "missing";
-      days.set(day, current);
-    }
-    return {
-      tripId: trip.id,
-      countries: [
-        {
-          country: trip.countries[0] ?? "待确认",
-          days: [...days.entries()].map(([day, group]) => ({
-            day,
-            country: group.country,
-            photoIds: group.photoIds,
-            placeIds: [...group.placeIds],
-            status: group.status,
-          })),
-        },
-      ],
-    };
-  });
-}
-
-function buildSearchDocuments(state: MobilePersistedState): SearchDocument[] {
-  return state.photos.map((photo) => {
-    const place = photo.placeNodeId ? state.placeNodes.find((item) => item.id === photo.placeNodeId) : undefined;
-    return {
-      id: `search-${photo.id}`,
-      photoId: photo.id,
-      tripId: photo.tripId,
-      placeNodeId: photo.placeNodeId,
-      capturedAt: photo.capturedAt,
-      tags: photo.tags,
-      locationNames: [place?.displayName ?? place?.name, ...(place?.country ? [place.country] : [])].filter((item): item is string => Boolean(item)),
-      titleText: photo.userEdits?.title ?? photo.title ?? photo.fileName,
-      tagText: photo.tags.join(" "),
-      captionText: photo.userEdits?.caption ?? photo.aiCaption,
-    };
-  });
-}
-
-function projectState(state: MobilePersistedState): AppSnapshot {
+function appendMissingInfoPendingIfNeeded(state: MobilePersistedState, batch: ImportBatch, photo: Photo): MobilePersistedState {
+  if (hasAiProcessingFailure(photo) || !hasMissingImportInfo(photo)) return state;
+  const alreadyOpen = state.pendingItems.some(
+    (item) => item.status === "open" && batch.pendingItemIds.includes(item.id) && ["missing_gps", "missing_time", "confirm_location_candidate"].includes(item.type) && item.relatedPhotoIds?.includes(photo.id),
+  );
+  if (alreadyOpen) return state;
+  const nextItems: PendingItem[] = [];
+  addMobileLocationPendingItems([photo], nextItems);
+  addMobileMissingInfoPendingItems([photo], nextItems);
+  if (!nextItems.length) return state;
   return {
     ...state,
-    timelineSegments: buildTimelineSegments(state),
-    globeMarkers: buildGlobeMarkers(state),
-    dossierGroups: buildDossierGroups(state),
-    searchDocuments: buildSearchDocuments(state),
+    pendingItems: [...state.pendingItems, ...nextItems],
+    importBatches: state.importBatches.map((item) => (item.id === batch.id ? { ...item, pendingItemIds: [...item.pendingItemIds, ...nextItems.map((pendingItem) => pendingItem.id)] } : item)),
   };
 }
 
-function readAscii(bytes: Uint8Array, offset: number, length: number) {
-  return Array.from(bytes.slice(offset, offset + length))
-    .map((byte) => String.fromCharCode(byte))
-    .join("")
-    .replace(/\0/g, "")
-    .trim();
+function rebuildTripsForImportedPhoto(state: MobilePersistedState, photo: Photo, batch: ImportBatch, options = {}) {
+  const affectedTripIds = new Set([photo.tripId, ...batch.createdTripIds, ...(batch.updatedTripIds ?? [])].filter(Boolean));
+  return rebuildTrips(state, affectedTripIds, { makeId, ...options }) as MobilePersistedState;
 }
 
-function parseTiff(bytes: Uint8Array): ExifResult {
-  if (bytes.length < 8) return {};
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const little = readAscii(bytes, 0, 2) === "II";
-  const u16 = (offset: number) => (little ? view.getUint16(offset, true) : view.getUint16(offset, false));
-  const u32 = (offset: number) => (little ? view.getUint32(offset, true) : view.getUint32(offset, false));
-  const rational = (offset: number) => {
-    if (offset + 8 > bytes.length) return 0;
-    const denominator = u32(offset + 4);
-    return denominator ? u32(offset) / denominator : 0;
-  };
-  const parseIfd = (start: number) => {
-    const entries = new Map<number, { count: number; raw: number; type: number; value: number }>();
-    if (start + 2 > bytes.length) return entries;
-    const count = u16(start);
-    for (let index = 0; index < count; index += 1) {
-      const entry = start + 2 + index * 12;
-      if (entry + 12 > bytes.length) break;
-      entries.set(u16(entry), { type: u16(entry + 2), count: u32(entry + 4), value: u32(entry + 8), raw: entry + 8 });
-    }
-    return entries;
-  };
-
-  const root = parseIfd(u32(4));
-  const exifIfd = root.get(0x8769)?.value;
-  const gpsIfd = root.get(0x8825)?.value;
-  let capturedAt: string | undefined;
-  if (exifIfd) {
-    const exif = parseIfd(exifIfd);
-    const date = exif.get(0x9003) ?? exif.get(0x0132);
-    if (date) {
-      const offset = date.count > 4 ? date.value : date.raw;
-      const text = readAscii(bytes, offset, date.count);
-      const match = text.match(/(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})/);
-      if (match) capturedAt = `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}`;
-    }
-  }
-
-  let location: GeoPoint | undefined;
-  if (gpsIfd) {
-    const gps = parseIfd(gpsIfd);
-    const latRef = readAscii(bytes, gps.get(1)?.raw ?? 0, 2);
-    const lat = gps.get(2);
-    const lngRef = readAscii(bytes, gps.get(3)?.raw ?? 0, 2);
-    const lng = gps.get(4);
-    if (lat && lng) {
-      const toDeg = (entry: { value: number }) => rational(entry.value) + rational(entry.value + 8) / 60 + rational(entry.value + 16) / 3600;
-      location = {
-        lat: toDeg(lat) * (latRef === "S" ? -1 : 1),
-        lng: toDeg(lng) * (lngRef === "W" ? -1 : 1),
-      };
-    }
-  }
-  return { capturedAt, location };
-}
-
-function parseExif(buffer: ArrayBuffer): ExifResult {
-  const bytes = new Uint8Array(buffer);
-  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return {};
-  const view = new DataView(buffer);
-  let offset = 2;
-  while (offset + 4 < bytes.length) {
-    if (bytes[offset] !== 0xff) break;
-    const marker = bytes[offset + 1];
-    const length = view.getUint16(offset + 2, false);
-    if (marker === 0xe1 && readAscii(bytes, offset + 4, 6).startsWith("Exif")) {
-      return parseTiff(bytes.slice(offset + 10, offset + 2 + length));
-    }
-    offset += 2 + length;
-  }
-  return {};
-}
-
-async function hashBuffer(buffer: ArrayBuffer) {
-  if (!window.crypto?.subtle) return undefined;
-  const digest = await window.crypto.subtle.digest("SHA-256", buffer);
-  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-async function createThumbnail(file: File) {
-  const objectUrl = URL.createObjectURL(file);
-  try {
-    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = reject;
-      img.src = objectUrl;
-    });
-    const scale = Math.min(1, maxThumbSize / Math.max(image.naturalWidth, image.naturalHeight));
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("Canvas is unavailable");
-    context.drawImage(image, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL("image/jpeg", 0.78);
-  } finally {
-    URL.revokeObjectURL(objectUrl);
-  }
-}
-
-function pendingItemForPhoto(photo: Photo, type: PendingItem["type"], reason: string): PendingItem {
-  return {
-    id: makeId("pending"),
-    type,
-    relatedPhotoIds: [photo.id],
-    relatedTripId: photo.tripId,
-    suggestion: "需要手动确认",
-    reason,
-    status: "open",
-  };
-}
-
-function buildImportState(
-  current: MobilePersistedState,
-  totalCount: number,
-  photos: Photo[],
-  pendingItems: PendingItem[],
-  summary: string,
-  duplicateCount = 0,
-  duplicatePhotoIds: string[] = [],
-) {
-  const batchId = makeId("batch");
-  const importedAt = nowIso();
-  const datedPhotos = photos.slice().sort((left, right) => (left.capturedAt ?? "").localeCompare(right.capturedAt ?? ""));
-  const start = toDateInput(datedPhotos[0]?.capturedAt);
-  const end = toDateInput(datedPhotos[datedPhotos.length - 1]?.capturedAt ?? datedPhotos[0]?.capturedAt);
-  const tripId = makeId("trip");
-  const located = photos.filter((photo) => photo.location);
-  const title = `Mobile Import ${start}`;
-  const trip: Trip = {
-    id: tripId,
-    title,
-    dateRange: { start, end },
-    countries: ["待确认"],
-    cities: [],
-    coverUrl: photos[0]?.thumbnailUrl ?? "",
-    photoCount: photos.length,
-    placeNodeCount: located.length ? 1 : 0,
-    status: "pending",
-    source: "import",
-  };
-
-  for (const photo of photos) photo.tripId = tripId;
-  let placeNodes: PlaceNode[] = [];
-  let routes: Route[] = [];
-  if (located.length) {
-    const placeId = makeId("place");
-    const center = midpoint(located.map((photo) => photo.location).filter((point): point is GeoPoint => Boolean(point)));
-    for (const photo of located) photo.placeNodeId = placeId;
-    placeNodes = [
-      {
-        id: placeId,
-        tripId,
-        name: "定位照片",
-        displayName: "定位照片",
-        country: "待确认",
-        center,
-        photoIds: located.map((photo) => photo.id),
-        timeRange: {
-          start: located[0]?.capturedAt ?? importedAt,
-          end: located[located.length - 1]?.capturedAt ?? located[0]?.capturedAt ?? importedAt,
-        },
-        pending: false,
-      },
-    ];
-    routes = [
-      {
-        id: makeId("route"),
-        tripId,
-        points: located.map((photo) => photo.location).filter((point): point is GeoPoint => Boolean(point)),
-        status: "auto_generated",
-      },
-    ];
-  }
-  for (const pending of pendingItems) pending.relatedTripId = tripId;
-
-  const batch: ImportBatch = {
-    id: batchId,
-    importedAt,
-    totalCount,
-    successCount: photos.length,
-    failedCount: Math.max(0, totalCount - photos.length - duplicateCount),
-    duplicateCount,
-    duplicatePhotoIds,
-    status: "pending_confirmation",
-    createdTripIds: [tripId],
-    updatedTripIds: [],
-    addedPhotoIds: photos.map((photo) => photo.id),
-    pendingItemIds: pendingItems.map((item) => item.id),
-    storedFileNames: [],
-    storedThumbnailNames: [],
-    aiStats: {
-      qwenCount: 0,
-      fallbackCount: photos.length,
-      embeddingCount: 0,
-      qwenEmbeddingCount: 0,
-      deterministicEmbeddingCount: 0,
-    },
-    summary,
-  };
-
-  return {
-    trips: [...current.trips, trip],
-    photos: [...current.photos, ...photos],
-    placeNodes: [...current.placeNodes, ...placeNodes],
-    routes: [...current.routes, ...routes],
-    importBatches: [...current.importBatches, batch],
-    pendingItems: [...current.pendingItems, ...pendingItems],
-  };
-}
-
-function firstRecommendedModel(profile: ProfileKey, providerId: string) {
-  return mobileAiCatalog.models[profile]?.[providerId]?.find((model) => model.recommended)?.id ?? mobileAiCatalog.models[profile]?.[providerId]?.[0]?.id ?? "";
-}
-
-function providerSupports(profile: ProfileKey, providerId: string | null | undefined) {
-  return Boolean(providerId && mobileAiCatalog.providers.find((provider) => provider.id === providerId)?.capabilities[profile]);
-}
-
-function recommendedModelExists(profile: ProfileKey, providerId: string | null | undefined, modelId: string | null | undefined) {
-  if (!providerId || !modelId) return false;
-  return Boolean(mobileAiCatalog.models[profile]?.[providerId]?.some((model) => model.id === modelId));
-}
-
-function normalizeModelSource(value: unknown): "recommended" | "custom" {
-  return value === "custom" ? "custom" : "recommended";
-}
-
-function defaultAiConfig(): AiConfig {
-  return {
-    catalog: mobileAiCatalog,
-    profiles: {
-      imageUnderstanding: { providerId: "aliyun", modelId: firstRecommendedModel("imageUnderstanding", "aliyun") || "qwen3.5-flash", modelSource: "recommended" },
-      crossModalEmbedding: { enabled: false, providerId: null, modelId: null, modelSource: null },
-    },
-  };
-}
-
-function normalizeImageProfile(profile: Partial<AiConfig["profiles"]["imageUnderstanding"]> | undefined) {
-  const fallback = defaultAiConfig().profiles.imageUnderstanding;
-  const providerId = providerSupports("imageUnderstanding", profile?.providerId) ? profile?.providerId ?? fallback.providerId : fallback.providerId;
-  const modelSource = normalizeModelSource(profile?.modelSource);
-  const modelId =
-    modelSource === "custom"
-      ? profile?.modelId || fallback.modelId
-      : recommendedModelExists("imageUnderstanding", providerId, profile?.modelId)
-        ? profile?.modelId ?? fallback.modelId
-        : firstRecommendedModel("imageUnderstanding", providerId) || fallback.modelId;
-
-  return {
-    providerId,
-    modelId,
-    modelSource,
-  };
-}
-
-function normalizeEmbeddingProfile(profile: Partial<AiConfig["profiles"]["crossModalEmbedding"]> | undefined) {
-  const fallback = defaultAiConfig().profiles.crossModalEmbedding;
-  const enabled = Boolean(profile?.enabled ?? fallback.enabled);
-
-  if (!enabled) {
-    return {
-      enabled: false,
-      providerId: null,
-      modelId: null,
-      modelSource: null,
-    };
-  }
-
-  const providerId = providerSupports("crossModalEmbedding", profile?.providerId) ? profile?.providerId ?? "aliyun" : "aliyun";
-  const modelSource = normalizeModelSource(profile?.modelSource);
-  const modelId =
-    modelSource === "custom"
-      ? profile?.modelId || firstRecommendedModel("crossModalEmbedding", providerId)
-      : recommendedModelExists("crossModalEmbedding", providerId, profile?.modelId)
-        ? profile?.modelId ?? firstRecommendedModel("crossModalEmbedding", providerId)
-        : firstRecommendedModel("crossModalEmbedding", providerId);
-
-  return {
-    enabled,
-    providerId,
-    modelId,
-    modelSource,
-  };
-}
-
-function normalizeMobileAiConfig(config?: Partial<AiConfig> | AiConfig): AiConfig {
-  return {
-    catalog: mobileAiCatalog,
-    profiles: {
-      imageUnderstanding: normalizeImageProfile(config?.profiles?.imageUnderstanding),
-      crossModalEmbedding: normalizeEmbeddingProfile(config?.profiles?.crossModalEmbedding),
-    },
-  };
-}
-
-function emptyCredential(source: "local" | "env" | "none" = "none") {
-  return { isSet: source !== "none", preview: source === "none" ? "" : "已设置", source };
-}
-
-function readAiSettings(): AiSettings {
-  const fallback: AiSettings = {
-    credentials: Object.fromEntries(providerKeys.map((key) => [key, emptyCredential()])) as AiSettings["credentials"],
-    profileCredentials: {
-      imageUnderstanding: Object.fromEntries(providerKeys.map((key) => [key, emptyCredential()])) as AiSettings["profileCredentials"]["imageUnderstanding"],
-      crossModalEmbedding: Object.fromEntries(providerKeys.map((key) => [key, emptyCredential()])) as AiSettings["profileCredentials"]["crossModalEmbedding"],
-    },
-    aiConfig: normalizeMobileAiConfig(),
-  };
-  const raw = window.localStorage.getItem(aiSettingsKey);
-  if (!raw) return fallback;
-  try {
-    const parsed = JSON.parse(raw) as Partial<AiSettings>;
-    return {
-      ...fallback,
-      ...parsed,
-      aiConfig: normalizeMobileAiConfig(parsed.aiConfig),
-    };
-  } catch {
-    return fallback;
-  }
-}
-
-function writeAiSettings(settings: AiSettings) {
-  window.localStorage.setItem(aiSettingsKey, JSON.stringify(settings));
-}
-
-function photoFromNativeAsset(asset: NativePhotoAsset): Photo {
-  const location = typeof asset.latitude === "number" && typeof asset.longitude === "number" ? { lat: asset.latitude, lng: asset.longitude } : undefined;
-  const capturedAt = asset.capturedAt ?? (asset.lastModified ? new Date(asset.lastModified).toISOString() : nowIso());
-  const title = asset.fileName.replace(/\.[^.]+$/, "");
-  const canReuseOriginal = asset.persisted !== false;
-  return {
-    id: makeId("photo"),
-    fileName: asset.fileName,
-    title,
-    originalHash: asset.sha256 ?? asset.uri,
-    mime: asset.mimeType,
-    thumbnailUrl: asset.thumbnailDataUrl ?? asset.webPath ?? "",
-    storageUrl: canReuseOriginal ? asset.webPath ?? asset.uri : undefined,
-    sourceUri: canReuseOriginal ? asset.uri : undefined,
-    sourceWebPath: canReuseOriginal ? asset.webPath : undefined,
-    sourceProvider: "android_photo_picker",
-    capturedAt,
-    location,
-    tags: canReuseOriginal ? ["手机相册"] : ["手机相册", "原图授权未持久化"],
-    aiCaption: "",
-    locationResolution: {
-      status: location ? "confirmed" : "missing",
-      effectivePoint: location,
-      confidence: location ? 1 : undefined,
-      source: location ? "exif" : undefined,
-      precision: location ? "confirmed" : undefined,
-      candidates: [],
-      requiresUserAction: !location,
-      updatedAt: nowIso(),
-    },
-    exifStatus: {
-      time: asset.capturedAt ? "read" : "fallback",
-      gps: location ? "read" : "missing",
-    },
-    pendingReason: location ? undefined : "missing_gps",
-  };
-}
-
-function duplicateNativeAssetIds(state: MobilePersistedState, assets: NativePhotoAsset[]) {
-  const existingHashes = new Set(state.photos.map((photo) => photo.originalHash).filter((value): value is string => Boolean(value)));
-  const existingUris = new Set(state.photos.map((photo) => photo.sourceUri).filter((value): value is string => Boolean(value)));
-  return new Set(
-    assets
-      .filter((asset) => (asset.sha256 && existingHashes.has(asset.sha256)) || existingUris.has(asset.uri))
-      .map((asset) => asset.sha256 ?? asset.uri),
-  );
-}
-
-function sourceUrisForPhotos(photos: Photo[]) {
-  return photos.map((photo) => photo.sourceUri).filter((uri): uri is string => Boolean(uri));
+function failureReasonText(photo: Photo) {
+  return [
+    photo.aiFailure?.hasRealExifGps ? "真实GPS" : "无GPS",
+    photo.aiFailure?.vision ? `AI Vision：${photo.aiFailure.vision}` : undefined,
+    photo.aiFailure?.embedding ? `Embedding：${photo.aiFailure.embedding}` : undefined,
+  ]
+    .filter(Boolean)
+    .join("。");
 }
 
 export const mobileLocalApi = {
   async getState() {
-    return projectState(await getPersistedState());
+    return projectState(await getMobilePersistedState());
+  },
+  async getImportJob(id: string) {
+    return readNativeImportJob<MobileImportJob>(id);
   },
   async reverseGeocode(point: GeoPoint) {
+    const nativeCandidates = await reverseMobileCandidates(point, { makeId, preferCity: true });
+    if (nativeCandidates.length) return { candidates: nativeCandidates };
     const candidate: LocationCandidate = {
       id: makeId("candidate"),
       name: `${point.lat.toFixed(4)}, ${point.lng.toFixed(4)}`,
@@ -772,7 +342,7 @@ export const mobileLocalApi = {
       confidence: 0.5,
       source: "manual",
       precision: "estimated",
-      reason: "Android local MVP does not include the offline gazetteer yet.",
+      reason: "Android GeoNames lookup returned no local candidate.",
     };
     return { candidates: [candidate] };
   },
@@ -786,61 +356,83 @@ export const mobileLocalApi = {
     return this.getLocalAiSettings();
   },
   async getAiSettings() {
-    return readAiSettings();
+    return readMobileAiSettings();
   },
   async getStorageSettings(): Promise<StorageSettings> {
     return {
-      dataDir: "Android app storage",
-      dbPath: "Android IndexedDB",
-      importJobDir: "Android app storage",
+      dataDir: "Android private app storage",
+      dbPath: "Android private SQLite: earth-online.sqlite",
+      importJobDir: "Android private SQLite: import_jobs",
       photoDir: "Gallery content URIs are referenced, not copied",
       rootDir: "Android app sandbox",
       source: "project",
-      thumbDir: "Android IndexedDB thumbnails",
-      vectorPath: "Android IndexedDB",
+      thumbDir: "Android IndexedDB thumbnails; originals stay in the gallery",
+      vectorPath: "Android private SQLite: vector_index",
     };
   },
-  async updateAiSettings(body: AiSettingsUpdateBody) {
-    const current = readAiSettings();
-    const nextCredentials = { ...current.credentials };
-    for (const key of providerKeys) {
-      if (!hasOwn(body.credentials, key)) continue;
-      nextCredentials[key] = body.credentials?.[key] ? emptyCredential("local") : emptyCredential();
-    }
-    const nextProfileCredentials = {
-      imageUnderstanding: { ...current.profileCredentials.imageUnderstanding },
-      crossModalEmbedding: { ...current.profileCredentials.crossModalEmbedding },
-    };
-    for (const profile of ["imageUnderstanding", "crossModalEmbedding"] as const) {
-      for (const key of providerKeys) {
-        if (!hasOwn(body.profileCredentials?.[profile], key)) continue;
-        nextProfileCredentials[profile][key] = body.profileCredentials?.[profile]?.[key] ? emptyCredential("local") : emptyCredential();
-      }
-    }
-    const next: AiSettings = {
-      ...current,
-      credentials: nextCredentials,
-      profileCredentials: nextProfileCredentials,
-      aiConfig: body.aiConfig ? normalizeMobileAiConfig(body.aiConfig) : normalizeMobileAiConfig(current.aiConfig),
-    };
-    writeAiSettings(next);
-    return next;
+  async updateAiSettings(body: MobileAiSettingsUpdateBody) {
+    return updateMobileAiSettings(body);
   },
   async rebuildPhotoEmbeddings(onJobProgress?: (progress: ImportJobProgress) => void, photoIds?: string[]) {
-    const state = await getPersistedState();
-    const total = photoIds?.length ?? state.photos.length;
-    onJobProgress?.({ phase: "completed", done: total, total, steps: { embedding: { done: total, total } } });
-    return {
-      ...projectState(state),
+    const state = await getMobilePersistedState();
+    const targetIds = new Set(photoIds ?? state.photos.map((photo) => photo.id));
+    const targets = state.photos.filter((photo) => targetIds.has(photo.id));
+    const total = targets.length;
+    const vectorIndex: Record<string, number[]> = await readNativeVectorIndex().catch(() => ({}));
+    const failures: EmbeddingRebuildReport["failures"] = [];
+    let done = 0;
+    let successCount = 0;
+    const photos = [];
+    const jobProgress = mobileJobProgressRecorder(onJobProgress, total, "embedding");
+    jobProgress.update({ phase: "embedding", done, total, steps: { embedding: { done, total } } });
+    for (const photo of state.photos) {
+      if (!targetIds.has(photo.id)) {
+        photos.push(photo);
+        continue;
+      }
+      try {
+        const embedding = await embedMobileContent({ dataUrl: photo.thumbnailUrl || photo.sourceWebPath || photo.storageUrl, text: [photo.title, photo.aiCaption, ...(photo.tags ?? [])].filter(Boolean).join(" "), fileName: photo.fileName });
+        if (embedding?.embedding?.length) {
+          vectorIndex[photo.id] = embedding.embedding;
+          photos.push({
+            ...photo,
+            embeddingProvider: embedding.embeddingProvider,
+            embeddingModel: embedding.embeddingModel,
+            embeddingSpaceId: embedding.embeddingSpaceId,
+            embeddingDimension: embedding.embeddingDimension,
+            embeddingMode: embedding.embeddingMode,
+            embeddingFallbackReason: undefined,
+          });
+          successCount += 1;
+        } else {
+          delete vectorIndex[photo.id];
+          photos.push({ ...photo, embeddingMode: "disabled" as const, embeddingFallbackReason: "Android embedding profile is disabled or missing API key." });
+        }
+      } catch (error) {
+        delete vectorIndex[photo.id];
+        failures.push({ id: photo.id, fileName: photo.fileName, reason: error instanceof Error ? error.message : String(error) });
+        photos.push({ ...photo, embeddingMode: "failed" as const, embeddingFallbackReason: error instanceof Error ? error.message : String(error) });
+      }
+      done += 1;
+      jobProgress.update({ phase: done < total ? "embedding" : "completed", done, total, steps: { embedding: { done, total } } });
+    }
+    const next = { ...state, photos };
+    await writeMobilePersistedState(next);
+    await writeNativeVectorIndex(vectorIndex).catch(() => false);
+    const snapshot = await projectState(next);
+    const result = {
+      ...snapshot,
       embeddingRebuild: {
         total,
-        successCount: 0,
-        failedCount: 0,
-        failedPhotoIds: [],
-        failures: [],
+        successCount,
+        failedCount: failures.length,
+        failedPhotoIds: failures.map((failure) => failure.id),
+        failures,
         mode: photoIds?.length ? "retry_failed" : "all",
       } satisfies EmbeddingRebuildReport,
     };
+    jobProgress.complete(result);
+    return result;
   },
   async importFiles(
     filesLike: FileList | File[],
@@ -849,23 +441,67 @@ export const mobileLocalApi = {
     onProgress?: (done: number, total: number) => void,
     onJobProgress?: (progress: ImportJobProgress) => void,
   ) {
-    void _locale;
     const files = Array.from(filesLike).filter((file) => file.type.startsWith("image/"));
     const total = files.length;
+    if (total === 0) throw new Error("没有收到可导入图片。");
+    const state = await getMobilePersistedState();
+    const existingHashes = new Set(state.photos.map((photo) => photo.originalHash).filter((value): value is string => Boolean(value)));
     const photos: Photo[] = [];
-    const pendingItems: PendingItem[] = [];
+    const vectorIndex: Record<string, number[]> = await readNativeVectorIndex().catch(() => ({}));
+    const aiStats = vectorStatsDefaults();
+    const duplicatePhotoIds: string[] = [];
+    const jobProgress = mobileJobProgressRecorder(onJobProgress, total, "reading");
     onProgress?.(0, total);
-    onJobProgress?.({ phase: "reading", done: 0, total, steps: { reading: { done: 0, total } } });
+    jobProgress.update({ phase: "reading", done: 0, total, steps: { reading: { done: 0, total } } });
+    let readingDone = 0;
+    let exifDone = 0;
+    let thumbnailDone = 0;
+    let aiDone = 0;
+    let embeddingDone = 0;
+    const emitImportProgress = (phase: ImportJobProgress["phase"], phaseDone: number, currentFileName?: string) => {
+      jobProgress.update({
+        phase,
+        done: phaseDone,
+        total,
+        currentFileName,
+        steps: {
+          reading: { done: readingDone, total },
+          exif: { done: exifDone, total },
+          thumbnails: { done: thumbnailDone, total },
+          ai: { done: aiDone, total },
+          embedding: { done: embeddingDone, total },
+        },
+      });
+    };
     let done = 0;
     for (const file of files) {
       const buffer = await file.arrayBuffer();
+      readingDone += 1;
+      emitImportProgress("reading", readingDone, file.name);
+      const originalHash = await hashBuffer(buffer);
+      if (originalHash && existingHashes.has(originalHash)) {
+        const duplicate = state.photos.find((photo) => photo.originalHash === originalHash);
+        if (duplicate?.id) duplicatePhotoIds.push(duplicate.id);
+        exifDone += 1;
+        thumbnailDone += 1;
+        aiDone += 1;
+        embeddingDone += 1;
+        done += 1;
+        emitImportProgress(done < total ? "reading" : "grouping", done, file.name);
+        continue;
+      }
+      if (originalHash) existingHashes.add(originalHash);
       const exif = parseExif(buffer);
+      exifDone += 1;
+      emitImportProgress("exif", exifDone, file.name);
       const thumbnailUrl = await createThumbnail(file).catch(() => "");
-      const photo: Photo = {
+      thumbnailDone += 1;
+      emitImportProgress("thumbnails", thumbnailDone, file.name);
+      let photo: Photo = {
         id: makeId("photo"),
         fileName: file.name,
         title: file.name.replace(/\.[^.]+$/, ""),
-        originalHash: await hashBuffer(buffer),
+        originalHash,
         mime: file.type,
         thumbnailUrl,
         sourceProvider: "file_input",
@@ -889,16 +525,48 @@ export const mobileLocalApi = {
         },
         pendingReason: exif.location ? undefined : "missing_gps",
       };
+      emitImportProgress("ai", aiDone, file.name);
+      photo = await enrichMobilePhotoWithAi(photo, { dataUrl: thumbnailUrl, allowCloud: _allowCloudAi, locale: _locale });
+      aiDone += 1;
+      emitImportProgress("ai", aiDone, file.name);
+      emitImportProgress("embedding", embeddingDone, file.name);
+      const embedding: MobileEmbeddingResult | undefined = await embedMobileContent({ dataUrl: thumbnailUrl, text: mobileEmbeddingText(photo), fileName: file.name, allowCloud: _allowCloudAi }).catch((error) => ({
+        embeddingMode: "failed" as const,
+        embeddingFallbackReason: error instanceof Error ? error.message : String(error),
+      }));
+      recordMobileEmbeddingStats(embedding, aiStats);
+      photo = {
+        ...photo,
+        embeddingProvider: embedding?.embeddingProvider,
+        embeddingModel: embedding?.embeddingModel,
+        embeddingSpaceId: embedding?.embeddingSpaceId,
+        embeddingDimension: embedding?.embeddingDimension,
+        embeddingMode: embedding?.embeddingMode,
+        embeddingFallbackReason: embedding?.embeddingFallbackReason,
+      };
+      photo = mobileAiFailurePatch(photo, embedding);
+      if (embedding?.embedding?.length) vectorIndex[photo.id] = embedding.embedding;
+      embeddingDone += 1;
+      emitImportProgress("embedding", embeddingDone, file.name);
       photos.push(photo);
-      if (!exif.location) pendingItems.push(pendingItemForPhoto(photo, "missing_gps", "移动端本地导入未读取到 EXIF GPS。"));
       done += 1;
-      onProgress?.(done, total);
-      onJobProgress?.({ phase: "exif", done, total, currentFileName: file.name, steps: { reading: { done, total }, exif: { done, total } } });
     }
-    const next = buildImportState(await getPersistedState(), files.length, photos, pendingItems, `Imported ${photos.length} files on Android WebView`);
-    await writePersistedState(next);
-    onJobProgress?.({ phase: "completed", done: total, total });
-    return projectState(next);
+    const next = buildImportStateFromPhotos(state, {
+      totalCount: files.length,
+      photos,
+      duplicateCount: duplicatePhotoIds.length,
+      duplicatePhotoIds,
+      makeId,
+      now: new Date(),
+      locale: _locale,
+      aiStats,
+    }) as MobilePersistedState;
+    await writeMobilePersistedState(next);
+    await writeNativeVectorIndex(vectorIndex).catch(() => false);
+    emitImportProgress("completed", total);
+    const snapshot = await projectState(next);
+    jobProgress.complete(snapshot);
+    return snapshot;
   },
   async importMobilePhotoAssets(
     assetsLike: NativePhotoAsset[],
@@ -907,84 +575,139 @@ export const mobileLocalApi = {
     onProgress?: (done: number, total: number) => void,
     onJobProgress?: (progress: ImportJobProgress) => void,
   ) {
-    void _allowCloudAi;
-    void _locale;
     const assets = assetsLike.filter((asset) => !asset.error && asset.uri && asset.mimeType?.startsWith("image/"));
     const total = assets.length;
-    if (!total) return projectState(await getPersistedState());
+    if (!total) return projectState(await getMobilePersistedState());
 
-    const state = await getPersistedState();
+    const state = await getMobilePersistedState();
     const duplicateIds = duplicateNativeAssetIds(state, assets);
     const photos: Photo[] = [];
-    const pendingItems: PendingItem[] = [];
+    const vectorIndex: Record<string, number[]> = await readNativeVectorIndex().catch(() => ({}));
+    const aiStats = vectorStatsDefaults();
+    const jobProgress = mobileJobProgressRecorder(onJobProgress, total, "reading");
     onProgress?.(0, total);
-    onJobProgress?.({ phase: "reading", done: 0, total, steps: { reading: { done: 0, total } } });
+    jobProgress.update({ phase: "reading", done: 0, total, steps: { reading: { done: 0, total } } });
+    let readingDone = 0;
+    let exifDone = 0;
+    let thumbnailDone = 0;
+    let aiDone = 0;
+    let embeddingDone = 0;
+    const emitImportProgress = (phase: ImportJobProgress["phase"], phaseDone: number, currentFileName?: string) => {
+      jobProgress.update({
+        phase,
+        done: phaseDone,
+        total,
+        currentFileName,
+        steps: {
+          reading: { done: readingDone, total },
+          exif: { done: exifDone, total },
+          thumbnails: { done: thumbnailDone, total },
+          ai: { done: aiDone, total },
+          embedding: { done: embeddingDone, total },
+        },
+      });
+    };
     let done = 0;
     for (const asset of assets) {
       const duplicateId = asset.sha256 ?? asset.uri;
+      readingDone += 1;
+      emitImportProgress("reading", readingDone, asset.fileName);
+      exifDone += 1;
+      emitImportProgress("exif", exifDone, asset.fileName);
+      thumbnailDone += 1;
+      emitImportProgress("thumbnails", thumbnailDone, asset.fileName);
       if (!duplicateIds.has(duplicateId)) {
-        const photo = photoFromNativeAsset(asset);
+        let photo: Photo = {
+          ...photoFromNativeAsset(asset, { makeId, nowIso }),
+        };
+        emitImportProgress("ai", aiDone, asset.fileName);
+        photo = await enrichMobilePhotoWithAi(photo, { dataUrl: asset.thumbnailDataUrl ?? asset.webPath, allowCloud: _allowCloudAi, locale: _locale });
+        aiDone += 1;
+        emitImportProgress("ai", aiDone, asset.fileName);
+        emitImportProgress("embedding", embeddingDone, asset.fileName);
+        const embedding: MobileEmbeddingResult | undefined = await embedMobileContent({ dataUrl: asset.thumbnailDataUrl ?? asset.webPath, text: mobileEmbeddingText(photo), fileName: asset.fileName, allowCloud: _allowCloudAi }).catch((error) => ({
+          embeddingMode: "failed" as const,
+          embeddingFallbackReason: error instanceof Error ? error.message : String(error),
+        }));
+        recordMobileEmbeddingStats(embedding, aiStats);
+        photo = {
+          ...photo,
+          embeddingProvider: embedding?.embeddingProvider,
+          embeddingModel: embedding?.embeddingModel,
+          embeddingSpaceId: embedding?.embeddingSpaceId,
+          embeddingDimension: embedding?.embeddingDimension,
+          embeddingMode: embedding?.embeddingMode,
+          embeddingFallbackReason: embedding?.embeddingFallbackReason,
+        };
+        photo = mobileAiFailurePatch(photo, embedding);
+        if (embedding?.embedding?.length) vectorIndex[photo.id] = embedding.embedding;
+        embeddingDone += 1;
+        emitImportProgress("embedding", embeddingDone, asset.fileName);
         photos.push(photo);
-        if (!photo.location) pendingItems.push(pendingItemForPhoto(photo, "missing_gps", "系统相册照片未读取到 EXIF GPS。"));
+      } else {
+        aiDone += 1;
+        embeddingDone += 1;
+        emitImportProgress(done + 1 < total ? "reading" : "grouping", done + 1, asset.fileName);
       }
       done += 1;
-      onProgress?.(done, total);
-      onJobProgress?.({
-        phase: done < total ? "thumbnails" : "grouping",
-        done,
-        total,
-        currentFileName: asset.fileName,
-        steps: {
-          reading: { done, total },
-          exif: { done, total },
-          thumbnails: { done, total },
-        },
-      });
     }
 
     if (!photos.length) {
-      onJobProgress?.({ phase: "completed", done: total, total });
-      return projectState(state);
+      emitImportProgress("completed", total);
+      const snapshot = await projectState(state);
+      jobProgress.complete(snapshot);
+      return snapshot;
     }
 
-    const duplicatePhotoIds = assets.filter((asset) => duplicateIds.has(asset.sha256 ?? asset.uri)).map((asset) => asset.sha256 ?? asset.uri);
-    const next = buildImportState(
-      state,
-      total,
+    const duplicatePhotoIds = duplicateNativeAssetPhotoIds(state, assets.filter((asset) => duplicateIds.has(asset.sha256 ?? asset.uri)));
+    const next = buildImportStateFromPhotos(state, {
+      totalCount: total,
       photos,
-      pendingItems,
-      `Imported ${photos.length} gallery photos on Android without copying originals`,
-      duplicatePhotoIds.length,
+      duplicateCount: duplicatePhotoIds.length,
       duplicatePhotoIds,
-    );
-    await writePersistedState(next);
-    onJobProgress?.({ phase: "completed", done: total, total });
-    return projectState(next);
+      makeId,
+      now: new Date(),
+      locale: _locale,
+      aiStats,
+    }) as MobilePersistedState;
+    await writeMobilePersistedState(next);
+    await writeNativeVectorIndex(vectorIndex).catch(() => false);
+    emitImportProgress("completed", total);
+    const snapshot = await projectState(next);
+    jobProgress.complete(snapshot);
+    return snapshot;
   },
   async importAppleTestPhotos() {
-    return projectState(await getPersistedState());
+    return projectState(await getMobilePersistedState());
   },
   async confirmImport(batchId: string) {
-    const state = await getPersistedState();
-    const batches = state.importBatches.map((batch) => (batch.id === batchId ? { ...batch, status: "confirmed" as const } : batch));
-    const batch = batches.find((item) => item.id === batchId);
-    const created = new Set(batch?.createdTripIds ?? []);
+    const state = await getMobilePersistedState();
+    const batch = state.importBatches.find((item) => item.id === batchId);
+    if (!batch || batch.status !== "pending_confirmation") return projectState(state);
+    const blockingTypes = new Set(["missing_gps", "missing_time", "confirm_location_candidate", "ai_processing_failed"]);
+    const openMissingItems = state.pendingItems.filter((item) => batch.pendingItemIds.includes(item.id) && item.status === "open" && blockingTypes.has(item.type));
+    if (openMissingItems.length) throw new Error("仍有待补信息或 AI 初次处理失败照片未处理，不能确认导入。");
+    const created = new Set(batch.createdTripIds ?? []);
     const trips = state.trips.map((trip) => (created.has(trip.id) ? { ...trip, status: "confirmed" as const } : trip));
-    const pendingIds = new Set(batch?.pendingItemIds ?? []);
-    const pendingItems = state.pendingItems.map((item) => (pendingIds.has(item.id) ? { ...item, status: "accepted" as const } : item));
-    const next = { ...state, importBatches: batches, trips, pendingItems };
-    await writePersistedState(next);
+    const next = {
+      ...state,
+      trips,
+      importBatches: state.importBatches.map((item) => (item.id === batchId ? { ...item, status: "confirmed" as const } : item)),
+    };
+    await writeMobilePersistedState(next);
     return projectState(next);
   },
   async rollbackImport(batchId: string) {
-    const state = await getPersistedState();
+    const state = await getMobilePersistedState();
     const batch = state.importBatches.find((item) => item.id === batchId);
-    if (!batch) return projectState(state);
+    const latestPending = lastItem(state.importBatches.filter((item) => item.status === "pending_confirmation"));
+    if (!batch || batch.id !== latestPending?.id) throw new Error("MVP 只支持回撤最近一次待确认导入。");
     const addedPhotoIds = new Set(batch.addedPhotoIds);
     const createdTripIds = new Set(batch.createdTripIds);
+    const affectedExistingTripIds = new Set(safeArray(batch.updatedTripIds));
     const pendingIds = new Set(batch.pendingItemIds);
     const removedPhotos = state.photos.filter((photo) => addedPhotoIds.has(photo.id));
-    const next = {
+    const base = {
       ...state,
       photos: state.photos.filter((photo) => !addedPhotoIds.has(photo.id)),
       trips: state.trips.filter((trip) => !createdTripIds.has(trip.id)),
@@ -993,58 +716,277 @@ export const mobileLocalApi = {
       pendingItems: state.pendingItems.filter((item) => !pendingIds.has(item.id)),
       importBatches: state.importBatches.map((item) => (item.id === batchId ? { ...item, status: "rolled_back" as const } : item)),
     };
-    await writePersistedState(next);
-    deleteThumbnailsForPhotos(removedPhotos);
-    void releaseNativePhotoPermissions(sourceUrisForPhotos(removedPhotos));
+    const next = rebuildTrips(base, affectedExistingTripIds, { makeId }) as MobilePersistedState;
+    await writeMobilePersistedState(next);
+    deleteMobileThumbnailsForPhotos(removedPhotos);
+    await releaseNativePhotoPermissions(sourceUrisForPhotos(removedPhotos)).catch(() => undefined);
+    await deleteNativeVectors(removedPhotos.map((photo) => photo.id)).catch(() => false);
     return projectState(next);
   },
   async cancelImportPhotos(batchId: string, photoIds: string[]) {
-    const state = await getPersistedState();
-    const removed = new Set(photoIds);
-    const removedPhotos = state.photos.filter((photo) => removed.has(photo.id));
-    const next = {
-      ...state,
-      photos: state.photos.filter((photo) => !removed.has(photo.id)),
-      pendingItems: state.pendingItems.filter((item) => !item.relatedPhotoIds.some((id) => removed.has(id))),
-      importBatches: state.importBatches.map((batch) =>
-        batch.id === batchId ? { ...batch, addedPhotoIds: batch.addedPhotoIds.filter((id) => !removed.has(id)), successCount: Math.max(0, batch.successCount - removed.size) } : batch,
-      ),
+    const state = await getMobilePersistedState();
+    const batch = state.importBatches.find((item) => item.id === batchId);
+    const latestPending = lastItem(state.importBatches.filter((item) => item.status === "pending_confirmation"));
+    if (!batch || batch.id !== latestPending?.id) throw new Error("只能从最近一次待确认导入中取消照片。");
+    const requested = new Set(photoIds);
+    const batchPhotoIds = new Set(batch.addedPhotoIds);
+    const cancelIds = new Set([...requested].filter((id) => batchPhotoIds.has(id)));
+    if (cancelIds.size === 0) return projectState(state);
+    const cancelPhotos = state.photos.filter((photo) => cancelIds.has(photo.id));
+    const affectedTripIds = new Set(cancelPhotos.map((photo) => photo.tripId).filter((id): id is string => Boolean(id)));
+    const remainingAddedPhotoIds = batch.addedPhotoIds.filter((id) => !cancelIds.has(id));
+    const emptyCreatedTripIds = new Set(
+      batch.createdTripIds.filter((tripId) => !state.photos.some((photo) => photo.tripId === tripId && !cancelIds.has(photo.id))),
+    );
+    for (const tripId of emptyCreatedTripIds) affectedTripIds.delete(tripId);
+    const pendingItems = state.pendingItems
+      .map((item) => {
+        if (!batch.pendingItemIds.includes(item.id)) return item;
+        const relatedPhotoIds = safeArray(item.relatedPhotoIds).filter((id) => !cancelIds.has(id));
+        return { ...item, relatedPhotoIds };
+      })
+      .filter((item) => !batch.pendingItemIds.includes(item.id) || safeArray(item.relatedPhotoIds).length > 0);
+    const pendingIds = new Set(pendingItems.filter((item) => batch.pendingItemIds.includes(item.id)).map((item) => item.id));
+    const canceledMissingCount = cancelPhotos.filter((photo) => photo.pendingReason).length;
+    const canceledSuccessCount = cancelIds.size - canceledMissingCount;
+    const patchedBatch = {
+      ...batch,
+      totalCount: Math.max(0, batch.totalCount - cancelIds.size),
+      successCount: Math.max(0, batch.successCount - canceledSuccessCount),
+      failedCount: Math.max(0, batch.failedCount - canceledMissingCount),
+      createdTripIds: batch.createdTripIds.filter((id) => !emptyCreatedTripIds.has(id)),
+      addedPhotoIds: remainingAddedPhotoIds,
+      pendingItemIds: batch.pendingItemIds.filter((id) => pendingIds.has(id)),
+      storedFileNames: safeArray(batch.storedFileNames),
+      storedThumbnailNames: safeArray(batch.storedThumbnailNames),
+      status: remainingAddedPhotoIds.length > 0 ? batch.status : ("rolled_back" as const),
+      summary: `${batch.summary} 已取消 ${cancelIds.size} 张待补照片。`,
     };
-    await writePersistedState(next);
-    deleteThumbnailsForPhotos(removedPhotos);
-    void releaseNativePhotoPermissions(sourceUrisForPhotos(removedPhotos));
+    const base = {
+      ...state,
+      photos: state.photos.filter((photo) => !cancelIds.has(photo.id)),
+      trips: state.trips.filter((trip) => !emptyCreatedTripIds.has(trip.id)),
+      placeNodes: state.placeNodes.filter((place) => !emptyCreatedTripIds.has(place.tripId)).map((place) => ({ ...place, photoIds: place.photoIds.filter((id) => !cancelIds.has(id)) })),
+      routes: state.routes.filter((route) => !emptyCreatedTripIds.has(route.tripId)),
+      pendingItems,
+      importBatches: state.importBatches.map((item) => (item.id === batchId ? patchedBatch : item)),
+    };
+    const next = rebuildTrips(base, affectedTripIds, { makeId }) as MobilePersistedState;
+    await writeMobilePersistedState(next);
+    deleteMobileThumbnailsForPhotos(cancelPhotos);
+    await releaseNativePhotoPermissions(sourceUrisForPhotos(cancelPhotos)).catch(() => undefined);
+    await deleteNativeVectors(cancelPhotos.map((photo) => photo.id)).catch(() => false);
     return projectState(next);
   },
-  async inferPendingLocation() {
-    return projectState(await getPersistedState());
+  async inferPendingLocation(_batchId: string, pendingId: string, locale: "zh" | "en" = "zh") {
+    const state = await getMobilePersistedState();
+    const batch = state.importBatches.find((item) => item.id === _batchId);
+    const pending = state.pendingItems.find((item) => item.id === pendingId);
+    const photo = state.photos.find((item) => pending?.relatedPhotoIds?.includes(item.id));
+    if (!batch || batch.status !== "pending_confirmation" || !pending || !batch.pendingItemIds.includes(pending.id) || !photo || !["missing_gps", "confirm_location_candidate"].includes(pending.type)) return projectState(state);
+    const context = buildInferenceContextPhotos(state, batch, photo);
+    const contextPlaces = allowedInferencePlaces(state, context);
+    const dataUrl = photo.thumbnailUrl || photo.sourceWebPath || photo.storageUrl;
+    let proposal;
+    try {
+      if (!dataUrl) throw new Error(missingInferenceText(locale, "imageMissing"));
+      const inferenceInput = buildMissingInfoInferenceInput({ photo, context, contextPlaces, locale });
+      let aiResult = await inferMobileMissingInfoWithImage({ dataUrl, mime: photo.mime ?? "image/jpeg", inferenceInput, locale });
+      if (aiResult.action === "create_place_from_candidate") {
+        aiResult = { ...aiResult, candidate: await geocodeMobileAiCandidate(aiResult.candidate as LocationCandidate, { makeId, locale }) };
+      } else if (aiResult.action === "keep_pending" && aiResult.candidate?.name) {
+        aiResult = { ...aiResult, candidate: await geocodeMobileAiCandidate(aiResult.candidate as LocationCandidate, { makeId, locale }) };
+      }
+      proposal = normalizeMissingInfoAiProposal({
+        aiResult,
+        photo,
+        context,
+        contextPlaces,
+        locale,
+        completeCandidatePoint: (candidate: LocationCandidate) => candidate,
+      });
+    } catch (error) {
+      proposal = keepPending(error instanceof Error ? error.message : missingInferenceText(locale, "secondInferenceFailed"), 0, locale);
+    }
+    const nextPending: PendingItem = {
+      ...pending,
+      suggestion: proposal.suggestion,
+      reason: proposal.reason,
+      proposal: proposal.actionable ? proposal.proposal : undefined,
+      inference: {
+        status: proposal.actionable ? "suggested" : "keep_pending",
+        confidence: proposal.confidence,
+        reason: proposal.reason,
+        displayTarget: proposal.displayTarget,
+        displayTargetLabel: proposal.displayTargetLabel,
+        displayTargetBadge: proposal.displayTargetBadge,
+        updatedAt: nowIso(),
+      },
+    };
+    const next: MobilePersistedState = {
+      ...state,
+      pendingItems: state.pendingItems.map((item) => (item.id === pending.id ? nextPending : item)),
+    };
+    await writeMobilePersistedState(next);
+    return projectState(next);
   },
-  async inferPendingLocations() {
-    return projectState(await getPersistedState());
+  async inferPendingLocations(batchId: string, pendingIds: string[], locale: "zh" | "en" = "zh", onJobProgress?: (progress: ImportJobProgress) => void) {
+    let snapshot = await projectState(await getMobilePersistedState());
+    const total = pendingIds.length;
+    let done = 0;
+    const jobProgress = mobileJobProgressRecorder(onJobProgress, total, "ai");
+    jobProgress.update({ phase: "ai", done, total });
+    for (const pendingId of pendingIds) {
+      snapshot = await this.inferPendingLocation(batchId, pendingId, locale);
+      done += 1;
+      jobProgress.update({ phase: done < total ? "ai" : "completed", done, total });
+    }
+    jobProgress.complete(snapshot);
+    return snapshot;
   },
-  async resolveImportAiFailure() {
-    return projectState(await getPersistedState());
+  async resolveImportAiFailure(batchId: string, pendingId: string, action: string = "retry_both", locale: "zh" | "en" = "zh") {
+    const state = await getMobilePersistedState();
+    const batch = state.importBatches.find((item) => item.id === batchId);
+    const pending = state.pendingItems.find((item) => item.id === pendingId);
+    const photo = state.photos.find((item) => pending?.relatedPhotoIds?.includes(item.id));
+    if (!batch || batch.status !== "pending_confirmation" || !pending || !batch.pendingItemIds.includes(pending.id) || pending.type !== "ai_processing_failed" || !photo) return projectState(state);
+
+    if (action === "archive_exif") {
+      if (photo.exifStatus?.gps !== "read" || !isUsableLocation(photo.location)) throw new Error("这张照片没有真实 EXIF GPS，不能直接按真实定位归档。");
+      const patched: Photo = {
+        ...clearAiFailureForPhoto(photo),
+        placeNodeId: undefined,
+      };
+      const base = appendMissingInfoPendingIfNeeded({
+        ...state,
+        photos: state.photos.map((item) => (item.id === photo.id ? patched : item)),
+        pendingItems: state.pendingItems.map((item) => (item.id === pending.id ? { ...item, status: "accepted" as const } : item)),
+      }, batch, patched);
+      const next = rebuildTripsForImportedPhoto(base, patched, batch, { allowExistingPlaceMerge: true });
+      await writeMobilePersistedState(next);
+      return projectState(next);
+    }
+
+    let patched = photo;
+    let embedding: MobileEmbeddingResult | undefined;
+    if (action === "retry_vision" || action === "retry_both") {
+      patched = await enrichMobilePhotoWithAi(patched, { dataUrl: patched.thumbnailUrl || patched.sourceWebPath || patched.storageUrl, allowCloud: true, locale });
+    }
+    if (action === "retry_embedding" || action === "retry_both") {
+      const vectorIndex: Record<string, number[]> = await readNativeVectorIndex().catch(() => ({}));
+      embedding = await embedMobileContent({ dataUrl: patched.thumbnailUrl || patched.sourceWebPath || patched.storageUrl, text: [patched.title, patched.aiCaption, ...(patched.tags ?? [])].filter(Boolean).join(" "), fileName: patched.fileName }).catch((error) => ({
+        embeddingMode: "failed" as const,
+        embeddingFallbackReason: error instanceof Error ? error.message : String(error),
+      }) satisfies MobileEmbeddingResult);
+      patched = {
+        ...patched,
+        embeddingProvider: embedding?.embeddingProvider,
+        embeddingModel: embedding?.embeddingModel,
+        embeddingSpaceId: embedding?.embeddingSpaceId,
+        embeddingDimension: embedding?.embeddingDimension,
+        embeddingMode: embedding?.embeddingMode,
+        embeddingFallbackReason: embedding?.embeddingFallbackReason,
+      };
+      if (embedding?.embedding?.length) vectorIndex[patched.id] = embedding.embedding;
+      else delete vectorIndex[patched.id];
+      await writeNativeVectorIndex(vectorIndex).catch(() => false);
+    }
+    const failed = Boolean(patched.aiFallbackReason || patched.embeddingMode === "failed");
+    const pendingReason = failed ? "ai_processing_failed" : pendingReasonFromExif(patched);
+    patched = {
+      ...patched,
+      aiFailure: failed
+        ? {
+            vision: patched.aiFallbackReason,
+            embedding: embedding?.embeddingMode === "failed" ? embedding.embeddingFallbackReason : patched.embeddingFallbackReason,
+            hasRealExifGps: patched.exifStatus?.gps === "read" && isUsableLocation(patched.location),
+            hasRealExifTime: patched.exifStatus?.time === "read",
+            updatedAt: nowIso(),
+          }
+        : undefined,
+      pendingReason,
+      locationResolution: resolveImportedLocation({ location: patched.location, aiEvidence: patched.ai, pendingReason }),
+    };
+    const base = {
+      ...state,
+      photos: state.photos.map((item) => (item.id === patched.id ? patched : item)),
+      pendingItems: state.pendingItems.map((item) =>
+        item.id === pending.id
+          ? failed
+            ? { ...item, reason: failureReasonText(patched) || item.reason, suggestion: `${patched.title ?? patched.fileName} 初次导入 AI 仍处理失败，需要重新选择处理方式。` }
+            : { ...item, status: "accepted" as const }
+          : item,
+      ),
+    };
+    const withPending = failed ? base : appendMissingInfoPendingIfNeeded(base, batch, patched);
+    const next = rebuildTripsForImportedPhoto(withPending, patched, batch, { allowExistingPlaceMerge: true });
+    await writeMobilePersistedState(next);
+    return projectState(next);
   },
-  async resolveImportAiFailures() {
-    return projectState(await getPersistedState());
+  async resolveImportAiFailures(batchId: string, pendingIds: string[], action: string = "retry_both", locale: "zh" | "en" = "zh", onJobProgress?: (progress: ImportJobProgress) => void) {
+    let snapshot = await projectState(await getMobilePersistedState());
+    const total = pendingIds.length;
+    let done = 0;
+    const jobProgress = mobileJobProgressRecorder(onJobProgress, total, "ai");
+    jobProgress.update({ phase: "ai", done, total });
+    for (const pendingId of pendingIds) {
+      snapshot = await this.resolveImportAiFailure(batchId, pendingId, action, locale);
+      done += 1;
+      jobProgress.update({ phase: done < total ? "ai" : "completed", done, total });
+    }
+    jobProgress.complete(snapshot);
+    return snapshot;
   },
-  async mergeImportTrips() {
-    return projectState(await getPersistedState());
+  async mergeImportTrips(batchId: string) {
+    const state = await getMobilePersistedState();
+    const batch = state.importBatches.find((item) => item.id === batchId);
+    if (!batch || batch.createdTripIds.length <= 1) return projectState(state);
+    const [targetTripId, ...removeTripIds] = batch.createdTripIds;
+    const removeSet = new Set(removeTripIds);
+    const batchPhotos = state.photos.filter((photo) => batch.addedPhotoIds.includes(photo.id));
+    const dates = batchPhotos.map((photo) => photo.capturedAt).filter(Boolean).sort();
+    const placeNodes = state.placeNodes.map((place) => (removeSet.has(place.tripId) ? { ...place, tripId: targetTripId } : place));
+    const targetPlaces = placeNodes.filter((place) => place.tripId === targetTripId);
+    const routes = state.routes.filter((route) => !batch.createdTripIds.includes(route.tripId)).concat(buildRoute(targetTripId, targetPlaces) as Route);
+    const next = {
+      ...state,
+      photos: state.photos.map((photo) => (photo.tripId && removeSet.has(photo.tripId) ? { ...photo, tripId: targetTripId } : photo)),
+      placeNodes,
+      routes,
+      trips: state.trips
+        .filter((trip) => !removeSet.has(trip.id))
+        .map((trip) =>
+          trip.id === targetTripId
+            ? {
+                ...trip,
+                dateRange: { start: String(dates[0] ?? trip.dateRange.start).slice(0, 10), end: String(dates[dates.length - 1] ?? trip.dateRange.end).slice(0, 10) },
+                photoCount: batchPhotos.length,
+                placeNodeCount: targetPlaces.length,
+                status: "pending" as const,
+              }
+            : trip,
+        ),
+      importBatches: state.importBatches.map((item) => (item.id === batchId ? { ...item, createdTripIds: [targetTripId], summary: `${item.summary} 已按用户选择合并为一个旅行档案。` } : item)),
+      pendingItems: state.pendingItems.map((item) => (item.type === "split_suggestion" && batch.pendingItemIds.includes(item.id) ? { ...item, status: "accepted" as const } : item)),
+    };
+    await writeMobilePersistedState(next);
+    return projectState(next);
   },
   async createTrip(title: string, start: string, end: string) {
-    const state = await getPersistedState();
+    const state = await getMobilePersistedState();
     const trip: Trip = { id: makeId("trip"), title, dateRange: { start, end }, countries: [], cities: [], coverUrl: "", photoCount: 0, placeNodeCount: 0, status: "confirmed", source: "manual" };
     const next = { ...state, trips: [...state.trips, trip] };
-    await writePersistedState(next);
+    await writeMobilePersistedState(next);
     return projectState(next);
   },
   async updateTrip(tripId: string, body: { title?: string; dateRange?: { start: string; end: string } }) {
-    const state = await getPersistedState();
+    const state = await getMobilePersistedState();
     const next = { ...state, trips: state.trips.map((trip) => (trip.id === tripId ? { ...trip, title: body.title ?? trip.title, dateRange: body.dateRange ?? trip.dateRange } : trip)) };
-    await writePersistedState(next);
+    await writeMobilePersistedState(next);
     return projectState(next);
   },
   async deleteTrip(tripId: string) {
-    const state = await getPersistedState();
+    const state = await getMobilePersistedState();
     const removedPhotos = state.photos.filter((photo) => photo.tripId === tripId);
     const next = {
       ...state,
@@ -1053,94 +995,348 @@ export const mobileLocalApi = {
       placeNodes: state.placeNodes.filter((place) => place.tripId !== tripId),
       routes: state.routes.filter((route) => route.tripId !== tripId),
     };
-    await writePersistedState(next);
-    deleteThumbnailsForPhotos(removedPhotos);
+    await writeMobilePersistedState(next);
+    deleteMobileThumbnailsForPhotos(removedPhotos);
     void releaseNativePhotoPermissions(sourceUrisForPhotos(removedPhotos));
+    void deleteNativeVectors(removedPhotos.map((photo) => photo.id));
     return projectState(next);
   },
-  async createPlace() {
-    return projectState(await getPersistedState());
+  async createPlace(body: { tripId: string; name: string; lat: number; lng: number }) {
+    const state = await getMobilePersistedState();
+    const now = nowIso();
+    const center = { lat: Number(body.lat), lng: Number(body.lng) };
+    const geo = await manualMobileGeoDescription(center, { makeId });
+    const name = body.name?.trim() || "手动地点";
+    const place: PlaceNode = {
+      id: makeId("manual-place"),
+      tripId: body.tripId,
+      name,
+      names: manualPlaceNames(name),
+      displayName: name,
+      userEdits: { name, updatedAt: now },
+      center,
+      ...geo,
+      photoIds: [],
+      timeRange: { start: now, end: now },
+      pending: false,
+    };
+    const placeNodes = [...state.placeNodes, place];
+    const tripPlaces = placeNodes.filter((item) => item.tripId === body.tripId);
+    const routes = state.routes.filter((route) => route.tripId !== body.tripId).concat(buildRoute(body.tripId, tripPlaces) as Route);
+    const next = { ...state, placeNodes, routes };
+    await writeMobilePersistedState(next);
+    return projectState(next);
   },
   async updatePlace(placeId: string, body: { name?: string }) {
-    const state = await getPersistedState();
-    const next = { ...state, placeNodes: state.placeNodes.map((place) => (place.id === placeId ? { ...place, name: body.name ?? place.name, displayName: body.name ?? place.displayName } : place)) };
-    await writePersistedState(next);
+    const state = await getMobilePersistedState();
+    const name = String(body.name ?? "").trim();
+    const now = nowIso();
+    const next = {
+      ...state,
+      placeNodes: state.placeNodes.map((place) =>
+        place.id === placeId && name
+          ? {
+              ...place,
+              name,
+              names: manualPlaceNames(name),
+              displayName: name,
+              userEdits: { ...(place.userEdits ?? {}), name, updatedAt: now },
+            }
+          : place,
+      ),
+    };
+    await writeMobilePersistedState(next);
     return projectState(next);
   },
-  async deletePlace() {
-    return projectState(await getPersistedState());
+  async deletePlace(placeId: string) {
+    const state = await getMobilePersistedState();
+    const place = state.placeNodes.find((item) => item.id === placeId);
+    if (!place) return projectState(state);
+    const placeNodes = state.placeNodes.filter((item) => item.id !== placeId);
+    const tripPlaces = placeNodes.filter((item) => item.tripId === place.tripId);
+    const routes = state.routes.filter((route) => route.tripId !== place.tripId).concat(buildRoute(place.tripId, tripPlaces) as Route);
+    const next = {
+      ...state,
+      photos: state.photos.map((photo) => (photo.placeNodeId === placeId ? { ...photo, placeNodeId: undefined } : photo)),
+      placeNodes,
+      routes,
+    };
+    await writeMobilePersistedState(next);
+    return projectState(next);
   },
-  async reorderPlaces() {
-    return projectState(await getPersistedState());
+  async reorderPlaces(tripId: string, body: { placeIds?: string[] } | string[]) {
+    const state = await getMobilePersistedState();
+    const order = Array.isArray(body) ? body : Array.isArray(body.placeIds) ? body.placeIds : [];
+    const owned = state.placeNodes.filter((place) => place.tripId === tripId);
+    const byId = new Map(owned.map((place) => [place.id, place]));
+    const orderedOwned = order.map((id) => byId.get(id)).filter((place): place is PlaceNode => Boolean(place));
+    for (const place of owned) {
+      if (!orderedOwned.some((item) => item.id === place.id)) orderedOwned.push(place);
+    }
+    const other = state.placeNodes.filter((place) => place.tripId !== tripId);
+    const placeNodes = [...other, ...orderedOwned];
+    const routes = state.routes.filter((route) => route.tripId !== tripId).concat(buildRoute(tripId, orderedOwned) as Route);
+    const next = { ...state, placeNodes, routes };
+    await writeMobilePersistedState(next);
+    return projectState(next);
   },
   async movePhoto(photoId: string, body: { tripId?: string }) {
-    const state = await getPersistedState();
-    const next = { ...state, photos: state.photos.map((photo) => (photo.id === photoId ? { ...photo, tripId: body.tripId } : photo)) };
-    await writePersistedState(next);
+    const state = await getMobilePersistedState();
+    const beforeTripId = state.photos.find((photo) => photo.id === photoId)?.tripId;
+    const patched = {
+      ...state,
+      photos: state.photos.map((photo) => (photo.id === photoId ? { ...photo, tripId: body.tripId, placeNodeId: undefined } : photo)),
+      placeNodes: state.placeNodes.map((place) => ({ ...place, photoIds: place.photoIds.filter((id) => id !== photoId) })),
+    };
+    const next = rebuildTrips(patched, new Set([beforeTripId, body.tripId].filter(Boolean)), { makeId }) as MobilePersistedState;
+    await writeMobilePersistedState(next);
     return projectState(next);
   },
   async deletePhoto(photoId: string) {
-    const state = await getPersistedState();
+    const state = await getMobilePersistedState();
     const removedPhotos = state.photos.filter((photo) => photo.id === photoId);
-    const next = { ...state, photos: state.photos.filter((photo) => photo.id !== photoId), placeNodes: state.placeNodes.map((place) => ({ ...place, photoIds: place.photoIds.filter((id) => id !== photoId) })) };
-    await writePersistedState(next);
-    deleteThumbnailsForPhotos(removedPhotos);
+    const affectedTripIds = new Set(state.photos.filter((photo) => photo.id === photoId && photo.tripId).map((photo) => photo.tripId));
+    for (const place of state.placeNodes) {
+      if (place.photoIds?.includes(photoId)) affectedTripIds.add(place.tripId);
+    }
+    const patched = {
+      ...state,
+      photos: state.photos.filter((photo) => photo.id !== photoId),
+      placeNodes: state.placeNodes.map((place) => ({ ...place, photoIds: place.photoIds.filter((id) => id !== photoId) })),
+      pendingItems: state.pendingItems
+        .map((item) => ({ ...item, relatedPhotoIds: item.relatedPhotoIds.filter((id) => id !== photoId) }))
+        .filter((item) => item.relatedPhotoIds.length > 0),
+      importBatches: state.importBatches.map((batch) => ({
+        ...batch,
+        addedPhotoIds: batch.addedPhotoIds.filter((id) => id !== photoId),
+        duplicatePhotoIds: batch.duplicatePhotoIds?.filter((id) => id !== photoId) ?? [],
+      })),
+    };
+    const next = rebuildTrips(patched, affectedTripIds, { makeId }) as MobilePersistedState;
+    await writeMobilePersistedState(next);
+    deleteMobileThumbnailsForPhotos(removedPhotos);
     void releaseNativePhotoPermissions(sourceUrisForPhotos(removedPhotos));
+    void deleteNativeVectors(removedPhotos.map((photo) => photo.id));
     return projectState(next);
   },
-  async updatePhoto(photoId: string, body: { userEdits?: { title?: string; caption?: string; tags?: string[] } }) {
-    const state = await getPersistedState();
-    const next = { ...state, photos: state.photos.map((photo) => (photo.id === photoId ? { ...photo, userEdits: body.userEdits ? { ...body.userEdits, updatedAt: nowIso() } : photo.userEdits } : photo)) };
-    await writePersistedState(next);
+  async updatePhoto(photoId: string, body: { capturedAt?: string; location?: GeoPoint; tags?: string[]; userEdits?: { title?: string; caption?: string; tags?: string[] } }) {
+    const state = await getMobilePersistedState();
+    const patched = {
+      ...state,
+      photos: state.photos.map((photo) =>
+        photo.id === photoId
+          ? {
+              ...photo,
+              capturedAt: body.capturedAt === "" ? undefined : body.capturedAt ?? photo.capturedAt,
+              location: body.location === undefined ? photo.location : body.location,
+              tags: Array.isArray(body.tags) ? body.tags.map(String).filter(Boolean) : photo.tags,
+              userEdits:
+                body.userEdits === undefined
+                  ? photo.userEdits
+                  : {
+                      ...(photo.userEdits ?? {}),
+                      title: body.userEdits.title?.trim(),
+                      caption: body.userEdits.caption?.trim(),
+                      tags: Array.isArray(body.userEdits.tags) ? body.userEdits.tags.map(String).map((tag) => tag.trim()).filter(Boolean) : undefined,
+                      updatedAt: nowIso(),
+                    },
+              pendingReason: body.location && (body.capturedAt ?? photo.capturedAt) ? undefined : photo.pendingReason,
+            }
+          : photo,
+      ),
+    };
+    const next = rebuildTripsForPhotos(patched, new Set([photoId]), { makeId }) as MobilePersistedState;
+    await writeMobilePersistedState(next);
     return projectState(next);
   },
   async bindPhoto(photoId: string, placeId?: string) {
-    const state = await getPersistedState();
-    const next = { ...state, photos: state.photos.map((photo) => (photo.id === photoId ? { ...photo, placeNodeId: placeId } : photo)) };
-    await writePersistedState(next);
+    const state = await getMobilePersistedState();
+    const place = state.placeNodes.find((item) => item.id === placeId);
+    const beforeTripId = state.photos.find((photo) => photo.id === photoId)?.tripId;
+    if (!place) return projectState(state);
+    const now = nowIso();
+    const patched = {
+      ...state,
+      photos: state.photos.map((photo) =>
+        photo.id === photoId
+          ? applyManualPlaceAssignment(photo, place, {
+              now,
+              source: "manual_existing_place",
+              reason: "用户手动将照片移动到已有地点。",
+            })
+          : photo,
+      ),
+      placeNodes: state.placeNodes.map((item) => ({
+        ...item,
+        photoIds: item.id === place.id ? Array.from(new Set([...item.photoIds, photoId])) : item.photoIds.filter((id) => id !== photoId),
+        pending: item.id === place.id ? false : item.pending,
+      })),
+    };
+    const next = rebuildTrips(patched, new Set([beforeTripId, place.tripId].filter(Boolean)), { makeId }) as MobilePersistedState;
+    await writeMobilePersistedState(next);
     return projectState(next);
   },
   async createPlaceForPhoto(photoId: string, body: { name: string; lat: number; lng: number }) {
-    const state = await getPersistedState();
+    const state = await getMobilePersistedState();
     const photo = state.photos.find((item) => item.id === photoId);
     if (!photo?.tripId) return projectState(state);
+    const now = nowIso();
+    const point = { lat: Number(body.lat), lng: Number(body.lng) };
+    const name = String(body.name ?? "").trim();
+    if (!name || !Number.isFinite(point.lat) || !Number.isFinite(point.lng)) return projectState(state);
+    const geo = await manualMobileGeoDescription(point, { makeId });
     const place: PlaceNode = {
       id: makeId("place"),
       tripId: photo.tripId,
-      name: body.name,
-      displayName: body.name,
-      center: { lat: Number(body.lat), lng: Number(body.lng) },
+      name,
+      names: manualPlaceNames(name),
+      displayName: name,
+      userEdits: { name, updatedAt: now },
+      center: point,
+      ...geo,
+      coordinatePrecision: "estimated",
       photoIds: [photoId],
-      timeRange: { start: photo.capturedAt ?? nowIso(), end: photo.capturedAt ?? nowIso() },
+      timeRange: { start: photo.capturedAt ?? now, end: photo.capturedAt ?? now },
       pending: false,
     };
-    const next = { ...state, placeNodes: [...state.placeNodes, place], photos: state.photos.map((item) => (item.id === photoId ? { ...item, placeNodeId: place.id, location: place.center } : item)) };
-    await writePersistedState(next);
+    const patched = {
+      ...state,
+      placeNodes: state.placeNodes.map((item) => ({ ...item, photoIds: item.photoIds.filter((id) => id !== photoId) })).concat(place),
+      photos: state.photos.map((item) =>
+        item.id === photoId
+          ? applyManualPlaceAssignment(item, place, {
+              now,
+              source: "manual_new_place",
+              reason: "用户手动新建地点并移动照片。",
+              precision: "estimated",
+              candidate: manualLocationCandidate({ name, point, geo }),
+            })
+          : item,
+      ),
+    };
+    const next = rebuildTrips(patched, new Set([photo.tripId]), { makeId }) as MobilePersistedState;
+    await writeMobilePersistedState(next);
     return projectState(next);
   },
   async updatePending(pendingId: string, accepted: boolean) {
-    const state = await getPersistedState();
-    const next = { ...state, pendingItems: state.pendingItems.map((item) => (item.id === pendingId ? { ...item, status: accepted ? "accepted" as const : "ignored" as const } : item)) };
-    await writePersistedState(next);
+    const state = await getMobilePersistedState();
+    const pending = state.pendingItems.find((item) => item.id === pendingId);
+    const applied = applyPendingDecision(state, pendingId, { accepted }) as MobilePersistedState;
+    const next = accepted ? (rebuildTripsForPhotos(applied, new Set(pending?.relatedPhotoIds ?? []), { makeId, allowExistingPlaceMerge: true }) as MobilePersistedState) : applied;
+    await writeMobilePersistedState(next);
     return projectState(next);
   },
-  async resolvePendingManually() {
-    return projectState(await getPersistedState());
+  async resolvePendingManually(pendingId: string, body: { action?: string; placeId?: string; name?: string; lat?: number; lng?: number } = {}) {
+    const state = await getMobilePersistedState();
+    const pending = state.pendingItems.find((item) => item.id === pendingId);
+    if (!pending || !["missing_gps", "missing_time", "confirm_location_candidate", "ai_processing_failed"].includes(pending.type)) return projectState(state);
+    const photoIds = pending.relatedPhotoIds ?? [];
+    if (!photoIds.length) return projectState(state);
+    const photos = state.photos.filter((photo) => photoIds.includes(photo.id));
+    const primaryPhoto = photos[0];
+    const tripId = pending.relatedTripId ?? primaryPhoto?.tripId;
+    if (!primaryPhoto || !tripId) return projectState(state);
+    const now = nowIso();
+
+    if (body.action === "bind_existing_place") {
+      const place = state.placeNodes.find((item) => item.id === body.placeId);
+      if (!place) return projectState(state);
+      const patched = {
+        ...state,
+        photos: state.photos.map((photo) =>
+          photoIds.includes(photo.id)
+            ? applyManualPlaceAssignment(photo, place, {
+                now,
+                source: "manual_existing_place",
+                reason: "用户手动合并到已有地点。",
+              })
+            : photo,
+        ),
+        pendingItems: state.pendingItems.map((item) => (item.id === pending.id || item.relatedPhotoIds?.some((photoId) => photoIds.includes(photoId)) ? { ...item, status: "accepted" as const } : item)),
+      };
+      const next = rebuildTrips(patched, new Set([tripId, place.tripId].filter(Boolean)), { makeId }) as MobilePersistedState;
+      await writeMobilePersistedState(next);
+      return projectState(next);
+    }
+
+    if (body.action === "create_manual_place") {
+      const point = { lat: Number(body.lat), lng: Number(body.lng) };
+      const name = String(body.name ?? "").trim();
+      if (!name || !Number.isFinite(point.lat) || !Number.isFinite(point.lng)) return projectState(state);
+      const geo = await manualMobileGeoDescription(point, { makeId });
+      const dates = photos.map((photo) => photo.capturedAt).filter(Boolean).sort();
+      const place: PlaceNode = {
+        id: makeId("manual-place"),
+        tripId,
+        name,
+        names: manualPlaceNames(name),
+        displayName: name,
+        userEdits: { name, updatedAt: now },
+        center: point,
+        ...geo,
+        coordinatePrecision: "estimated",
+        photoIds,
+        timeRange: { start: dates[0] ?? now, end: dates[dates.length - 1] ?? dates[0] ?? now },
+        pending: false,
+      };
+      const patched = {
+        ...state,
+        placeNodes: [...state.placeNodes, place],
+        photos: state.photos.map((photo) =>
+          photoIds.includes(photo.id)
+            ? applyManualPlaceAssignment(photo, place, {
+                now,
+                source: "manual_new_place",
+                reason: "用户手动新建地点。",
+                precision: "estimated",
+                candidate: manualLocationCandidate({ name, point, geo }),
+              })
+            : photo,
+        ),
+        pendingItems: state.pendingItems.map((item) => (item.id === pending.id || item.relatedPhotoIds?.some((photoId) => photoIds.includes(photoId)) ? { ...item, status: "accepted" as const } : item)),
+      };
+      const next = rebuildTrips(patched, new Set([tripId]), { makeId }) as MobilePersistedState;
+      await writeMobilePersistedState(next);
+      return projectState(next);
+    }
+
+    if (body.action === "archive_unlocated") {
+      const patched = {
+        ...state,
+        photos: state.photos.map((photo) =>
+          photoIds.includes(photo.id)
+            ? {
+                ...photo,
+                placeNodeId: undefined,
+                location: undefined,
+                aiFailure: undefined,
+                pendingReason: undefined,
+                exifStatus: clearManualExifStatus(photo, { gps: "missing" }),
+                locationResolution: {
+                  ...(photo.locationResolution ?? {}),
+                  status: "rejected",
+                  effectiveName: undefined,
+                  effectivePoint: undefined,
+                  confidence: undefined,
+                  source: "manual_archived_unlocated",
+                  candidates: photo.locationResolution?.candidates ?? photo.ai?.locationCandidates ?? [],
+                  requiresUserAction: false,
+                  updatedAt: now,
+                },
+              }
+            : photo,
+        ),
+        pendingItems: state.pendingItems.map((item) => (item.id === pending.id || item.relatedPhotoIds?.some((photoId) => photoIds.includes(photoId)) ? { ...item, status: "accepted" as const } : item)),
+      };
+      const next = rebuildTripsForPhotos(patched, new Set(photoIds), { makeId }) as MobilePersistedState;
+      await writeMobilePersistedState(next);
+      return projectState(next);
+    }
+
+    return projectState(state);
   },
   async search(query: string, filters?: { tripId?: string; placeId?: string; date?: string; tag?: string; fileName?: string }) {
-    const normalizedQuery = query.trim().toLowerCase();
-    const state = projectState(await getPersistedState());
-    const results = (state.searchDocuments ?? [])
-      .filter((doc) => {
-        if (filters?.tripId && doc.tripId !== filters.tripId) return false;
-        if (filters?.placeId && doc.placeNodeId !== filters.placeId) return false;
-        if (filters?.date && doc.capturedAt?.slice(0, 10) !== filters.date) return false;
-        if (filters?.tag && !doc.tags.includes(filters.tag)) return false;
-        if (filters?.fileName && !state.photos.find((photo) => photo.id === doc.photoId)?.fileName.includes(filters.fileName)) return false;
-        if (!normalizedQuery) return true;
-        return [doc.titleText, doc.captionText, doc.tagText, ...doc.locationNames].filter(Boolean).join(" ").toLowerCase().includes(normalizedQuery);
-      })
-      .map<SearchResult>((doc, index) => ({ id: `result-${doc.photoId}`, photoId: doc.photoId, tripId: doc.tripId, reason: "Local mobile search", score: 1 - index * 0.01 }));
-    return { results };
+    const state = await projectState(await getMobilePersistedState());
+    return searchMobilePhotos({ state, query, filters, embedContent: embedMobileContent });
   },
 };

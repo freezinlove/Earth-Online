@@ -69,7 +69,6 @@ export function SearchPanel({ isClosing = false }: { isClosing?: boolean }) {
             onChange={(event) => setQuery(event.target.value)}
             aria-label={t("searchPhotos")}
             placeholder={t("searchPlaceholder")}
-            autoFocus
           />
         </label>
       </div>

@@ -337,7 +337,7 @@ function cameraTargetForIntent(intent: GlobeViewIntent, fallbackPoint?: GeoPoint
     if (intent.source === "timeline-place") {
       distance = 2.85;
     } else if (intent.source === "timeline-trip-entry" || intent.source === "timeline-trip") {
-      distance = 5;
+      distance = 3.82;
     } else {
       distance = MOBILE_CAMERA_DISTANCE;
     }
@@ -507,7 +507,7 @@ function AssetLineLayer({ kind, color, baseOpacity, renderOrder }: { kind: Globe
     const zoom = zoomProgress(camera);
     materialRef.current.opacity =
       kind === "countryLine"
-        ? smoothstep(0.4, 0.7, zoom) * (1 - smoothstep(0.76, 0.94, zoom) * 0.32) * baseOpacity
+        ? smoothstep(0.28, 0.56, zoom) * (1 - smoothstep(0.76, 0.94, zoom) * 0.32) * baseOpacity
         : smoothstep(0.72, 0.92, zoom) * baseOpacity;
   });
 
