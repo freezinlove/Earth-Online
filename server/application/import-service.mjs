@@ -16,6 +16,7 @@ import { rebuildTrips } from "../domain/trip-rebuilder.mjs";
 import { dominantPresetsForPhotos, findAdjacentTrip, groupImportedPhotos } from "../domain/trip-resolver.mjs";
 import { readMultipartFormDataToDir } from "../http/body.mjs";
 import { extFromName, hashBuffer } from "../storage/file-storage.mjs";
+import { createLimiter, importPipelineConfig, mapConcurrent } from "../../shared/application/import-pipeline.mjs";
 
 export function createImportServices({
   analyzeTravelImage,
@@ -35,57 +36,19 @@ export function createImportServices({
   writeVectorIndex,
 }) {
   const jobSubscribers = new Map();
-  const metadataConcurrency = Number(process.env.EARTH_ONLINE_IMPORT_METADATA_CONCURRENCY ?? 16);
-  const storageWriteConcurrency = Number(process.env.EARTH_ONLINE_IMPORT_STORAGE_WRITE_CONCURRENCY ?? 16);
-  const aiConcurrency = Number(process.env.EARTH_ONLINE_IMPORT_AI_CONCURRENCY ?? 200);
-  const embeddingConcurrency = Number(process.env.EARTH_ONLINE_IMPORT_EMBEDDING_CONCURRENCY ?? 600);
-  const missingInferenceConcurrency = Number(process.env.EARTH_ONLINE_MISSING_INFERENCE_CONCURRENCY ?? 200);
+  const pipelineConfig = importPipelineConfig(process.env);
+  const metadataConcurrency = pipelineConfig.concurrency.metadata;
+  const storageWriteConcurrency = pipelineConfig.concurrency.storageWrite;
+  const aiConcurrency = pipelineConfig.concurrency.ai;
+  const embeddingConcurrency = pipelineConfig.concurrency.embedding;
+  const missingInferenceConcurrency = pipelineConfig.concurrency.missingInference;
   const failedImportJobRetentionMs = Number(process.env.EARTH_ONLINE_FAILED_IMPORT_JOB_RETENTION_MS ?? 24 * 60 * 60 * 1000);
-  const aiImageMaxDimension = Number(process.env.EARTH_ONLINE_AI_IMAGE_MAX_DIMENSION ?? 1200);
-  const aiImageJpegQuality = Number(process.env.EARTH_ONLINE_AI_IMAGE_JPEG_QUALITY ?? 82);
+  const aiImageMaxDimension = pipelineConfig.images.aiImageMaxDimension;
+  const aiImageJpegQuality = pipelineConfig.images.aiImageJpegQuality;
+  const thumbnailMaxDimension = pipelineConfig.images.thumbnailMaxDimension;
+  const thumbnailJpegQuality = pipelineConfig.images.thumbnailJpegQuality;
   const missingGpsLowConfidenceThreshold = 0.55;
   const closeNeighborContextMs = 15 * 60 * 1000;
-
-  async function mapConcurrent(items, limit, worker) {
-    const results = new Array(items.length);
-    let nextIndex = 0;
-    const workerCount = Math.max(1, Math.min(Number(limit) || 1, items.length || 1));
-    await Promise.all(
-      Array.from({ length: workerCount }, async () => {
-        for (;;) {
-          const index = nextIndex;
-          nextIndex += 1;
-          if (index >= items.length) return;
-          results[index] = await worker(items[index], index);
-        }
-      }),
-    );
-    return results;
-  }
-
-  function createLimiter(limit) {
-    const max = Math.max(1, Number(limit) || 1);
-    let active = 0;
-    const queue = [];
-    const drain = () => {
-      if (active >= max) return;
-      const next = queue.shift();
-      if (!next) return;
-      active += 1;
-      Promise.resolve()
-        .then(next.task)
-        .then(next.resolve, next.reject)
-        .finally(() => {
-          active -= 1;
-          drain();
-        });
-    };
-    return (task) =>
-      new Promise((resolve, reject) => {
-        queue.push({ task, resolve, reject });
-        drain();
-      });
-  }
 
   async function readImportFile(file) {
     const fullPath = file.tempPath || file.sourcePath;
@@ -100,7 +63,11 @@ export function createImportServices({
     try {
       return {
         ext: ".jpg",
-        buffer: await sharp(fullPath, { failOn: "none" }).rotate().resize({ width: 720, height: 720, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 78 }).toBuffer(),
+        buffer: await sharp(fullPath, { failOn: "none" })
+          .rotate()
+          .resize({ width: thumbnailMaxDimension, height: thumbnailMaxDimension, fit: "inside", withoutEnlargement: true })
+          .jpeg({ quality: thumbnailJpegQuality })
+          .toBuffer(),
       };
     } catch {
       return { ext, buffer: await fs.readFile(fullPath) };

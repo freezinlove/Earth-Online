@@ -2,23 +2,7 @@ import { validateMissingInfoInferenceResult, validatePhotoAnalysisResult } from 
 import { readProviderApiKey } from "../embedding-service.mjs";
 import { openAiCompatibleChatCompletion, openAiCompatibleEmbedding } from "../openai-compatible-client.mjs";
 import { loadPrompt } from "../prompt-registry.mjs";
-
-function parseJsonObject(text) {
-  const trimmed = String(text ?? "").trim();
-  try {
-    const direct = JSON.parse(trimmed);
-    if (direct && typeof direct === "object" && !Array.isArray(direct)) return direct;
-  } catch {
-    // Extract below.
-  }
-  const match = trimmed.match(/\{[\s\S]*\}/);
-  if (!match) return undefined;
-  try {
-    return JSON.parse(match[0]);
-  } catch {
-    return undefined;
-  }
-}
+import { parseJsonObject } from "../../../shared/ai/provider-runtime.mjs";
 
 export function createOpenAiCompatibleProvider({
   id,
@@ -28,7 +12,6 @@ export function createOpenAiCompatibleProvider({
   title,
   supportsEmbedding = false,
   supportsImageUnderstanding = true,
-  embeddingInput,
 }) {
   const headers = {};
   if (referer) headers["HTTP-Referer"] = referer;
@@ -129,10 +112,9 @@ export function createOpenAiCompatibleProvider({
         promptVersion: prompt.version,
       };
     },
-    async embed({ rootDir, secretProvider, dataUrl, text, modelId, dimensions }) {
+    async embed({ rootDir, secretProvider, fileName, dataUrl, text, modelId, dimensions }) {
       const apiKey = readProviderApiKey(id, rootDir, secretProvider);
-      const input = embeddingInput ? embeddingInput({ dataUrl, text }) : dataUrl || text;
-      const embedding = await openAiCompatibleEmbedding({ rootDir, apiKey, baseUrl, model: modelId, input, dimensions, headers });
+      const embedding = await openAiCompatibleEmbedding({ rootDir, apiKey, baseUrl, providerId: id, model: modelId, fileName, dataUrl, text, dimensions, headers });
       return {
         embedding,
         embeddingProvider: this.id,

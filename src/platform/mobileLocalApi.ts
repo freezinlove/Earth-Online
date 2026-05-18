@@ -6,14 +6,15 @@ import type {
   StorageSettings,
 } from "@/services/apiClient";
 import type { NativePhotoAsset } from "@/platform/nativePhotoLibrary";
-import { releaseNativePhotoPermissions } from "@/platform/nativePhotoLibrary";
+import { prepareNativePhotoAsset, releaseNativePhotoPermissions } from "@/platform/nativePhotoLibrary";
 import { deleteNativeVectors, readNativeImportJob, readNativeVectorIndex, writeNativeImportJob, writeNativeVectorIndex } from "@/platform/nativeRepository";
 import { deleteMobileThumbnailsForPhotos, getMobilePersistedState, type MobilePersistedState, writeMobilePersistedState } from "@/platform/mobileStateStore";
-import { createThumbnail, duplicateNativeAssetIds, duplicateNativeAssetPhotoIds, hashBuffer, parseExif, photoFromNativeAsset, sourceUrisForPhotos } from "@/platform/mobileMedia";
+import { createImageDataUrl, hashBuffer, parseExif, photoFromNativeAsset, sourceUrisForPhotos } from "@/platform/mobileMedia";
 import { emptyCredential, readMobileAiSettings, updateMobileAiSettings, type MobileAiSettingsUpdateBody } from "@/platform/mobileAiSettings";
-import { analyzeMobilePhoto, embedMobileContent, inferMobileMissingInfoWithImage, recordMobileEmbeddingStats, vectorStatsDefaults, type MobileEmbeddingResult, type MobilePhotoAnalysis } from "@/platform/mobileAiRuntime";
+import { analyzeMobilePhoto, embedMobileImage, embedMobileTextQuery, inferMobileMissingInfoWithImage, recordMobileEmbeddingStats, vectorStatsDefaults, type MobileEmbeddingResult, type MobilePhotoAnalysis } from "@/platform/mobileAiRuntime";
 import { geocodeMobileAiCandidate, manualMobileGeoDescription, projectMobileState as projectState, reverseMobileCandidates } from "@/platform/mobileGeodata";
 import { searchMobilePhotos } from "@/platform/mobileSearch";
+import { createLimiter, importPipelineConfig, mapConcurrent } from "../../shared/application/import-pipeline.mjs";
 import { createJobProgressRecorder as createSharedJobProgressRecorder } from "../../shared/application/job-core.mjs";
 import { inferPreset, isUsableLocation } from "../../shared/domain/geo.mjs";
 import { mergeLocationCandidates, resolveImportedLocation, toAiEvidence } from "../../shared/domain/location-resolver.mjs";
@@ -87,8 +88,32 @@ async function enrichMobilePhotoWithAi(photo: Photo, { dataUrl, allowCloud, loca
   };
 }
 
-function mobileEmbeddingText(photo: Photo) {
-  return [photo.title, photo.aiCaption, ...(photo.tags ?? [])].filter(Boolean).join(" ");
+function withMobileExifStatus(photo: Photo, hasExifTime: boolean, hasExifLocation: boolean): Photo {
+  const pendingReason = hasExifLocation ? (hasExifTime ? undefined : "missing_time") : "missing_gps";
+  return {
+    ...photo,
+    exifStatus: {
+      time: hasExifTime ? "read" : "fallback",
+      gps: hasExifLocation ? "read" : "missing",
+    },
+    pendingReason,
+  } satisfies Photo;
+}
+
+async function mobileAiImageDataUrlFromSource(source: File | string | undefined, mime = "image/jpeg") {
+  if (!source) return undefined;
+  const pipelineConfig = importPipelineConfig();
+  return createImageDataUrl(source, pipelineConfig.images.aiImageMaxDimension, pipelineConfig.images.aiImageJpegQuality, mime).catch(() => undefined);
+}
+
+async function mobileThumbnailDataUrlFromSource(source: File | string | undefined, mime = "image/jpeg") {
+  if (!source) return "";
+  const pipelineConfig = importPipelineConfig();
+  return createImageDataUrl(source, pipelineConfig.images.thumbnailMaxDimension, pipelineConfig.images.thumbnailJpegQuality, mime).catch(() => "");
+}
+
+async function mobileAiImageDataUrlForPhoto(photo: Photo) {
+  return mobileAiImageDataUrlFromSource(photo.sourceWebPath || photo.storageUrl || photo.thumbnailUrl, photo.mime ?? "image/jpeg");
 }
 
 function manualPlaceNames(name: string) {
@@ -382,19 +407,17 @@ export const mobileLocalApi = {
     const failures: EmbeddingRebuildReport["failures"] = [];
     let done = 0;
     let successCount = 0;
-    const photos = [];
+    const pipelineConfig = importPipelineConfig();
     const jobProgress = mobileJobProgressRecorder(onJobProgress, total, "embedding");
     jobProgress.update({ phase: "embedding", done, total, steps: { embedding: { done, total } } });
-    for (const photo of state.photos) {
-      if (!targetIds.has(photo.id)) {
-        photos.push(photo);
-        continue;
-      }
+    const rebuiltPhotos = (await mapConcurrent(targets, pipelineConfig.concurrency.embedding, async (photo: Photo): Promise<Photo> => {
       try {
-        const embedding = await embedMobileContent({ dataUrl: photo.thumbnailUrl || photo.sourceWebPath || photo.storageUrl, text: [photo.title, photo.aiCaption, ...(photo.tags ?? [])].filter(Boolean).join(" "), fileName: photo.fileName });
+        const dataUrl = await mobileAiImageDataUrlForPhoto(photo);
+        const embedding = await embedMobileImage({ dataUrl, fileName: photo.fileName });
         if (embedding?.embedding?.length) {
           vectorIndex[photo.id] = embedding.embedding;
-          photos.push({
+          successCount += 1;
+          return {
             ...photo,
             embeddingProvider: embedding.embeddingProvider,
             embeddingModel: embedding.embeddingModel,
@@ -402,20 +425,22 @@ export const mobileLocalApi = {
             embeddingDimension: embedding.embeddingDimension,
             embeddingMode: embedding.embeddingMode,
             embeddingFallbackReason: undefined,
-          });
-          successCount += 1;
+          };
         } else {
           delete vectorIndex[photo.id];
-          photos.push({ ...photo, embeddingMode: "disabled" as const, embeddingFallbackReason: "Android embedding profile is disabled or missing API key." });
+          return { ...photo, embeddingMode: "disabled" as const, embeddingFallbackReason: "Android embedding profile is disabled or missing API key." };
         }
       } catch (error) {
         delete vectorIndex[photo.id];
         failures.push({ id: photo.id, fileName: photo.fileName, reason: error instanceof Error ? error.message : String(error) });
-        photos.push({ ...photo, embeddingMode: "failed" as const, embeddingFallbackReason: error instanceof Error ? error.message : String(error) });
+        return { ...photo, embeddingMode: "failed" as const, embeddingFallbackReason: error instanceof Error ? error.message : String(error) };
+      } finally {
+        done += 1;
+        jobProgress.update({ phase: done < total ? "embedding" : "completed", done, total, steps: { embedding: { done, total } }, currentFileName: photo.fileName });
       }
-      done += 1;
-      jobProgress.update({ phase: done < total ? "embedding" : "completed", done, total, steps: { embedding: { done, total } } });
-    }
+    })) as Photo[];
+    const rebuiltById = new Map<string, Photo>(rebuiltPhotos.map((photo: Photo) => [photo.id, photo]));
+    const photos = state.photos.map((photo) => rebuiltById.get(photo.id) ?? photo);
     const next = { ...state, photos };
     await writeMobilePersistedState(next);
     await writeNativeVectorIndex(vectorIndex).catch(() => false);
@@ -494,7 +519,8 @@ export const mobileLocalApi = {
       const exif = parseExif(buffer);
       exifDone += 1;
       emitImportProgress("exif", exifDone, file.name);
-      const thumbnailUrl = await createThumbnail(file).catch(() => "");
+      const aiImageDataUrlPromise = _allowCloudAi ? mobileAiImageDataUrlFromSource(file, file.type) : Promise.resolve(undefined);
+      const thumbnailUrl = await mobileThumbnailDataUrlFromSource(file, file.type);
       thumbnailDone += 1;
       emitImportProgress("thumbnails", thumbnailDone, file.name);
       let photo: Photo = {
@@ -526,11 +552,12 @@ export const mobileLocalApi = {
         pendingReason: exif.location ? undefined : "missing_gps",
       };
       emitImportProgress("ai", aiDone, file.name);
-      photo = await enrichMobilePhotoWithAi(photo, { dataUrl: thumbnailUrl, allowCloud: _allowCloudAi, locale: _locale });
+      const aiImageDataUrl = await aiImageDataUrlPromise;
+      photo = await enrichMobilePhotoWithAi(photo, { dataUrl: aiImageDataUrl, allowCloud: _allowCloudAi, locale: _locale });
       aiDone += 1;
       emitImportProgress("ai", aiDone, file.name);
       emitImportProgress("embedding", embeddingDone, file.name);
-      const embedding: MobileEmbeddingResult | undefined = await embedMobileContent({ dataUrl: thumbnailUrl, text: mobileEmbeddingText(photo), fileName: file.name, allowCloud: _allowCloudAi }).catch((error) => ({
+      const embedding: MobileEmbeddingResult | undefined = await embedMobileImage({ dataUrl: aiImageDataUrl, fileName: file.name, allowCloud: _allowCloudAi }).catch((error) => ({
         embeddingMode: "failed" as const,
         embeddingFallbackReason: error instanceof Error ? error.message : String(error),
       }));
@@ -580,13 +607,27 @@ export const mobileLocalApi = {
     if (!total) return projectState(await getMobilePersistedState());
 
     const state = await getMobilePersistedState();
-    const duplicateIds = duplicateNativeAssetIds(state, assets);
-    const photos: Photo[] = [];
+    const knownHashToPhoto = new Map(state.photos.filter((photo) => photo.originalHash).map((photo) => [photo.originalHash, photo]));
+    const knownHashes = new Set(knownHashToPhoto.keys());
+    const duplicatePhotoIds = new Set<string>();
+    const importedSlots = new Array<Photo | undefined>(total);
     const vectorIndex: Record<string, number[]> = await readNativeVectorIndex().catch(() => ({}));
     const aiStats = vectorStatsDefaults();
+    const pipelineConfig = importPipelineConfig();
     const jobProgress = mobileJobProgressRecorder(onJobProgress, total, "reading");
     onProgress?.(0, total);
-    jobProgress.update({ phase: "reading", done: 0, total, steps: { reading: { done: 0, total } } });
+    jobProgress.update({
+      phase: "reading",
+      done: 0,
+      total,
+      steps: {
+        reading: { done: 0, total },
+        exif: { done: 0, total },
+        thumbnails: { done: 0, total },
+        ai: { done: 0, total },
+        embedding: { done: 0, total },
+      },
+    });
     let readingDone = 0;
     let exifDone = 0;
     let thumbnailDone = 0;
@@ -607,50 +648,130 @@ export const mobileLocalApi = {
         },
       });
     };
-    let done = 0;
-    for (const asset of assets) {
-      const duplicateId = asset.sha256 ?? asset.uri;
-      readingDone += 1;
-      emitImportProgress("reading", readingDone, asset.fileName);
-      exifDone += 1;
-      emitImportProgress("exif", exifDone, asset.fileName);
+
+    const markThumbnailDone = (fileName: string) => {
       thumbnailDone += 1;
-      emitImportProgress("thumbnails", thumbnailDone, asset.fileName);
-      if (!duplicateIds.has(duplicateId)) {
-        let photo: Photo = {
-          ...photoFromNativeAsset(asset, { makeId, nowIso }),
-        };
-        emitImportProgress("ai", aiDone, asset.fileName);
-        photo = await enrichMobilePhotoWithAi(photo, { dataUrl: asset.thumbnailDataUrl ?? asset.webPath, allowCloud: _allowCloudAi, locale: _locale });
-        aiDone += 1;
-        emitImportProgress("ai", aiDone, asset.fileName);
-        emitImportProgress("embedding", embeddingDone, asset.fileName);
-        const embedding: MobileEmbeddingResult | undefined = await embedMobileContent({ dataUrl: asset.thumbnailDataUrl ?? asset.webPath, text: mobileEmbeddingText(photo), fileName: asset.fileName, allowCloud: _allowCloudAi }).catch((error) => ({
-          embeddingMode: "failed" as const,
-          embeddingFallbackReason: error instanceof Error ? error.message : String(error),
-        }));
-        recordMobileEmbeddingStats(embedding, aiStats);
-        photo = {
-          ...photo,
-          embeddingProvider: embedding?.embeddingProvider,
-          embeddingModel: embedding?.embeddingModel,
-          embeddingSpaceId: embedding?.embeddingSpaceId,
-          embeddingDimension: embedding?.embeddingDimension,
-          embeddingMode: embedding?.embeddingMode,
-          embeddingFallbackReason: embedding?.embeddingFallbackReason,
-        };
-        photo = mobileAiFailurePatch(photo, embedding);
-        if (embedding?.embedding?.length) vectorIndex[photo.id] = embedding.embedding;
-        embeddingDone += 1;
-        emitImportProgress("embedding", embeddingDone, asset.fileName);
-        photos.push(photo);
-      } else {
+      emitImportProgress("thumbnails", thumbnailDone, fileName);
+    };
+    const markAiDone = (fileName: string) => {
+      aiDone += 1;
+      emitImportProgress("ai", aiDone, fileName);
+    };
+    const markEmbeddingDone = (fileName: string) => {
+      embeddingDone += 1;
+      emitImportProgress("embedding", embeddingDone, fileName);
+    };
+    const storageLimit = createLimiter(pipelineConfig.concurrency.storageWrite);
+    const visionLimit = createLimiter(pipelineConfig.concurrency.ai);
+    const embeddingLimit = createLimiter(pipelineConfig.concurrency.embedding);
+    const downstreamTasks: Promise<void>[] = [];
+    const allowCloud = _allowCloudAi !== false;
+
+    await mapConcurrent(assets, pipelineConfig.concurrency.metadata, async (asset: NativePhotoAsset, index: number) => {
+      const fileName = asset.fileName || `photo-${index + 1}`;
+      emitImportProgress("reading", readingDone, fileName);
+      let prepared: NativePhotoAsset;
+      try {
+        prepared = await prepareNativePhotoAsset(asset);
+      } catch (error) {
+        readingDone += 1;
+        exifDone += 1;
+        thumbnailDone += 1;
         aiDone += 1;
         embeddingDone += 1;
-        emitImportProgress(done + 1 < total ? "reading" : "grouping", done + 1, asset.fileName);
+        emitImportProgress("reading", readingDone, fileName);
+        emitImportProgress("exif", exifDone, fileName);
+        emitImportProgress("thumbnails", thumbnailDone, fileName);
+        emitImportProgress("ai", aiDone, fileName);
+        emitImportProgress("embedding", embeddingDone, fileName);
+        console.error(error);
+        return;
       }
-      done += 1;
-    }
+      readingDone += 1;
+      emitImportProgress("reading", readingDone, prepared.fileName);
+
+      const buffer = prepared.webPath
+        ? await fetch(prepared.webPath)
+            .then((response) => response.arrayBuffer())
+            .catch(() => undefined)
+        : undefined;
+      const parsedExif = buffer ? parseExif(buffer) : {};
+      const nativeLocation = typeof prepared.latitude === "number" && typeof prepared.longitude === "number" ? { lat: prepared.latitude, lng: prepared.longitude } : undefined;
+      const exifLocation = isUsableLocation(nativeLocation) ? nativeLocation : parsedExif.location;
+      const capturedAt = prepared.capturedAt ?? parsedExif.capturedAt;
+      const originalHash = prepared.sha256 ?? (buffer ? await hashBuffer(buffer).catch(() => undefined) : undefined) ?? prepared.uri;
+      exifDone += 1;
+      emitImportProgress("exif", exifDone, prepared.fileName);
+
+      if (knownHashes.has(originalHash)) {
+        const duplicatePhoto = knownHashToPhoto.get(originalHash);
+        if (duplicatePhoto?.id) duplicatePhotoIds.add(duplicatePhoto.id);
+        markThumbnailDone(prepared.fileName);
+        markAiDone(prepared.fileName);
+        markEmbeddingDone(prepared.fileName);
+        await releaseNativePhotoPermissions([prepared.uri]);
+        return;
+      }
+
+      knownHashes.add(originalHash);
+      const importAsset: NativePhotoAsset = {
+        ...prepared,
+        capturedAt,
+        latitude: exifLocation?.lat,
+        longitude: exifLocation?.lng,
+        sha256: originalHash,
+      };
+      const aiImagePayload = allowCloud && prepared.webPath ? mobileAiImageDataUrlFromSource(prepared.webPath, prepared.mimeType).then((dataUrl) => (dataUrl ? { dataUrl, mime: "image/jpeg" } : undefined)) : Promise.resolve(undefined);
+
+      downstreamTasks.push(
+        Promise.all([
+          storageLimit(async () => {
+            const thumbnailDataUrl = await mobileThumbnailDataUrlFromSource(prepared.webPath, prepared.mimeType);
+            markThumbnailDone(prepared.fileName);
+            return thumbnailDataUrl;
+          }),
+          visionLimit(async () => {
+            emitImportProgress("ai", aiDone, prepared.fileName);
+            const imagePayload = await aiImagePayload.catch(() => undefined);
+            const basePhoto = withMobileExifStatus(photoFromNativeAsset(importAsset, { makeId, nowIso }), Boolean(capturedAt), Boolean(exifLocation));
+            const aiPhoto = await enrichMobilePhotoWithAi(basePhoto, { dataUrl: imagePayload?.dataUrl, allowCloud, locale: _locale });
+            markAiDone(prepared.fileName);
+            return aiPhoto;
+          }),
+          embeddingLimit(async () => {
+            emitImportProgress("embedding", embeddingDone, prepared.fileName);
+            const imagePayload = await aiImagePayload.catch(() => undefined);
+            const embedding: MobileEmbeddingResult | undefined = await embedMobileImage({ dataUrl: imagePayload?.dataUrl, fileName: prepared.fileName, allowCloud }).catch((error) => ({
+              embeddingMode: "failed" as const,
+              embeddingFallbackReason: error instanceof Error ? error.message : String(error),
+            }));
+            markEmbeddingDone(prepared.fileName);
+            return embedding;
+          }),
+        ]).then(([thumbnailDataUrl, aiPhoto, embedding]) => {
+          let photo: Photo = {
+            ...aiPhoto,
+            thumbnailUrl: thumbnailDataUrl || aiPhoto.thumbnailUrl,
+          };
+          recordMobileEmbeddingStats(embedding, aiStats);
+          photo = {
+            ...photo,
+            embeddingProvider: embedding?.embeddingProvider,
+            embeddingModel: embedding?.embeddingModel,
+            embeddingSpaceId: embedding?.embeddingSpaceId,
+            embeddingDimension: embedding?.embeddingDimension,
+            embeddingMode: embedding?.embeddingMode,
+            embeddingFallbackReason: embedding?.embeddingFallbackReason,
+          };
+          photo = mobileAiFailurePatch(photo, embedding);
+          if (embedding?.embedding?.length) vectorIndex[photo.id] = embedding.embedding;
+          importedSlots[index] = photo;
+        }),
+      );
+    });
+
+    await Promise.all(downstreamTasks);
+    const photos = importedSlots.filter((photo): photo is Photo => Boolean(photo));
 
     if (!photos.length) {
       emitImportProgress("completed", total);
@@ -659,12 +780,11 @@ export const mobileLocalApi = {
       return snapshot;
     }
 
-    const duplicatePhotoIds = duplicateNativeAssetPhotoIds(state, assets.filter((asset) => duplicateIds.has(asset.sha256 ?? asset.uri)));
     const next = buildImportStateFromPhotos(state, {
       totalCount: total,
       photos,
-      duplicateCount: duplicatePhotoIds.length,
-      duplicatePhotoIds,
+      duplicateCount: duplicatePhotoIds.size,
+      duplicatePhotoIds: Array.from(duplicatePhotoIds),
       makeId,
       now: new Date(),
       locale: _locale,
@@ -786,7 +906,7 @@ export const mobileLocalApi = {
     if (!batch || batch.status !== "pending_confirmation" || !pending || !batch.pendingItemIds.includes(pending.id) || !photo || !["missing_gps", "confirm_location_candidate"].includes(pending.type)) return projectState(state);
     const context = buildInferenceContextPhotos(state, batch, photo);
     const contextPlaces = allowedInferencePlaces(state, context);
-    const dataUrl = photo.thumbnailUrl || photo.sourceWebPath || photo.storageUrl;
+    const dataUrl = await mobileAiImageDataUrlForPhoto(photo);
     let proposal;
     try {
       if (!dataUrl) throw new Error(missingInferenceText(locale, "imageMissing"));
@@ -869,12 +989,17 @@ export const mobileLocalApi = {
 
     let patched = photo;
     let embedding: MobileEmbeddingResult | undefined;
+    let retryImageDataUrl: string | undefined;
+    const getRetryImageDataUrl = async () => {
+      retryImageDataUrl ??= await mobileAiImageDataUrlForPhoto(patched);
+      return retryImageDataUrl;
+    };
     if (action === "retry_vision" || action === "retry_both") {
-      patched = await enrichMobilePhotoWithAi(patched, { dataUrl: patched.thumbnailUrl || patched.sourceWebPath || patched.storageUrl, allowCloud: true, locale });
+      patched = await enrichMobilePhotoWithAi(patched, { dataUrl: await getRetryImageDataUrl(), allowCloud: true, locale });
     }
     if (action === "retry_embedding" || action === "retry_both") {
       const vectorIndex: Record<string, number[]> = await readNativeVectorIndex().catch(() => ({}));
-      embedding = await embedMobileContent({ dataUrl: patched.thumbnailUrl || patched.sourceWebPath || patched.storageUrl, text: [patched.title, patched.aiCaption, ...(patched.tags ?? [])].filter(Boolean).join(" "), fileName: patched.fileName }).catch((error) => ({
+      embedding = await embedMobileImage({ dataUrl: await getRetryImageDataUrl(), fileName: patched.fileName }).catch((error) => ({
         embeddingMode: "failed" as const,
         embeddingFallbackReason: error instanceof Error ? error.message : String(error),
       }) satisfies MobileEmbeddingResult);
@@ -1337,6 +1462,6 @@ export const mobileLocalApi = {
   },
   async search(query: string, filters?: { tripId?: string; placeId?: string; date?: string; tag?: string; fileName?: string }) {
     const state = await projectState(await getMobilePersistedState());
-    return searchMobilePhotos({ state, query, filters, embedContent: embedMobileContent });
+    return searchMobilePhotos({ state, query, filters, embedTextQuery: embedMobileTextQuery });
   },
 };

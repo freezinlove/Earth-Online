@@ -5,6 +5,7 @@ import {
   embeddingSpaceId,
   firstRecommendedModel,
   normalizeAiConfig as normalizeSharedAiConfig,
+  preferredEmbeddingDimensions,
 } from "../../shared/ai/ai-config.mjs";
 
 function hasSecret(secretProvider, key) {
@@ -40,4 +41,4 @@ export function getAiConfig({ rootDir = process.cwd(), secretProvider } = {}) {
   return normalizeAiConfig(secretProvider?.getAiConfig?.(), { rootDir, secretProvider });
 }
 
-export { embeddingDimensions, embeddingSpaceId };
+export { embeddingDimensions, embeddingSpaceId, preferredEmbeddingDimensions };

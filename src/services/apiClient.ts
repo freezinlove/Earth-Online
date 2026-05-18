@@ -228,39 +228,85 @@ function replayDelay(eventCount: number) {
   return 24;
 }
 
-async function replayProgressEvents(events: ImportJobProgressEvent[], seenSequences: Set<number>, onProgress?: (progress: ImportJobProgress) => void) {
-  const unseen = events.filter((event) => !seenSequences.has(event.sequence)).sort((left, right) => left.sequence - right.sequence);
-  const delay = replayDelay(unseen.length);
-  for (const event of unseen) {
-    seenSequences.add(event.sequence);
+function createImportJobProgressDispatcher(onProgress?: (progress: ImportJobProgress) => void) {
+  const seenSequences = new Set<number>();
+  const queue: ImportJobProgressEvent[] = [];
+  let draining: Promise<void> | undefined;
+  let lastDeliveredAt = 0;
+
+  const deliver = async (event: ImportJobProgressEvent) => {
+    if (onProgress && lastDeliveredAt > 0) {
+      const delay = replayDelay(Math.max(queue.length + 1, 2));
+      const elapsed = Date.now() - lastDeliveredAt;
+      if (elapsed < delay) await wait(delay - elapsed);
+    }
     onProgress?.(event);
-    if (unseen.length > 1) await wait(delay);
-  }
+    lastDeliveredAt = Date.now();
+  };
+
+  const drain = async () => {
+    try {
+      while (queue.length) {
+        const event = queue.shift();
+        if (event) await deliver(event);
+      }
+    } finally {
+      draining = undefined;
+      if (queue.length) draining = drain();
+    }
+  };
+
+  const ensureDrain = () => {
+    if (!draining) draining = drain();
+  };
+
+  const enqueue = (event: ImportJobProgressEvent) => {
+    if (seenSequences.has(event.sequence)) return;
+    seenSequences.add(event.sequence);
+    if (!onProgress) return;
+    queue.push(event);
+    ensureDrain();
+  };
+
+  const enqueueMany = (events: ImportJobProgressEvent[]) => {
+    for (const event of events.filter((item) => !seenSequences.has(item.sequence)).sort((left, right) => left.sequence - right.sequence)) {
+      enqueue(event);
+    }
+  };
+
+  const flush = async () => {
+    while (draining) await draining;
+  };
+
+  return { enqueue, enqueueMany, flush, seenSequences };
 }
 
-function watchImportJobProgress(jobId: string, seenSequences: Set<number>, onProgress?: (progress: ImportJobProgress) => void) {
+function watchImportJobProgress(jobId: string, dispatcher: ReturnType<typeof createImportJobProgressDispatcher>) {
   if (typeof EventSource === "undefined") return () => {};
   const source = new EventSource(withDesktopToken(`/api/import/jobs/${jobId}/events`));
   source.addEventListener("progress", (message) => {
     const event = JSON.parse((message as MessageEvent).data) as ImportJobProgressEvent;
-    if (seenSequences.has(event.sequence)) return;
-    seenSequences.add(event.sequence);
-    onProgress?.(event);
+    if (dispatcher.seenSequences.has(event.sequence)) return;
+    dispatcher.enqueue(event);
   });
   source.addEventListener("done", () => source.close());
   return () => source.close();
 }
 
 async function pollImportJob<T extends AppSnapshot = AppSnapshot>(jobId: string, onProgress?: (progress: ImportJobProgress) => void) {
-  const seenSequences = new Set<number>();
-  const closeProgressStream = watchImportJobProgress(jobId, seenSequences, onProgress);
+  const dispatcher = createImportJobProgressDispatcher(onProgress);
+  const closeProgressStream = watchImportJobProgress(jobId, dispatcher);
   try {
     for (;;) {
       const job = await request<ImportJob>(`/api/import/jobs/${jobId}`);
-      if (job.progressEvents?.length) await replayProgressEvents(job.progressEvents, seenSequences, onProgress);
+      if (job.progressEvents?.length) {
+        dispatcher.enqueueMany(job.progressEvents);
+        await dispatcher.flush();
+      }
       else if (job.progress) onProgress?.(job.progress);
       if (job.status === "completed") {
         if (!job.result) throw new Error("导入任务已完成但没有返回结果");
+        await dispatcher.flush();
         return job.result as T;
       }
       if (job.status === "failed") throw new Error(job.error ?? "导入任务失败");
@@ -268,6 +314,7 @@ async function pollImportJob<T extends AppSnapshot = AppSnapshot>(jobId: string,
     }
   } finally {
     closeProgressStream();
+    await dispatcher.flush();
   }
 }
 

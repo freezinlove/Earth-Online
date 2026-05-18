@@ -1,5 +1,6 @@
-import { embeddingDimensions, embeddingSpaceId } from "./ai-config.mjs";
+import { embeddingSpaceId, preferredEmbeddingDimensions } from "./ai-config.mjs";
 import { validateMissingInfoInferenceResult, validatePhotoAnalysisResult } from "./ai-schemas.mjs";
+import { importPipelineConfig, timeoutSignal } from "../application/import-pipeline.mjs";
 import { geoContextFor, localizedGeoHint, normalizeLocale } from "../domain/geo.mjs";
 import { normalizeTags } from "../domain/text-normalizer.mjs";
 
@@ -50,10 +51,11 @@ export function parseJsonObject(text) {
   return undefined;
 }
 
-export async function postJson({ fetchImpl = globalThis.fetch, url, apiKey, body, headers = {} } = {}) {
+export async function postJson({ fetchImpl = globalThis.fetch, url, apiKey, body, headers = {}, timeoutMs = importPipelineConfig().timeouts.aiRequestMs } = {}) {
   if (typeof fetchImpl !== "function") throw new Error("fetch is unavailable");
   const response = await fetchImpl(url, {
     method: "POST",
+    signal: timeoutSignal(timeoutMs),
     headers: {
       authorization: `Bearer ${apiKey}`,
       "content-type": "application/json",
@@ -64,6 +66,69 @@ export async function postJson({ fetchImpl = globalThis.fetch, url, apiKey, body
   const json = await response.json().catch(() => undefined);
   if (!response.ok || json?.error) throw new Error(json?.error?.message || json?.message || `AI request failed: ${response.status}`);
   return json;
+}
+
+export function multimodalEmbeddingContent({ dataUrl, text, fileName } = {}) {
+  if (dataUrl) return { image: dataUrl };
+  return { text: text || fileName || "" };
+}
+
+export function multimodalEmbeddingRequestDimension(model, dimensions) {
+  const modelId = String(model ?? "");
+  if (/^tongyi-embedding-vision-(plus|flash)$/.test(modelId)) return undefined;
+  if (modelId === "multimodal-embedding-v1") return undefined;
+  return Number.isInteger(dimensions) && dimensions > 0 ? dimensions : undefined;
+}
+
+export function multimodalEmbeddingRequestBody({ model, dataUrl, text, fileName, dimensions } = {}) {
+  const dimension = multimodalEmbeddingRequestDimension(model, dimensions);
+  const body = {
+    model,
+    input: {
+      contents: [multimodalEmbeddingContent({ dataUrl, text, fileName })],
+    },
+  };
+  if (dimension) body.parameters = { dimension };
+  return body;
+}
+
+export function openAiCompatibleEmbeddingInput({ providerId, dataUrl, text, fileName } = {}) {
+  if (providerId === "siliconflow" && dataUrl) return { image: dataUrl };
+  if (providerId === "openrouter" && dataUrl) {
+    return [
+      {
+        content: [{ type: "image_url", image_url: { url: dataUrl } }],
+      },
+    ];
+  }
+  return dataUrl || text || fileName || "";
+}
+
+export function openAiCompatibleEmbeddingDimensions({ providerId, model, dimensions } = {}) {
+  void providerId;
+  void model;
+  return Number.isInteger(dimensions) && dimensions > 0 ? dimensions : undefined;
+}
+
+export function openAiCompatibleEmbeddingRequestBody({ providerId, model, input, dataUrl, text, fileName, dimensions } = {}) {
+  const effectiveDimensions = openAiCompatibleEmbeddingDimensions({ providerId, model, dimensions });
+  const body = {
+    model,
+    input: input ?? openAiCompatibleEmbeddingInput({ providerId, dataUrl, text, fileName }),
+  };
+  if (effectiveDimensions) body.dimensions = effectiveDimensions;
+  return body;
+}
+
+export function voyageEmbeddingRequestBody({ model, dataUrl, text, fileName } = {}) {
+  return {
+    model,
+    inputs: [
+      {
+        content: dataUrl ? [{ type: "image_base64", image_base64: dataUrl }] : [{ type: "text", text: text || fileName || "" }],
+      },
+    ],
+  };
 }
 
 export function photoAnalysisPrompt(locale = "zh") {
@@ -244,57 +309,33 @@ export async function embedContentWithProvider({
   allowCloud = true,
 } = {}) {
   if (!allowCloud || !profile?.enabled || !profile.providerId || !profile.modelId || !apiKey) return undefined;
-  const dimensions = embeddingDimensions(profile);
+  const dimensions = preferredEmbeddingDimensions(profile);
   const spaceId = embeddingSpaceId(profile);
 
-  if (profile.providerId === "aliyun") {
+  if (profile.providerId === "aliyun" || profile.providerId === "qwen") {
     const json = await postJson({
       fetchImpl,
       url: "https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding",
       apiKey,
-      body: {
-        model: profile.modelId,
-        input: {
-          contents: [
-            dataUrl
-              ? { image: dataUrl }
-              : {
-                  text: text || fileName || "",
-                },
-          ],
-        },
-        parameters: Number.isInteger(dimensions) && dimensions > 0 ? { dimension: dimensions } : {},
-      },
+      body: multimodalEmbeddingRequestBody({ model: profile.modelId, dataUrl, text, fileName, dimensions }),
     });
     const embedding = json?.output?.embeddings?.[0]?.embedding;
     if (!Array.isArray(embedding)) throw new Error("embedding returned unexpected content");
-    return embeddingResult({ embedding, profile, spaceId });
+    return embeddingProviderResult({ embedding, embeddingProvider: profile.providerId, embeddingModel: profile.modelId, profile, spaceId });
   }
 
   if (profile.providerId === "siliconflow" || profile.providerId === "openrouter") {
     const baseUrl = profile.providerId === "siliconflow" ? "https://api.siliconflow.cn/v1" : "https://openrouter.ai/api/v1";
-    const input =
-      profile.providerId === "openrouter" && dataUrl
-        ? [
-            {
-              content: [{ type: "image_url", image_url: { url: dataUrl } }],
-            },
-          ]
-        : dataUrl || text || fileName || "";
     const json = await postJson({
       fetchImpl,
       url: `${baseUrl}/embeddings`,
       apiKey,
-      body: {
-        model: profile.modelId,
-        input,
-        ...(Number.isInteger(dimensions) && dimensions > 0 ? { dimensions } : {}),
-      },
+      body: openAiCompatibleEmbeddingRequestBody({ providerId: profile.providerId, model: profile.modelId, dataUrl, text, fileName, dimensions }),
       headers: providerHeaders(profile.providerId),
     });
     const embedding = json?.data?.[0]?.embedding ?? json?.output?.embeddings?.[0]?.embedding;
     if (!Array.isArray(embedding)) throw new Error("embedding returned unexpected content");
-    return embeddingResult({ embedding, profile, spaceId });
+    return embeddingProviderResult({ embedding, embeddingProvider: profile.providerId, embeddingModel: profile.modelId, profile, spaceId });
   }
 
   if (profile.providerId === "voyage") {
@@ -302,29 +343,26 @@ export async function embedContentWithProvider({
       fetchImpl,
       url: "https://api.voyageai.com/v1/multimodalembeddings",
       apiKey,
-      body: {
-        model: profile.modelId,
-        inputs: [
-          {
-            content: dataUrl ? [{ type: "image_base64", image_base64: dataUrl }] : [{ type: "text", text: text || fileName || "" }],
-          },
-        ],
-      },
+      body: voyageEmbeddingRequestBody({ model: profile.modelId, dataUrl, text, fileName }),
     });
     const embedding = json?.data?.[0]?.embedding;
     if (!Array.isArray(embedding)) throw new Error("embedding returned unexpected content");
-    return embeddingResult({ embedding, profile, spaceId });
+    return embeddingProviderResult({ embedding, embeddingProvider: profile.providerId, embeddingModel: profile.modelId, profile, spaceId });
   }
 
   return undefined;
 }
 
-function embeddingResult({ embedding, profile, spaceId }) {
+export function embeddingProviderResult({ embedding, embeddingProvider, embeddingModel, profile, spaceId = embeddingSpaceId(profile) }) {
   const normalized = embedding.map(Number);
+  const expectedDimension = preferredEmbeddingDimensions(profile);
+  if (Number.isInteger(expectedDimension) && expectedDimension > 0 && normalized.length !== expectedDimension) {
+    throw new Error(`embedding dimension mismatch: expected ${expectedDimension}, got ${normalized.length}`);
+  }
   return {
     embedding: normalized,
-    embeddingProvider: profile.providerId,
-    embeddingModel: profile.modelId,
+    embeddingProvider,
+    embeddingModel,
     embeddingSpaceId: spaceId,
     embeddingDimension: normalized.length,
     embeddingMode: "cross_modal",

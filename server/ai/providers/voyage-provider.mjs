@@ -1,26 +1,8 @@
 import { readProviderApiKey } from "../embedding-service.mjs";
+import { voyageEmbeddingRequestBody } from "../../../shared/ai/provider-runtime.mjs";
 
 function requestSignal() {
   return globalThis.AbortSignal.timeout(80000);
-}
-
-function voyageInput({ dataUrl, text }) {
-  if (dataUrl) {
-    return [
-      {
-        content: [
-          { type: "image_base64", image_base64: dataUrl },
-        ],
-      },
-    ];
-  }
-  return [
-    {
-      content: [
-        { type: "text", text: text ?? "" },
-      ],
-    },
-  ];
 }
 
 export const voyageProvider = {
@@ -33,7 +15,7 @@ export const voyageProvider = {
     missingInfoInference: false,
     embedding: true,
   },
-  async embed({ rootDir, secretProvider, dataUrl, text, modelId }) {
+  async embed({ rootDir, secretProvider, fileName, dataUrl, text, modelId }) {
     const apiKey = readProviderApiKey("voyage", rootDir, secretProvider);
     if (!apiKey) throw new Error("missing Voyage API key");
     if (!modelId) throw new Error("missing Voyage model id");
@@ -44,10 +26,7 @@ export const voyageProvider = {
         authorization: `Bearer ${apiKey}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({
-        model: modelId,
-        inputs: voyageInput({ dataUrl, text }),
-      }),
+      body: JSON.stringify(voyageEmbeddingRequestBody({ model: modelId, dataUrl, text, fileName })),
     });
     if (!response.ok) throw new Error(`voyage embedding failed: ${response.status}`);
     const json = await response.json();

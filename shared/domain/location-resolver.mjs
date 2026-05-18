@@ -49,17 +49,18 @@ export function mergeLocationCandidates(...candidateGroups) {
 }
 
 export function resolveImportedLocation({ location, aiEvidence, pendingReason, updatedAt = new Date().toISOString() }) {
+  const locationCandidates = safeArray(aiEvidence?.locationCandidates);
   if (isUsableLocation(location)) {
     return {
       status: "confirmed",
       effectivePoint: location,
       source: "exif",
-      candidates: aiEvidence.locationCandidates,
+      candidates: locationCandidates,
       requiresUserAction: false,
       updatedAt,
     };
   }
-  const candidate = aiEvidence.locationCandidates.find((item) => item.point && item.confidence >= 0.55);
+  const candidate = locationCandidates.find((item) => item.point && item.confidence >= 0.55);
   if (candidate) {
     return {
       status: "suggested",
@@ -68,14 +69,14 @@ export function resolveImportedLocation({ location, aiEvidence, pendingReason, u
       confidence: candidate.confidence,
       source: candidate.source,
       candidateId: candidate.id,
-      candidates: aiEvidence.locationCandidates,
+      candidates: locationCandidates,
       requiresUserAction: true,
       updatedAt,
     };
   }
   return {
     status: pendingReason === "missing_gps" ? "missing" : "suggested",
-    candidates: aiEvidence.locationCandidates,
+    candidates: locationCandidates,
     requiresUserAction: Boolean(pendingReason),
     updatedAt,
   };

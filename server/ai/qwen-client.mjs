@@ -1,5 +1,6 @@
 import { envValue } from "../config/env.mjs";
 import { collectRequestIds, emitAiDebugRecord, responseHeadersToObject } from "./ai-debug.mjs";
+import { multimodalEmbeddingRequestBody } from "../../shared/ai/provider-runtime.mjs";
 
 const qwenCompatibleBaseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1";
 const qwenMultimodalEmbeddingUrl =
@@ -108,19 +109,7 @@ export async function qwenMultimodalEmbedding({
       authorization: `Bearer ${apiKey}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({
-      model,
-      input: {
-        contents: [
-          dataUrl
-            ? { image: dataUrl }
-            : {
-                text: text || fileName,
-              },
-        ],
-      },
-      parameters: Number.isInteger(dimension) && dimension > 0 ? { dimension } : {},
-    }),
+    body: JSON.stringify(multimodalEmbeddingRequestBody({ model, dataUrl, text, fileName, dimensions: dimension })),
   });
   if (!response.ok) throw new Error(`qwen embedding failed: ${response.status}`);
 

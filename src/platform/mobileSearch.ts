@@ -20,15 +20,15 @@ export async function searchMobilePhotos({
   state,
   query,
   filters,
-  embedContent,
+  embedTextQuery,
 }: {
   state: AppSnapshot;
   query: string;
   filters?: { tripId?: string; placeId?: string; date?: string; tag?: string; fileName?: string };
-  embedContent: (input: { text: string; fileName: string }) => Promise<MobileEmbeddingResult | undefined>;
+  embedTextQuery: (input: { text: string; fileName: string }) => Promise<MobileEmbeddingResult | undefined>;
 }) {
   const vectorIndex: Record<string, number[]> = await readNativeVectorIndex().catch(() => ({}));
-  const queryEmbedding = await embedContent({ text: query, fileName: "search-query" }).catch(() => undefined);
+  const queryEmbedding = await embedTextQuery({ text: query, fileName: "search-query" }).catch(() => undefined);
   const queryVector = queryEmbedding?.embedding;
   const querySpaceId = queryEmbedding?.embeddingSpaceId;
   const results = buildSearchResults({

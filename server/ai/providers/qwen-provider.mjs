@@ -2,48 +2,7 @@ import { validateMissingInfoInferenceResult, validatePhotoAnalysisResult } from 
 import { readQwenChatApiKey, readQwenEmbeddingApiKey } from "../embedding-service.mjs";
 import { loadPrompt } from "../prompt-registry.mjs";
 import { qwenChatCompletion, qwenMultimodalEmbedding } from "../qwen-client.mjs";
-
-function parseJsonObject(text) {
-  const trimmed = String(text ?? "").trim();
-  try {
-    const direct = JSON.parse(trimmed);
-    if (direct && typeof direct === "object" && !Array.isArray(direct)) return direct;
-    if (Array.isArray(direct)) return direct.find((item) => item && typeof item === "object" && !Array.isArray(item));
-  } catch {
-    // Fall through to extracting the first balanced object from wrapped text.
-  }
-  const start = trimmed.indexOf("{");
-  if (start < 0) return undefined;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let index = start; index < trimmed.length; index += 1) {
-    const char = trimmed[index];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (char === "\\") escaped = true;
-      else if (char === "\"") inString = false;
-      continue;
-    }
-    if (char === "\"") inString = true;
-    else if (char === "{") depth += 1;
-    else if (char === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        try {
-          return JSON.parse(trimmed.slice(start, index + 1));
-        } catch {
-          return undefined;
-        }
-      }
-    }
-  }
-  try {
-    return JSON.parse(trimmed.slice(start));
-  } catch {
-    return undefined;
-  }
-}
+import { parseJsonObject } from "../../../shared/ai/provider-runtime.mjs";
 
 export const qwenProvider = {
   id: "qwen",

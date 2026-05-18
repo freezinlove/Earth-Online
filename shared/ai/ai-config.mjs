@@ -120,3 +120,7 @@ export function embeddingDimensions(profile) {
   if (!profile?.providerId || !profile?.modelId) return undefined;
   return modelEmbeddingDimensions("crossModalEmbedding", profile.providerId, profile.modelId);
 }
+
+export function preferredEmbeddingDimensions(profile) {
+  return embeddingDimensions(profile);
+}

@@ -7,6 +7,7 @@ export type ExifResult = {
 };
 
 const maxThumbSize = 720;
+const defaultThumbQuality = 0.78;
 
 function readAscii(bytes: Uint8Array, offset: number, length: number) {
   return Array.from(bytes.slice(offset, offset + length))
@@ -97,26 +98,65 @@ export async function hashBuffer(buffer: ArrayBuffer) {
     .join("");
 }
 
-export async function createThumbnail(file: File) {
-  const objectUrl = URL.createObjectURL(file);
+async function renderImageDataUrl(objectUrl: string, maxDimension: number, jpegQuality = defaultThumbQuality) {
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.decoding = "async";
+    img.src = objectUrl;
+  });
+  const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Canvas is unavailable");
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  const quality = jpegQuality > 1 ? jpegQuality / 100 : jpegQuality;
+  return canvas.toDataURL("image/jpeg", Math.max(0.01, Math.min(1, quality)));
+}
+
+async function createImageDataUrlFromBlob(blob: Blob, maxDimension: number, jpegQuality: number, fallbackMime: string) {
+  const objectUrl = URL.createObjectURL(blob);
   try {
-    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = reject;
-      img.src = objectUrl;
-    });
-    const scale = Math.min(1, maxThumbSize / Math.max(image.naturalWidth, image.naturalHeight));
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("Canvas is unavailable");
-    context.drawImage(image, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL("image/jpeg", 0.78);
+    return await renderImageDataUrl(objectUrl, maxDimension, jpegQuality);
+  } catch {
+    return readDataUrlFromBlob(blob, blob.type || fallbackMime);
   } finally {
     URL.revokeObjectURL(objectUrl);
   }
+}
+
+export async function createImageDataUrl(source: File | string, maxDimension: number, jpegQuality = defaultThumbQuality, fallbackMime = "image/jpeg") {
+  const objectUrl = typeof source === "string" ? source : URL.createObjectURL(source);
+  try {
+    return await renderImageDataUrl(objectUrl, maxDimension, jpegQuality);
+  } catch {
+    if (typeof source === "string") {
+      const response = await fetch(source);
+      const blob = await response.blob();
+      return createImageDataUrlFromBlob(blob, maxDimension, jpegQuality, fallbackMime);
+    }
+    return createImageDataUrlFromBlob(source, maxDimension, jpegQuality, fallbackMime);
+  } finally {
+    if (typeof source !== "string") URL.revokeObjectURL(objectUrl);
+  }
+}
+
+export async function createThumbnail(file: File) {
+  return createImageDataUrl(file, maxThumbSize, defaultThumbQuality, file.type || "image/jpeg");
+}
+
+async function readDataUrlFromBlob(blob: Blob, mime: string) {
+  const buffer = await blob.arrayBuffer();
+  let binary = "";
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return `data:${mime};base64,${btoa(binary)}`;
 }
 
 export function photoFromNativeAsset(

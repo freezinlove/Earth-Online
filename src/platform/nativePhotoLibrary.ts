@@ -13,6 +13,7 @@ export type NativePhotoAsset = {
   latitude?: number;
   longitude?: number;
   thumbnailDataUrl?: string;
+  aiImageDataUrl?: string;
   sha256?: string;
   persisted?: boolean;
   persistedError?: string;
@@ -40,6 +41,7 @@ type ReleasePermissionsResult = {
 type EarthPhotoLibraryPlugin = {
   isAvailable(): Promise<AvailabilityResult>;
   pickPhotos(options?: PickPhotosOptions): Promise<PickPhotosResult>;
+  preparePhoto(options: { uri: string }): Promise<NativePhotoAsset>;
   releasePersistedPermissions(options: { uris: string[] }): Promise<ReleasePermissionsResult>;
 };
 
@@ -58,10 +60,13 @@ export async function isNativePhotoLibraryAvailable() {
 export async function pickNativePhotoAssets(limit = 80) {
   if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== "android") return [];
   const result = await EarthPhotoLibrary.pickPhotos({ limit });
-  return result.photos.map((photo) => ({
-    ...photo,
-    webPath: photo.webPath ?? Capacitor.convertFileSrc(photo.uri),
-  }));
+  return result.photos.map(withNativeWebPath);
+}
+
+export async function prepareNativePhotoAsset(asset: NativePhotoAsset) {
+  if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== "android") return asset;
+  const result = await EarthPhotoLibrary.preparePhoto({ uri: asset.uri });
+  return withNativeWebPath(result);
 }
 
 export async function releaseNativePhotoPermissions(uris: string[]) {
@@ -71,4 +76,11 @@ export async function releaseNativePhotoPermissions(uris: string[]) {
   } catch {
     // Permission cleanup is best-effort; stale grants are harmless until the platform limit is reached.
   }
+}
+
+function withNativeWebPath(photo: NativePhotoAsset) {
+  return {
+    ...photo,
+    webPath: photo.webPath ?? Capacitor.convertFileSrc(photo.uri),
+  };
 }

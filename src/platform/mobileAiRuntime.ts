@@ -43,6 +43,47 @@ export function recordMobileEmbeddingStats(result: MobileEmbeddingResult | undef
   if (result.embeddingProvider === "aliyun" || result.embeddingProvider === "qwen") stats.qwenEmbeddingCount += 1;
 }
 
+async function mobileEmbeddingProfile() {
+  const settings = await readMobileAiSettings();
+  const profile = settings.aiConfig.profiles.crossModalEmbedding;
+  const apiKey = await secretForMobileAiProfile("crossModalEmbedding", profile.providerId);
+  return { profile, apiKey };
+}
+
+export async function embedMobileImage({
+  dataUrl,
+  fileName,
+  allowCloud = true,
+}: {
+  dataUrl?: string;
+  fileName?: string;
+  allowCloud?: boolean;
+}): Promise<MobileEmbeddingResult | undefined> {
+  if (!allowCloud) return undefined;
+  const { profile, apiKey } = await mobileEmbeddingProfile();
+  if (!profile?.enabled || !profile.providerId || !profile.modelId || !apiKey) return undefined;
+  if (!dataUrl) {
+    return {
+      embeddingMode: "failed",
+      embeddingFallbackReason: "找不到可用于向量化的图片。",
+    };
+  }
+  return embedContentWithProvider({ profile, apiKey, dataUrl, fileName, allowCloud }) as Promise<MobileEmbeddingResult | undefined>;
+}
+
+export async function embedMobileTextQuery({
+  text,
+  fileName = "search-query",
+  allowCloud = true,
+}: {
+  text: string;
+  fileName?: string;
+  allowCloud?: boolean;
+}): Promise<MobileEmbeddingResult | undefined> {
+  const { profile, apiKey } = await mobileEmbeddingProfile();
+  return embedContentWithProvider({ profile, apiKey, text, fileName, allowCloud }) as Promise<MobileEmbeddingResult | undefined>;
+}
+
 export async function embedMobileContent({
   dataUrl,
   text,
@@ -54,10 +95,9 @@ export async function embedMobileContent({
   fileName?: string;
   allowCloud?: boolean;
 }): Promise<MobileEmbeddingResult | undefined> {
-  const settings = await readMobileAiSettings();
-  const profile = settings.aiConfig.profiles.crossModalEmbedding;
-  const apiKey = await secretForMobileAiProfile("crossModalEmbedding", profile.providerId);
-  return embedContentWithProvider({ profile, apiKey, dataUrl, text, fileName, allowCloud }) as Promise<MobileEmbeddingResult | undefined>;
+  if (dataUrl) return embedMobileImage({ dataUrl, fileName, allowCloud });
+  if (text) return embedMobileTextQuery({ text, fileName, allowCloud });
+  return embedMobileImage({ dataUrl, fileName, allowCloud });
 }
 
 export async function analyzeMobilePhoto({

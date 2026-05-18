@@ -1,5 +1,6 @@
 import { envValue } from "../config/env.mjs";
 import { collectRequestIds, emitAiDebugRecord, responseHeadersToObject } from "./ai-debug.mjs";
+import { openAiCompatibleEmbeddingRequestBody } from "../../shared/ai/provider-runtime.mjs";
 
 const defaultTimeoutMs = 80000;
 
@@ -95,8 +96,12 @@ export async function openAiCompatibleEmbedding({
   baseUrl,
   rootDir = process.cwd(),
   timeoutEnvKey = "AI_REQUEST_TIMEOUT_MS",
+  providerId,
   model,
   input,
+  dataUrl,
+  text,
+  fileName,
   dimensions,
   headers = {},
 }) {
@@ -110,11 +115,7 @@ export async function openAiCompatibleEmbedding({
       "content-type": "application/json",
       ...headers,
     },
-    body: JSON.stringify({
-      model,
-      input,
-      ...(Number.isInteger(dimensions) && dimensions > 0 ? { dimensions } : {}),
-    }),
+    body: JSON.stringify(openAiCompatibleEmbeddingRequestBody({ providerId, model, input, dataUrl, text, fileName, dimensions })),
   });
   const json = await response.json();
   const upstreamMessage = json.error?.message || json.message;

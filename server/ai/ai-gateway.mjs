@@ -1,7 +1,8 @@
 import path from "node:path";
 import { deterministicVector } from "../domain/vectors.mjs";
-import { embeddingDimensions, embeddingSpaceId, getAiConfig } from "./ai-config.mjs";
+import { embeddingSpaceId, getAiConfig, preferredEmbeddingDimensions } from "./ai-config.mjs";
 import { getAiProvider, listAiProviders } from "./provider-registry.mjs";
+import { embeddingProviderResult } from "../../shared/ai/provider-runtime.mjs";
 
 function normalizeLocale(locale) {
   return locale === "en" ? "en" : "zh";
@@ -165,16 +166,10 @@ export async function embedTravelImageAnalysis({
       const embeddingProvider = getAiProvider("crossModalEmbedding", embeddingProviderId ?? profile.providerId);
       if (!embeddingProvider) throw new Error("no embedding provider configured");
       const providerSecretProvider = profileSecretProvider(secretProvider, "crossModalEmbedding", embeddingProvider.id);
-      const result = await embeddingProvider.embed({ rootDir, secretProvider: providerSecretProvider, fileName, text, modelId: profile.modelId, dimensions: embeddingDimensions(profile) });
+      const result = await embeddingProvider.embed({ rootDir, secretProvider: providerSecretProvider, fileName, text, modelId: profile.modelId, dimensions: preferredEmbeddingDimensions(profile) });
       if (!Array.isArray(result.embedding)) throw new Error("embedding unavailable");
-
       return {
-        embedding: result.embedding,
-        embeddingProvider: result.embeddingProvider,
-        embeddingModel: result.embeddingModel ?? profile.modelId,
-        embeddingSpaceId: embeddingSpaceId(profile),
-        embeddingDimension: result.embedding.length,
-        embeddingMode: "cross_modal",
+        ...embeddingProviderResult({ embedding: result.embedding, embeddingProvider: result.embeddingProvider, embeddingModel: result.embeddingModel ?? profile.modelId, profile }),
         embeddingFallbackReason: undefined,
       };
     } catch (error) {
@@ -225,16 +220,10 @@ export async function embedTravelImageImage({
       const embeddingProvider = getAiProvider("crossModalEmbedding", embeddingProviderId ?? profile.providerId);
       if (!embeddingProvider) throw new Error("no embedding provider configured");
       const providerSecretProvider = profileSecretProvider(secretProvider, "crossModalEmbedding", embeddingProvider.id);
-      const result = await embeddingProvider.embed({ rootDir, secretProvider: providerSecretProvider, fileName, dataUrl, modelId: profile.modelId, dimensions: embeddingDimensions(profile) });
+      const result = await embeddingProvider.embed({ rootDir, secretProvider: providerSecretProvider, fileName, dataUrl, modelId: profile.modelId, dimensions: preferredEmbeddingDimensions(profile) });
       if (!Array.isArray(result.embedding)) throw new Error("embedding unavailable");
-
       return {
-        embedding: result.embedding,
-        embeddingProvider: result.embeddingProvider,
-        embeddingModel: result.embeddingModel ?? profile.modelId,
-        embeddingSpaceId: embeddingSpaceId(profile),
-        embeddingDimension: result.embedding.length,
-        embeddingMode: "cross_modal",
+        ...embeddingProviderResult({ embedding: result.embedding, embeddingProvider: result.embeddingProvider, embeddingModel: result.embeddingModel ?? profile.modelId, profile }),
         embeddingFallbackReason: undefined,
       };
     } catch (error) {
@@ -313,14 +302,9 @@ export async function embedSearchQuery(query, { rootDir = process.cwd(), allowCl
       const embeddingProvider = getAiProvider("crossModalEmbedding", embeddingProviderId ?? profile.providerId);
       if (!embeddingProvider) throw new Error("no embedding provider configured");
       const providerSecretProvider = profileSecretProvider(secretProvider, "crossModalEmbedding", embeddingProvider.id);
-      const result = await embeddingProvider.embed({ rootDir, secretProvider: providerSecretProvider, fileName: "search-query", text: query, modelId: profile.modelId, dimensions: embeddingDimensions(profile) });
-      return {
-        embedding: result.embedding,
-        embeddingProvider: result.embeddingProvider,
-        embeddingModel: result.embeddingModel ?? profile.modelId,
-        embeddingSpaceId: embeddingSpaceId(profile),
-        embeddingMode: "cross_modal",
-      };
+      const result = await embeddingProvider.embed({ rootDir, secretProvider: providerSecretProvider, fileName: "search-query", text: query, modelId: profile.modelId, dimensions: preferredEmbeddingDimensions(profile) });
+      if (!Array.isArray(result.embedding)) throw new Error("embedding unavailable");
+      return embeddingProviderResult({ embedding: result.embedding, embeddingProvider: result.embeddingProvider, embeddingModel: result.embeddingModel ?? profile.modelId, profile });
     } catch {
       // fall back below
     }
