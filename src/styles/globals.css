@@ -6,6 +6,11 @@
   color-scheme: light;
   font-family: "Plus Jakarta Sans", system-ui, sans-serif;
   background: #faf9f5;
+  --android-top-comfort-offset: 0px;
+}
+
+:root[data-native-platform="android"] {
+  --android-top-comfort-offset: 24px;
 }
 
 * {
@@ -236,6 +241,16 @@ select {
 
 .home-chrome[data-home-state="covered"] .pointer-events-auto {
   pointer-events: none;
+}
+
+:root[data-native-platform="android"] .home-chrome {
+  padding-top: calc(1.25rem + var(--android-top-comfort-offset));
+}
+
+@media (min-width: 768px) {
+  :root[data-native-platform="android"] .home-chrome {
+    padding-top: calc(1.75rem + var(--android-top-comfort-offset));
+  }
 }
 
 .home-earth-layer > .pointer-events-none {
@@ -6693,5 +6708,55 @@ select {
   .trip-photo-piece img,
   .trip-photo-caption {
     transition: none;
+  }
+}
+
+:root[data-native-platform="android"] .archive-drawer,
+:root[data-native-platform="android"] .photo-import-panel,
+:root[data-native-platform="android"] .settings-panel,
+:root[data-native-platform="android"] .search-panel {
+  padding-top: calc(2rem + var(--android-top-comfort-offset));
+}
+
+:root[data-native-platform="android"] .search-close {
+  top: calc(clamp(22px, 4vw, 42px) + var(--android-top-comfort-offset));
+}
+
+:root[data-native-platform="android"] .search-bar-wrap {
+  top: calc(clamp(26px, 5.5vh, 58px) + var(--android-top-comfort-offset));
+}
+
+:root[data-native-platform="android"] .search-shell {
+  padding-top: calc(clamp(128px, 19vh, 176px) + var(--android-top-comfort-offset));
+}
+
+:root[data-native-platform="android"] .trip-dossier-actions {
+  top: calc(28px + var(--android-top-comfort-offset));
+}
+
+@media (min-width: 768px) {
+  :root[data-native-platform="android"] .archive-drawer,
+  :root[data-native-platform="android"] .photo-import-panel,
+  :root[data-native-platform="android"] .settings-panel,
+  :root[data-native-platform="android"] .search-panel {
+    padding-top: calc(3rem + var(--android-top-comfort-offset));
+  }
+}
+
+@media (max-width: 767px) {
+  :root[data-native-platform="android"] .search-close {
+    top: calc(24px + var(--android-top-comfort-offset));
+  }
+
+  :root[data-native-platform="android"] .search-bar-wrap {
+    top: calc(22px + var(--android-top-comfort-offset));
+  }
+
+  :root[data-native-platform="android"] .search-shell {
+    padding-top: calc(100px + var(--android-top-comfort-offset));
+  }
+
+  :root[data-native-platform="android"] .trip-dossier-actions {
+    top: calc(16px + var(--android-top-comfort-offset));
   }
 }
