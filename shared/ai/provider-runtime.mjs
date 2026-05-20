@@ -418,7 +418,6 @@ export async function analyzePhotoWithProviderCore({
   baseUrl = chatCompletionsBaseUrl(providerId),
   modelId = profile?.modelId,
   prompt,
-  fileName,
   mime = "image/jpeg",
   dataUrl,
   preset,

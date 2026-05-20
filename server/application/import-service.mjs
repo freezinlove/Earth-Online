@@ -2,26 +2,27 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import { safeArray } from "../domain/arrays.mjs";
-import { toDateInput } from "../domain/dates.mjs";
 import { parseExif } from "../domain/exif-parser.mjs";
 import { geoContextFor, inferPreset, isUsableLocation, normalizeLocale } from "../domain/geo.mjs";
 import { forwardLocalGeocode, reverseLocalGeocode } from "../domain/local-geocoder.mjs";
 import { mergeLocationCandidates, resolveImportedLocation, toAiEvidence } from "../domain/location-resolver.mjs";
 import { isWeakPlaceName } from "../domain/place-name-selector.mjs";
-import { buildRoute } from "../domain/route-projector.mjs";
 import { makePhotoTitle } from "../domain/text-normalizer.mjs";
 import { rebuildTrips } from "../domain/trip-rebuilder.mjs";
 import { readMultipartFormDataToDir } from "../http/body.mjs";
 import { extFromName, hashBuffer } from "../storage/file-storage.mjs";
 import { createLimiter, importPipelineConfig, mapConcurrent } from "../../shared/application/import-pipeline.mjs";
 import {
-  addLocationPendingItems,
-  addMissingInfoPendingItems,
+  appendMissingInfoPendingIfNeeded as appendMissingInfoPendingIfNeededCore,
   buildImportStateFromPhotos,
-  hasAiProcessingFailure,
-  hasMissingImportInfo,
+  cancelImportPhotosState,
+  confirmImportState,
+  mergeImportTripsState,
+  rollbackImportState,
 } from "../../shared/import/import-state-core.mjs";
 import {
+  applyMissingInfoProposalResultsState,
+  applyMissingInfoProposalState,
   allowedInferencePlaces,
   buildInferenceContextPhotos,
   buildMissingInfoInferenceInput,
@@ -29,6 +30,19 @@ import {
   missingInferenceText,
   normalizeMissingInfoAiProposal,
 } from "../../shared/import/missing-info-inference-core.mjs";
+import {
+  buildAiFailure,
+  buildEmbeddingRebuildReport,
+  buildRetryAiFailure,
+  clearAiFailureForPhoto as clearAiFailureForPhotoCore,
+  applyEmbeddingFields,
+  embeddingRebuildFailure,
+  embeddingRebuildSucceeded,
+  failureReasonText,
+  mergeRebuiltPhotosState,
+  patchVectorIndexForEmbedding,
+  pendingReasonFromExif,
+} from "../../shared/import/import-photo-core.mjs";
 
 export function createImportServices({
   analyzeTravelImage,
@@ -841,50 +855,22 @@ export function createImportServices({
           embeddingFallbackReason: "找不到原图，无法重建向量。",
         };
       }
-      const success = Array.isArray(embedding.embedding) && embedding.embedding.length > 0 && embedding.embeddingMode === "cross_modal";
-      if (success) {
-        nextVectorIndex[photo.id] = embedding.embedding;
+      if (embeddingRebuildSucceeded(embedding)) {
         succeeded.push(photo.id);
       } else {
-        delete nextVectorIndex[photo.id];
-        failed.push({
-          id: photo.id,
-          fileName: photo.fileName,
-          reason: embedding.embeddingFallbackReason || "向量模型未返回可用 embedding。",
-        });
+        failed.push(embeddingRebuildFailure(photo, embedding));
       }
+      patchVectorIndexForEmbedding(nextVectorIndex, photo.id, embedding);
       done += 1;
       progress.update?.({ phase: "embedding", done, total, currentFileName: photo.fileName });
-      return {
-        ...photo,
-        embeddingProvider: embedding.embeddingProvider,
-        embeddingModel: embedding.embeddingModel,
-        embeddingSpaceId: embedding.embeddingSpaceId,
-        embeddingDimension: embedding.embeddingDimension ?? embedding.embedding?.length,
-        embeddingMode: embedding.embeddingMode,
-        embeddingFallbackReason: embedding.embeddingFallbackReason,
-      };
+      return applyEmbeddingFields(photo, embedding);
     });
-    const rebuiltById = new Map(rebuiltPhotos.map((photo) => [photo.id, photo]));
     await writeVectorIndex(nextVectorIndex);
-    const nextState = {
-      ...state,
-      photos: safeArray(state.photos).map((photo) => rebuiltById.get(photo.id) ?? photo),
-    };
-    await writeState({
-      ...nextState,
-    });
+    await writeState(mergeRebuiltPhotosState(state, rebuiltPhotos));
     progress.update?.({ phase: "completed", done: total, total });
     return {
       ...(await responseState()),
-      embeddingRebuild: {
-        total,
-        successCount: succeeded.length,
-        failedCount: failed.length,
-        failedPhotoIds: failed.map((item) => item.id),
-        failures: failed,
-        mode: requestedPhotoIds.size ? "retry_failed" : "all",
-      },
+      embeddingRebuild: buildEmbeddingRebuildReport({ total, succeeded, failed, mode: requestedPhotoIds.size ? "retry_failed" : "all" }),
     };
   }
 
@@ -1004,20 +990,7 @@ export function createImportServices({
 
   async function confirmImport(id) {
     const state = await readState();
-    const batch = state.importBatches.find((item) => item.id === id);
-    if (!batch || batch.status !== "pending_confirmation") return responseState();
-    const openMissingItems = state.pendingItems.filter(
-      (item) =>
-        batch.pendingItemIds.includes(item.id) &&
-        item.status === "open" &&
-        ["missing_gps", "missing_time", "confirm_location_candidate", "ai_processing_failed"].includes(item.type),
-    );
-    if (openMissingItems.length) throw new Error("仍有待补信息或 AI 初次处理失败照片未处理，不能确认导入。");
-    await writeState({
-      ...state,
-      trips: state.trips.map((trip) => (batch.createdTripIds.includes(trip.id) ? { ...trip, status: "confirmed" } : trip)),
-      importBatches: state.importBatches.map((item) => (item.id === id ? { ...item, status: "confirmed" } : item)),
-    });
+    await writeState(confirmImportState(state, id));
     return responseState();
   }
 
@@ -1034,11 +1007,7 @@ export function createImportServices({
     const latestPending = latestState.pendingItems.find((item) => item.id === pendingId);
     if (!latestBatch || latestBatch.status !== "pending_confirmation" || !latestPending || !latestBatch.pendingItemIds.includes(latestPending.id)) return responseState();
     if (!["missing_gps", "confirm_location_candidate"].includes(latestPending.type)) return responseState();
-    const nextPending = applyMissingInfoProposal(latestPending, proposal);
-    await writeState({
-      ...latestState,
-      pendingItems: latestState.pendingItems.map((item) => (item.id === latestPending.id ? nextPending : item)),
-    });
+    await writeState(applyMissingInfoProposalState(latestState, batchId, latestPending.id, proposal, { now: () => new Date().toISOString() }));
     return responseState();
   }
 
@@ -1073,133 +1042,44 @@ export function createImportServices({
         progress.update?.({ phase: "ai", done, total, currentFileName: photo?.fileName });
       }
     });
-    const proposalByPendingId = new Map(results.map((item) => [item.pendingId, item.proposal]));
     const latestState = await readState();
     const latestBatch = latestState.importBatches.find((item) => item.id === batchId);
     if (!latestBatch || latestBatch.status !== "pending_confirmation") return responseState();
-    await writeState({
-      ...latestState,
-      pendingItems: latestState.pendingItems.map((item) => {
-        const proposal = proposalByPendingId.get(item.id);
-        if (!proposal || !latestBatch.pendingItemIds.includes(item.id) || item.status !== "open") return item;
-        if (!["missing_gps", "confirm_location_candidate"].includes(item.type)) return item;
-        return applyMissingInfoProposal(item, proposal);
-      }),
-    });
+    await writeState(applyMissingInfoProposalResultsState(latestState, batchId, results, { now: () => new Date().toISOString() }));
     progress.update?.({ phase: "completed", done: total, total });
     return responseState();
   }
 
-  function applyMissingInfoProposal(pending, proposal) {
-    return {
-      ...pending,
-      suggestion: proposal.suggestion,
-      reason: proposal.reason,
-      proposal: proposal.actionable ? proposal.proposal : undefined,
-      inference: {
-        status: proposal.actionable ? "suggested" : "keep_pending",
-        confidence: proposal.confidence,
-        reason: proposal.reason,
-        displayTarget: proposal.displayTarget,
-        displayTargetLabel: proposal.displayTargetLabel,
-        displayTargetBadge: proposal.displayTargetBadge,
-        updatedAt: new Date().toISOString(),
-      },
-    };
-  }
-
   async function rollbackImport(id) {
     const state = await readState();
-    const batch = state.importBatches.find((item) => item.id === id);
-    const latestPending = state.importBatches.filter((item) => item.status === "pending_confirmation").at(-1);
-    if (!batch || batch.id !== latestPending?.id) throw new Error("MVP 只支持回撤最近一次待确认导入。");
-    const photoIds = new Set(batch.addedPhotoIds);
-    const tripIds = new Set(batch.createdTripIds);
-    const affectedExistingTripIds = new Set(safeArray(batch.updatedTripIds));
-    const pendingIds = new Set(batch.pendingItemIds);
-    for (const name of safeArray(batch.storedFileNames)) {
+    const result = rollbackImportState(state, id, { makeId });
+    for (const name of result.storedFileNames) {
       await fs.rm(path.join(paths.photoDir, path.basename(name)), { force: true });
     }
-    for (const name of safeArray(batch.storedThumbnailNames)) {
+    for (const name of result.storedThumbnailNames) {
       await fs.rm(path.join(paths.thumbDir, path.basename(name)), { force: true });
     }
     const vectorIndex = await readVectorIndex();
-    for (const id of photoIds) delete vectorIndex[id];
+    for (const photoId of result.removedPhotoIds) delete vectorIndex[photoId];
     await writeVectorIndex(vectorIndex);
-    const base = {
-      ...state,
-      photos: state.photos.filter((photo) => !photoIds.has(photo.id)),
-      trips: state.trips.filter((trip) => !tripIds.has(trip.id)),
-      placeNodes: state.placeNodes.filter((place) => !tripIds.has(place.tripId)),
-      routes: state.routes.filter((route) => !tripIds.has(route.tripId)),
-      pendingItems: state.pendingItems.filter((item) => !pendingIds.has(item.id)),
-      importBatches: state.importBatches.map((item) => (item.id === id ? { ...item, status: "rolled_back" } : item)),
-    };
-    await writeState(rebuildTrips(base, affectedExistingTripIds, { makeId }));
+    await writeState(result.state);
     return responseState();
   }
 
   async function cancelImportPhotos(batchId, body = {}) {
     const state = await readState();
-    const batch = state.importBatches.find((item) => item.id === batchId);
-    const latestPending = state.importBatches.filter((item) => item.status === "pending_confirmation").at(-1);
-    if (!batch || batch.id !== latestPending?.id) throw new Error("只能从最近一次待确认导入中取消照片。");
-    const requested = new Set(safeArray(body.photoIds));
-    const batchPhotoIds = new Set(batch.addedPhotoIds);
-    const cancelIds = new Set([...requested].filter((id) => batchPhotoIds.has(id)));
-    if (cancelIds.size === 0) return responseState();
+    const result = cancelImportPhotosState(state, batchId, body, { makeId });
+    if (!result.canceledPhotos.length) return responseState();
 
-    const cancelPhotos = state.photos.filter((photo) => cancelIds.has(photo.id));
-    for (const photo of cancelPhotos) {
+    for (const photo of result.canceledPhotos) {
       if (photo.storageUrl) await fs.rm(path.join(paths.photoDir, path.basename(photo.storageUrl)), { force: true });
       if (photo.thumbnailUrl) await fs.rm(path.join(paths.thumbDir, path.basename(photo.thumbnailUrl)), { force: true });
     }
 
-    const affectedTripIds = new Set(cancelPhotos.map((photo) => photo.tripId).filter(Boolean));
-    const remainingAddedPhotoIds = batch.addedPhotoIds.filter((id) => !cancelIds.has(id));
-    const emptyCreatedTripIds = new Set(
-      batch.createdTripIds.filter((tripId) => !state.photos.some((photo) => photo.tripId === tripId && !cancelIds.has(photo.id))),
-    );
-    for (const tripId of emptyCreatedTripIds) affectedTripIds.delete(tripId);
-
-    const pendingItems = state.pendingItems
-      .map((item) => {
-        if (!batch.pendingItemIds.includes(item.id)) return item;
-        const relatedPhotoIds = safeArray(item.relatedPhotoIds).filter((id) => !cancelIds.has(id));
-        return { ...item, relatedPhotoIds };
-      })
-      .filter((item) => !batch.pendingItemIds.includes(item.id) || item.relatedPhotoIds.length > 0);
-    const pendingIds = new Set(pendingItems.filter((item) => batch.pendingItemIds.includes(item.id)).map((item) => item.id));
-
     const vectorIndex = await readVectorIndex();
-    for (const id of cancelIds) delete vectorIndex[id];
+    for (const id of result.canceledPhotoIds) delete vectorIndex[id];
     await writeVectorIndex(vectorIndex);
-
-    const canceledMissingCount = cancelPhotos.filter((photo) => photo.pendingReason).length;
-    const canceledSuccessCount = cancelIds.size - canceledMissingCount;
-    const patchedBatch = {
-      ...batch,
-      totalCount: Math.max(0, batch.totalCount - cancelIds.size),
-      successCount: Math.max(0, batch.successCount - canceledSuccessCount),
-      failedCount: Math.max(0, batch.failedCount - canceledMissingCount),
-      createdTripIds: batch.createdTripIds.filter((id) => !emptyCreatedTripIds.has(id)),
-      addedPhotoIds: remainingAddedPhotoIds,
-      pendingItemIds: batch.pendingItemIds.filter((id) => pendingIds.has(id)),
-      storedFileNames: safeArray(batch.storedFileNames).filter((name) => !cancelPhotos.some((photo) => path.basename(photo.storageUrl ?? "") === path.basename(name))),
-      storedThumbnailNames: safeArray(batch.storedThumbnailNames).filter((name) => !cancelPhotos.some((photo) => path.basename(photo.thumbnailUrl ?? "") === path.basename(name))),
-      status: remainingAddedPhotoIds.length > 0 ? batch.status : "rolled_back",
-      summary: `${batch.summary} 已取消 ${cancelIds.size} 张待补照片。`,
-    };
-    const base = {
-      ...state,
-      photos: state.photos.filter((photo) => !cancelIds.has(photo.id)),
-      trips: state.trips.filter((trip) => !emptyCreatedTripIds.has(trip.id)),
-      placeNodes: state.placeNodes.filter((place) => !emptyCreatedTripIds.has(place.tripId)).map((place) => ({ ...place, photoIds: place.photoIds.filter((id) => !cancelIds.has(id)) })),
-      routes: state.routes.filter((route) => !emptyCreatedTripIds.has(route.tripId)),
-      pendingItems,
-      importBatches: state.importBatches.map((item) => (item.id === batchId ? patchedBatch : item)),
-    };
-    await writeState(rebuildTrips(base, affectedTripIds, { makeId }));
+    await writeState(result.state);
     return responseState();
   }
 
@@ -1353,14 +1233,8 @@ export function createImportServices({
       });
     }
 
-    const nextFailure = {
-      vision: retryVision ? ai.fallbackReason : photo.aiFailure?.vision,
-      embedding: retryEmbedding ? embeddingFailureReason(embedding) : photo.aiFailure?.embedding,
-      hasRealExifGps: photo.exifStatus?.gps === "read" && isUsableLocation(photo.location),
-      hasRealExifTime: photo.exifStatus?.time === "read",
-      updatedAt: new Date().toISOString(),
-    };
-    const failed = Boolean(nextFailure.vision || nextFailure.embedding);
+    const nextFailure = buildRetryAiFailure(photo, { retryVision, retryEmbedding, ai, embedding });
+    const failed = Boolean(nextFailure);
     const aiEvidenceBase = toAiEvidence(ai, { makeId });
     const aiEvidence = withBackendLocationCandidates({ location: photo.location, aiEvidence: aiEvidenceBase, locale });
     const patchedPhoto = {
@@ -1405,48 +1279,13 @@ export function createImportServices({
     return responseState();
   }
 
-  function pendingReasonFromExif(photo) {
-    if (photo.exifStatus?.gps === "missing" || !isUsableLocation(photo.location)) return "missing_gps";
-    if (photo.exifStatus?.time !== "read") return "missing_time";
-    return undefined;
-  }
-
   function clearAiFailureForPhoto(photo) {
     const aiEvidence = withBackendLocationCandidates({ location: photo.location, aiEvidence: photo.ai });
-    return {
-      ...photo,
-      aiFailure: undefined,
-      pendingReason: pendingReasonFromExif(photo),
-      ai: aiEvidence,
-      locationResolution: resolveImportedLocation({ location: photo.location, aiEvidence, pendingReason: pendingReasonFromExif(photo) }),
-    };
+    return clearAiFailureForPhotoCore(photo, { aiEvidence });
   }
 
   function appendMissingInfoPendingIfNeeded(state, batch, photo) {
-    if (hasAiProcessingFailure(photo) || !hasMissingImportInfo(photo)) return state;
-    const alreadyOpen = state.pendingItems.some(
-      (item) => item.status === "open" && batch.pendingItemIds.includes(item.id) && ["missing_gps", "missing_time", "confirm_location_candidate"].includes(item.type) && item.relatedPhotoIds?.includes(photo.id),
-    );
-    if (alreadyOpen) return state;
-    const nextItems = [];
-    addLocationPendingItems([photo], nextItems, { makeId, completeCandidatePoint });
-    addMissingInfoPendingItems([photo], nextItems, { makeId });
-    if (!nextItems.length) return state;
-    return {
-      ...state,
-      pendingItems: [...state.pendingItems, ...nextItems],
-      importBatches: state.importBatches.map((item) => (item.id === batch.id ? { ...item, pendingItemIds: [...item.pendingItemIds, ...nextItems.map((pendingItem) => pendingItem.id)] } : item)),
-    };
-  }
-
-  function failureReasonText(photo) {
-    return [
-      photo.aiFailure?.hasRealExifGps ? "真实GPS" : "无GPS",
-      photo.aiFailure?.vision ? `AI Vision：${photo.aiFailure.vision}` : undefined,
-      photo.aiFailure?.embedding ? `Embedding：${photo.aiFailure.embedding}` : undefined,
-    ]
-      .filter(Boolean)
-      .join("。");
+    return appendMissingInfoPendingIfNeededCore(state, batch, photo, { makeId, completeCandidatePoint });
   }
 
   function rebuildTripsForImportedPhoto(state, photo, batch, options = {}) {
@@ -1456,36 +1295,7 @@ export function createImportServices({
 
   async function mergeImportTrips(batchId) {
     const state = await readState();
-    const batch = state.importBatches.find((item) => item.id === batchId);
-    if (!batch || batch.createdTripIds.length <= 1) return responseState();
-    const [targetTripId, ...removeTripIds] = batch.createdTripIds;
-    const removeSet = new Set(removeTripIds);
-    const batchPhotos = state.photos.filter((photo) => batch.addedPhotoIds.includes(photo.id));
-    const dates = batchPhotos.map((photo) => photo.capturedAt).filter(Boolean).sort();
-    const placeNodes = state.placeNodes.map((place) => (removeSet.has(place.tripId) ? { ...place, tripId: targetTripId } : place));
-    const targetPlaces = placeNodes.filter((place) => place.tripId === targetTripId);
-    const routes = state.routes.filter((route) => !batch.createdTripIds.includes(route.tripId)).concat(buildRoute(targetTripId, targetPlaces));
-    await writeState({
-      ...state,
-      photos: state.photos.map((photo) => (batch.addedPhotoIds.includes(photo.id) ? { ...photo, tripId: targetTripId } : photo)),
-      trips: state.trips
-        .filter((trip) => !removeSet.has(trip.id))
-        .map((trip) =>
-          trip.id === targetTripId
-            ? {
-                ...trip,
-                title: trip.title.replace(/\s+\d+$/, ""),
-                dateRange: { start: toDateInput(dates[0]), end: toDateInput(dates.at(-1)) },
-                cities: Array.from(new Set(state.trips.filter((item) => batch.createdTripIds.includes(item.id)).flatMap((item) => item.cities))),
-                countries: Array.from(new Set(state.trips.filter((item) => batch.createdTripIds.includes(item.id)).flatMap((item) => item.countries))),
-              }
-            : trip,
-        ),
-      placeNodes,
-      routes,
-      importBatches: state.importBatches.map((item) => (item.id === batchId ? { ...item, createdTripIds: [targetTripId], summary: `${item.summary} 已按用户选择合并为一个旅行档案。` } : item)),
-      pendingItems: state.pendingItems.map((item) => (item.type === "split_suggestion" && batch.pendingItemIds.includes(item.id) ? { ...item, status: "accepted" } : item)),
-    });
+    await writeState(mergeImportTripsState(state, batchId));
     return responseState();
   }
 
@@ -1550,25 +1360,6 @@ export function createImportServices({
     if (Array.isArray(ai.embedding) && ai.embedding.length > 0) aiStats.embeddingCount += 1;
     if (ai.embeddingProvider === "qwen" || ai.embeddingProvider === "aliyun") aiStats.qwenEmbeddingCount += 1;
     else if (ai.embeddingMode !== "cross_modal") aiStats.deterministicEmbeddingCount += 1;
-  }
-
-  function embeddingFailureReason(embedding) {
-    if (!embedding) return undefined;
-    if (embedding.embeddingMode !== "failed") return undefined;
-    return embedding.embeddingFallbackReason || "Embedding 未返回可用向量。";
-  }
-
-  function buildAiFailure(ai, embedding, job) {
-    const vision = ai?.fallbackReason;
-    const embeddingFailure = embeddingFailureReason(embedding);
-    if (!vision && !embeddingFailure) return undefined;
-    return {
-      vision,
-      embedding: embeddingFailure,
-      hasRealExifGps: Boolean(job.hasExifLocation),
-      hasRealExifTime: Boolean(job.hasExifTime),
-      updatedAt: new Date().toISOString(),
-    };
   }
 
   async function buildMissingInfoInferenceProposal(state, batch, pending, { locale = "zh" } = {}) {

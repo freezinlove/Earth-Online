@@ -1,10 +1,18 @@
+import { safeArray } from "../domain/arrays.mjs";
 import { multiCityCountryLabel } from "../domain/country-normalizer.mjs";
 import { toDateInput } from "../domain/dates.mjs";
 import { inferPreset, localizedGeoHint, normalizeLocale } from "../domain/geo.mjs";
 import { hasAiProcessingFailure, hasMissingImportInfo } from "../domain/photo-status.mjs";
 import { buildPlacesForGroup } from "../domain/place-projector.mjs";
-import { buildPhotoRoute } from "../domain/route-projector.mjs";
+import { buildPhotoRoute, buildRoute } from "../domain/route-projector.mjs";
+import { rebuildTrips } from "../domain/trip-rebuilder.mjs";
 import { dominantPresetsForPhotos, findAdjacentTrip, groupImportedPhotos } from "../domain/trip-resolver.mjs";
+
+const blockingImportPendingTypes = ["missing_gps", "missing_time", "confirm_location_candidate", "ai_processing_failed"];
+
+function latestPendingImportBatch(state) {
+  return safeArray(state.importBatches).filter((item) => item.status === "pending_confirmation").at(-1);
+}
 
 function importTripTitle({ month, city, groupIndex = 0, groupCount = 1, locale = "zh" }) {
   const suffix = groupCount > 1 ? ` ${groupIndex + 1}` : "";
@@ -80,6 +88,156 @@ export function addAiFailurePendingItems(imported, pendingItems, { makeId } = {}
       },
     });
   }
+}
+
+export function appendMissingInfoPendingIfNeeded(state, batch, photo, { makeId, completeCandidatePoint } = {}) {
+  if (hasAiProcessingFailure(photo) || !hasMissingImportInfo(photo)) return state;
+  const alreadyOpen = state.pendingItems.some(
+    (item) => item.status === "open" && batch.pendingItemIds.includes(item.id) && ["missing_gps", "missing_time", "confirm_location_candidate"].includes(item.type) && item.relatedPhotoIds?.includes(photo.id),
+  );
+  if (alreadyOpen) return state;
+  const nextItems = [];
+  addLocationPendingItems([photo], nextItems, { makeId, completeCandidatePoint });
+  addMissingInfoPendingItems([photo], nextItems, { makeId });
+  if (!nextItems.length) return state;
+  return {
+    ...state,
+    pendingItems: [...state.pendingItems, ...nextItems],
+    importBatches: state.importBatches.map((item) => (item.id === batch.id ? { ...item, pendingItemIds: [...item.pendingItemIds, ...nextItems.map((pendingItem) => pendingItem.id)] } : item)),
+  };
+}
+
+export function confirmImportState(state, id) {
+  const batch = state.importBatches.find((item) => item.id === id);
+  if (!batch || batch.status !== "pending_confirmation") return state;
+  const openMissingItems = state.pendingItems.filter(
+    (item) => batch.pendingItemIds.includes(item.id) && item.status === "open" && blockingImportPendingTypes.includes(item.type),
+  );
+  if (openMissingItems.length) throw new Error("仍有待补信息或 AI 初次处理失败照片未处理，不能确认导入。");
+  return {
+    ...state,
+    trips: state.trips.map((trip) => (batch.createdTripIds.includes(trip.id) ? { ...trip, status: "confirmed" } : trip)),
+    importBatches: state.importBatches.map((item) => (item.id === id ? { ...item, status: "confirmed" } : item)),
+  };
+}
+
+export function rollbackImportState(state, id, { makeId } = {}) {
+  const batch = state.importBatches.find((item) => item.id === id);
+  const latestPending = latestPendingImportBatch(state);
+  if (!batch || batch.id !== latestPending?.id) throw new Error("MVP 只支持回撤最近一次待确认导入。");
+  const photoIds = new Set(safeArray(batch.addedPhotoIds));
+  const tripIds = new Set(safeArray(batch.createdTripIds));
+  const affectedExistingTripIds = new Set(safeArray(batch.updatedTripIds));
+  const pendingIds = new Set(safeArray(batch.pendingItemIds));
+  const removedPhotos = state.photos.filter((photo) => photoIds.has(photo.id));
+  const base = {
+    ...state,
+    photos: state.photos.filter((photo) => !photoIds.has(photo.id)),
+    trips: state.trips.filter((trip) => !tripIds.has(trip.id)),
+    placeNodes: state.placeNodes.filter((place) => !tripIds.has(place.tripId)),
+    routes: state.routes.filter((route) => !tripIds.has(route.tripId)),
+    pendingItems: state.pendingItems.filter((item) => !pendingIds.has(item.id)),
+    importBatches: state.importBatches.map((item) => (item.id === id ? { ...item, status: "rolled_back" } : item)),
+  };
+  return {
+    state: rebuildTrips(base, affectedExistingTripIds, { makeId }),
+    batch,
+    removedPhotos,
+    removedPhotoIds: Array.from(photoIds),
+    storedFileNames: safeArray(batch.storedFileNames),
+    storedThumbnailNames: safeArray(batch.storedThumbnailNames),
+  };
+}
+
+export function cancelImportPhotosState(state, batchId, body = {}, { makeId } = {}) {
+  const batch = state.importBatches.find((item) => item.id === batchId);
+  const latestPending = latestPendingImportBatch(state);
+  if (!batch || batch.id !== latestPending?.id) throw new Error("只能从最近一次待确认导入中取消照片。");
+  const requested = new Set(safeArray(Array.isArray(body) ? body : body.photoIds));
+  const batchPhotoIds = new Set(safeArray(batch.addedPhotoIds));
+  const cancelIds = new Set([...requested].filter((id) => batchPhotoIds.has(id)));
+  if (cancelIds.size === 0) return { state, batch, canceledPhotos: [], canceledPhotoIds: [] };
+
+  const cancelPhotos = state.photos.filter((photo) => cancelIds.has(photo.id));
+  const affectedTripIds = new Set(cancelPhotos.map((photo) => photo.tripId).filter(Boolean));
+  const remainingAddedPhotoIds = safeArray(batch.addedPhotoIds).filter((id) => !cancelIds.has(id));
+  const emptyCreatedTripIds = new Set(
+    safeArray(batch.createdTripIds).filter((tripId) => !state.photos.some((photo) => photo.tripId === tripId && !cancelIds.has(photo.id))),
+  );
+  for (const tripId of emptyCreatedTripIds) affectedTripIds.delete(tripId);
+
+  const pendingItems = state.pendingItems
+    .map((item) => {
+      if (!batch.pendingItemIds.includes(item.id)) return item;
+      const relatedPhotoIds = safeArray(item.relatedPhotoIds).filter((id) => !cancelIds.has(id));
+      return { ...item, relatedPhotoIds };
+    })
+    .filter((item) => !batch.pendingItemIds.includes(item.id) || safeArray(item.relatedPhotoIds).length > 0);
+  const pendingIds = new Set(pendingItems.filter((item) => batch.pendingItemIds.includes(item.id)).map((item) => item.id));
+
+  const canceledMissingCount = cancelPhotos.filter((photo) => photo.pendingReason).length;
+  const canceledSuccessCount = cancelIds.size - canceledMissingCount;
+  const patchedBatch = {
+    ...batch,
+    totalCount: Math.max(0, batch.totalCount - cancelIds.size),
+    successCount: Math.max(0, batch.successCount - canceledSuccessCount),
+    failedCount: Math.max(0, batch.failedCount - canceledMissingCount),
+    createdTripIds: safeArray(batch.createdTripIds).filter((id) => !emptyCreatedTripIds.has(id)),
+    addedPhotoIds: remainingAddedPhotoIds,
+    pendingItemIds: safeArray(batch.pendingItemIds).filter((id) => pendingIds.has(id)),
+    storedFileNames: safeArray(batch.storedFileNames),
+    storedThumbnailNames: safeArray(batch.storedThumbnailNames),
+    status: remainingAddedPhotoIds.length > 0 ? batch.status : "rolled_back",
+    summary: `${batch.summary} 已取消 ${cancelIds.size} 张待补照片。`,
+  };
+  const base = {
+    ...state,
+    photos: state.photos.filter((photo) => !cancelIds.has(photo.id)),
+    trips: state.trips.filter((trip) => !emptyCreatedTripIds.has(trip.id)),
+    placeNodes: state.placeNodes.filter((place) => !emptyCreatedTripIds.has(place.tripId)).map((place) => ({ ...place, photoIds: place.photoIds.filter((id) => !cancelIds.has(id)) })),
+    routes: state.routes.filter((route) => !emptyCreatedTripIds.has(route.tripId)),
+    pendingItems,
+    importBatches: state.importBatches.map((item) => (item.id === batchId ? patchedBatch : item)),
+  };
+  return {
+    state: rebuildTrips(base, affectedTripIds, { makeId }),
+    batch: patchedBatch,
+    canceledPhotos: cancelPhotos,
+    canceledPhotoIds: Array.from(cancelIds),
+  };
+}
+
+export function mergeImportTripsState(state, batchId) {
+  const batch = state.importBatches.find((item) => item.id === batchId);
+  if (!batch || batch.createdTripIds.length <= 1) return state;
+  const [targetTripId, ...removeTripIds] = batch.createdTripIds;
+  const removeSet = new Set(removeTripIds);
+  const batchPhotos = state.photos.filter((photo) => batch.addedPhotoIds.includes(photo.id));
+  const dates = batchPhotos.map((photo) => photo.capturedAt).filter(Boolean).sort();
+  const placeNodes = state.placeNodes.map((place) => (removeSet.has(place.tripId) ? { ...place, tripId: targetTripId } : place));
+  const targetPlaces = placeNodes.filter((place) => place.tripId === targetTripId);
+  const routes = state.routes.filter((route) => !batch.createdTripIds.includes(route.tripId)).concat(buildRoute(targetTripId, targetPlaces));
+  return {
+    ...state,
+    photos: state.photos.map((photo) => (batch.addedPhotoIds.includes(photo.id) ? { ...photo, tripId: targetTripId } : photo)),
+    trips: state.trips
+      .filter((trip) => !removeSet.has(trip.id))
+      .map((trip) =>
+        trip.id === targetTripId
+          ? {
+              ...trip,
+              title: trip.title.replace(/\s+\d+$/, ""),
+              dateRange: { start: toDateInput(dates[0]), end: toDateInput(dates.at(-1)) },
+              cities: Array.from(new Set(state.trips.filter((item) => batch.createdTripIds.includes(item.id)).flatMap((item) => item.cities))),
+              countries: Array.from(new Set(state.trips.filter((item) => batch.createdTripIds.includes(item.id)).flatMap((item) => item.countries))),
+            }
+          : trip,
+      ),
+    placeNodes,
+    routes,
+    importBatches: state.importBatches.map((item) => (item.id === batchId ? { ...item, createdTripIds: [targetTripId], summary: `${item.summary} 已按用户选择合并为一个旅行档案。` } : item)),
+    pendingItems: state.pendingItems.map((item) => (item.type === "split_suggestion" && batch.pendingItemIds.includes(item.id) ? { ...item, status: "accepted" } : item)),
+  };
 }
 
 export function buildImportStateFromPhotos(

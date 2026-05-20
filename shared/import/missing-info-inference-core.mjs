@@ -379,6 +379,51 @@ export function keepPending(reason, confidence, locale = "zh") {
   };
 }
 
+export function applyMissingInfoProposal(pending, proposal, { now = () => new Date().toISOString() } = {}) {
+  const updatedAt = typeof now === "function" ? now() : now;
+  return {
+    ...pending,
+    suggestion: proposal.suggestion,
+    reason: proposal.reason,
+    proposal: proposal.actionable ? proposal.proposal : undefined,
+    inference: {
+      status: proposal.actionable ? "suggested" : "keep_pending",
+      confidence: proposal.confidence,
+      reason: proposal.reason,
+      displayTarget: proposal.displayTarget,
+      displayTargetLabel: proposal.displayTargetLabel,
+      displayTargetBadge: proposal.displayTargetBadge,
+      updatedAt,
+    },
+  };
+}
+
+export function applyMissingInfoProposalState(state, batchId, pendingId, proposal, { now } = {}) {
+  const batch = state.importBatches.find((item) => item.id === batchId);
+  const pending = state.pendingItems.find((item) => item.id === pendingId);
+  if (!batch || batch.status !== "pending_confirmation" || !pending || !batch.pendingItemIds.includes(pending.id)) return state;
+  if (!["missing_gps", "confirm_location_candidate"].includes(pending.type)) return state;
+  return {
+    ...state,
+    pendingItems: state.pendingItems.map((item) => (item.id === pending.id ? applyMissingInfoProposal(item, proposal, { now }) : item)),
+  };
+}
+
+export function applyMissingInfoProposalResultsState(state, batchId, results, { now } = {}) {
+  const batch = state.importBatches.find((item) => item.id === batchId);
+  if (!batch || batch.status !== "pending_confirmation") return state;
+  const proposalByPendingId = new Map(results.map((item) => [item.pendingId, item.proposal]));
+  return {
+    ...state,
+    pendingItems: state.pendingItems.map((item) => {
+      const proposal = proposalByPendingId.get(item.id);
+      if (!proposal || !batch.pendingItemIds.includes(item.id) || item.status !== "open") return item;
+      if (!["missing_gps", "confirm_location_candidate"].includes(item.type)) return item;
+      return applyMissingInfoProposal(item, proposal, { now });
+    }),
+  };
+}
+
 export function timeDistanceMs(left, right) {
   if (!left || !right) return Number.MAX_SAFE_INTEGER;
   return Math.abs(new Date(left).getTime() - new Date(right).getTime());

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { deterministicVector } from "../domain/vectors.mjs";
-import { embeddingSpaceId, getAiConfig, preferredEmbeddingDimensions } from "./ai-config.mjs";
+import { getAiConfig, preferredEmbeddingDimensions } from "./ai-config.mjs";
 import { getAiProvider, listAiProviders } from "./provider-registry.mjs";
 import { embeddingProviderResult } from "../../shared/ai/provider-runtime.mjs";
 
