@@ -14,6 +14,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -27,6 +29,7 @@ import java.util.zip.GZIPInputStream;
 public class EarthGeodataPlugin extends Plugin {
     private static final String ASSET_GZIP_PATH = "geodata/geonames.sqlite.gz";
     private static final String ASSET_SQLITE_PATH = "geodata/geonames.sqlite";
+    private static final String ASSET_SIGNATURE_PATH = "geodata/geonames.sqlite.sha256";
     private static final double SEARCH_RADIUS_KM = 80.0;
     private static final int RESULT_LIMIT = 5;
     private static final int FORWARD_RESULT_LIMIT = 3;
@@ -268,7 +271,8 @@ public class EarthGeodataPlugin extends Plugin {
     private SQLiteDatabase database() throws IOException {
         if (database != null && database.isOpen()) return database;
         File dbFile = databaseFile();
-        if (!dbFile.exists() || dbFile.length() == 0) installDatabase(dbFile);
+        String assetSignature = packagedDatabaseSignature();
+        if (!dbFile.exists() || dbFile.length() == 0 || isInstalledDatabaseStale(assetSignature)) installDatabase(dbFile, assetSignature);
         database = SQLiteDatabase.openDatabase(dbFile.getAbsolutePath(), null, SQLiteDatabase.OPEN_READONLY);
         return database;
     }
@@ -277,7 +281,17 @@ public class EarthGeodataPlugin extends Plugin {
         return new File(new File(getContext().getFilesDir(), "geodata"), "geonames.sqlite");
     }
 
-    private void installDatabase(File dbFile) throws IOException {
+    private File databaseSignatureFile() {
+        return new File(databaseFile().getAbsolutePath() + ".sha256");
+    }
+
+    private boolean isInstalledDatabaseStale(String assetSignature) {
+        if (assetSignature == null || assetSignature.isEmpty()) return false;
+        String installedSignature = readTextFile(databaseSignatureFile());
+        return !assetSignature.equals(installedSignature);
+    }
+
+    private void installDatabase(File dbFile, String assetSignature) throws IOException {
         File dir = dbFile.getParentFile();
         if (dir != null && !dir.exists()) dir.mkdirs();
         File tmp = new File(dbFile.getAbsolutePath() + ".tmp");
@@ -288,6 +302,7 @@ public class EarthGeodataPlugin extends Plugin {
         }
         if (dbFile.exists() && !dbFile.delete()) throw new IOException("Unable to replace old GeoNames database");
         if (!tmp.renameTo(dbFile)) throw new IOException("Unable to install GeoNames database");
+        if (assetSignature != null && !assetSignature.isEmpty()) writeTextFile(databaseSignatureFile(), assetSignature);
     }
 
     private InputStream openPackagedDatabaseAsset() throws IOException {
@@ -298,10 +313,44 @@ public class EarthGeodataPlugin extends Plugin {
         }
     }
 
+    private String packagedDatabaseSignature() {
+        try (InputStream input = getContext().getAssets().open(ASSET_SIGNATURE_PATH)) {
+            return readStreamText(input).trim();
+        } catch (IOException error) {
+            return null;
+        }
+    }
+
+    private String readTextFile(File file) {
+        if (!file.exists()) return null;
+        try (InputStream input = new java.io.FileInputStream(file)) {
+            return readStreamText(input).trim();
+        } catch (IOException error) {
+            return null;
+        }
+    }
+
+    private void writeTextFile(File file, String text) throws IOException {
+        File dir = file.getParentFile();
+        if (dir != null && !dir.exists()) dir.mkdirs();
+        try (FileOutputStream output = new FileOutputStream(file)) {
+            output.write(text.getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    private String readStreamText(InputStream input) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        byte[] buffer = new byte[1024];
+        int read;
+        while ((read = input.read(buffer)) != -1) output.write(buffer, 0, read);
+        return output.toString(StandardCharsets.UTF_8.name());
+    }
+
     private JSObject rowToCandidate(GeonameRow row, double confidence, Double distanceKm, int index) {
         String zh = localizedName(row);
         String en = firstNonEmpty(row.nameEn, row.asciiName, row.name);
-        String local = firstNonEmpty(row.name, row.asciiName, en);
+        String countryCode = normalizedCountryCode(row.countryCode);
+        String local = "CN".equals(countryCode) ? zh : firstNonEmpty(row.name, row.asciiName, en);
         String countryZh = firstNonEmpty(row.countryNameZh, row.countryNameEn, row.countryName, row.countryCode);
         String countryEn = firstNonEmpty(row.countryNameEn, row.countryName, countryZh);
 
@@ -334,7 +383,7 @@ public class EarthGeodataPlugin extends Plugin {
         candidate.put("reason", distanceKm == null ? "GeoNames locality matched by name." : "GeoNames nearest locality, " + round(distanceKm, 1) + "km, " + row.featureCode);
         candidate.put("admin1", emptyToNull(row.admin1Name));
         candidate.put("admin2", emptyToNull(row.admin2Name));
-        candidate.put("countryCode", row.countryCode);
+        candidate.put("countryCode", countryCode);
         candidate.put("featureCode", row.featureCode);
         candidate.put("featureLabel", emptyToNull(row.featureLabel));
         candidate.put("geocodeRank", index + 1);
@@ -350,7 +399,7 @@ public class EarthGeodataPlugin extends Plugin {
         object.put("ascii_name", row.asciiName);
         object.put("lat", row.lat);
         object.put("lng", row.lng);
-        object.put("country_code", row.countryCode);
+        object.put("country_code", normalizedCountryCode(row.countryCode));
         object.put("country_name", row.countryName);
         object.put("country_name_zh", row.countryNameZh);
         object.put("country_name_en", row.countryNameEn);
@@ -419,12 +468,21 @@ public class EarthGeodataPlugin extends Plugin {
         String normalized = normalizedText(value);
         if (normalized.isEmpty()) return aliases;
         aliases.add(normalized);
-        if (normalized.equals("china") || normalized.equals("cn") || normalized.equals("中国") || normalized.equals("hongkong") || normalized.equals("hk") || normalized.equals("taiwan") || normalized.equals("tw")) {
+        if (normalized.equals("china") || normalized.equals("cn") || normalized.equals("中国")
+            || normalized.equals("hongkong") || normalized.equals("hk") || normalized.equals("香港")
+            || normalized.equals("macao") || normalized.equals("macau") || normalized.equals("mo") || normalized.equals("澳门")
+            || normalized.equals("taiwan") || normalized.equals("tw") || normalized.equals("台湾") || normalized.equals("臺灣")) {
             aliases.add("china");
             aliases.add("cn");
             aliases.add("中国");
         }
         return aliases;
+    }
+
+    private String normalizedCountryCode(String countryCode) {
+        String normalized = normalizedText(countryCode);
+        if (normalized.equals("hk") || normalized.equals("mo") || normalized.equals("tw")) return "CN";
+        return countryCode;
     }
 
     private static boolean isUsableLocation(double lat, double lng) {

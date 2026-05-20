@@ -258,7 +258,7 @@ assert.equal(taipeiReverse?.country, "中国");
 assert.equal(taipeiReverse?.localizedCountryNames?.en, "China");
 const taipeiForwardAsChina = forwardLocalGeocode({ city: "Taipei", country: "China" })[0];
 assert.equal(taipeiForwardAsChina?.country, "中国");
-assert.equal(taipeiForwardAsChina?.countryCode, "TW");
+assert.equal(taipeiForwardAsChina?.countryCode, "CN");
 
 const staleCoverProjection = projectState({
   trips: [

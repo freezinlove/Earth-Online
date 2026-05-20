@@ -1616,10 +1616,11 @@ export function createImportServices({
     return {
       ...candidate,
       point: fallback.point,
-      city: candidate.city ?? fallback.city ?? cityQuery,
-      country: candidate.country ?? fallback.country,
+      city: fallback.city ?? candidate.city ?? cityQuery,
+      country: fallback.country ?? candidate.country,
+      localizedCityNames: fallback.localizedCityNames ?? candidate.localizedCityNames,
+      localizedCountryNames: fallback.localizedCountryNames ?? candidate.localizedCountryNames,
       localizedNames: candidate.localizedNames ?? fallback.localizedNames,
-      localizedCountryNames: candidate.localizedCountryNames ?? fallback.localizedCountryNames,
       confidence: Math.max(Number(candidate.confidence ?? 0), Math.min(0.72, Number(fallback.confidence ?? 0.6))),
       reason:
         normalizeLocale(locale) === "en"
@@ -1660,10 +1661,11 @@ export function createImportServices({
     return {
       ...candidate,
       point: fallback.point,
-      city: candidate.city ?? fallback.city ?? cityQuery,
-      country: candidate.country ?? fallback.country,
+      city: fallback.city ?? candidate.city ?? cityQuery,
+      country: fallback.country ?? candidate.country,
+      localizedCityNames: fallback.localizedCityNames ?? candidate.localizedCityNames,
+      localizedCountryNames: fallback.localizedCountryNames ?? candidate.localizedCountryNames,
       localizedNames: candidate.localizedNames ?? fallback.localizedNames,
-      localizedCountryNames: candidate.localizedCountryNames ?? fallback.localizedCountryNames,
       confidence: Math.max(Number(candidate.confidence ?? 0), Math.min(0.72, Number(fallback.confidence ?? 0.6))),
       source: "geocode",
       precision: "estimated",

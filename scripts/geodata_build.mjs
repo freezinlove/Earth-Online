@@ -5,6 +5,7 @@ import { Readable } from "node:stream";
 import zlib from "node:zlib";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import { zhPlaceNameOverride } from "../shared/domain/place-name-overrides.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
@@ -117,6 +118,15 @@ async function readZipText(name) {
   return extractFileFromZip(buffer);
 }
 
+async function readOptionalJson(name) {
+  try {
+    const parsed = JSON.parse(await fs.readFile(path.join(geodataDir, name), "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 function loadCountries(text) {
   const countries = new Map();
   for (const fields of parseTsv(text)) {
@@ -187,6 +197,9 @@ const [citiesText, countryText, admin1Text, admin2Text, featureText] = await Pro
 const cityRows = parseTsv(citiesText);
 const geonameIds = new Set(cityRows.map((fields) => fields[0]).filter(Boolean));
 const alternateNames = await loadAlternateNames(geonameIds);
+const zhNameOverrides = await readOptionalJson("zh-name-overrides.json");
+const zhNameOverridesByGeonameId =
+  zhNameOverrides.namesByGeonameId && typeof zhNameOverrides.namesByGeonameId === "object" ? zhNameOverrides.namesByGeonameId : {};
 
 await fs.rm(dbPath, { force: true });
 const db = new DatabaseSync(dbPath);
@@ -258,7 +271,11 @@ try {
     const alt = alternateNames.get(geonameId);
     const countryNameEn = normalizedCountryNameEn(countryCode, countries.get(countryCode) ?? countryCode);
     const nameEn = chooseAlternateName(alt, "en") ?? asciiName ?? name;
-    const nameZh = chooseAlternateName(alt, "zh") ?? "";
+    const nameZh =
+      zhNameOverridesByGeonameId[geonameId] ??
+      chooseAlternateName(alt, "zh") ??
+      [name, asciiName, nameEn].map(zhPlaceNameOverride).find(Boolean) ??
+      "";
     insert.run(
       geonameId,
       name,

@@ -40,8 +40,8 @@
     "type": "new_place",
     "locationCandidate": {
       "name": "地点名",
-      "country": "国家名，可选",
-      "city": "城市名，可选",
+      "country": "英文或当地拉丁字母国家名，可选",
+      "city": "英文或当地拉丁字母城市名，可选",
       "confidence": 0.0
     }
   },
@@ -54,8 +54,8 @@
     "caption": "24-54 个中文字符的旅行日记短句",
     "locationCandidate": {
       "name": "地点名",
-      "country": "国家名，可选",
-      "city": "城市名，可选",
+      "country": "英文或当地拉丁字母国家名，可选",
+      "city": "英文或当地拉丁字母城市名，可选",
       "confidence": 0.0
     }
   }
@@ -74,7 +74,7 @@
 1. target.placeId 必须来自 allowedPlaces，不能编造。
 2. 如果当前图像或 initialLocationCandidate 明确给出 allowedPlaces 之外的地点名、地标名、车站名、剧院名、桥梁名、湖泊名、山峰名等，应优先考虑 create_place_from_candidate，而不是因为 allowedPlaces 没有该地点就 keep_pending。
 3. create_place_from_candidate 不要输出经纬度。新地点坐标由后端负责查询。
-4. create_place_from_candidate 尽量至少提供 city、country、confidence、reason。name 可作为展示地点名、地标或地域名，但 city 是后端坐标查询依据。
+4. create_place_from_candidate 尽量至少提供 city、country、confidence、reason。name 可作为中文展示地点名、地标或地域名；city 和 country 是后端坐标查询依据，必须使用英文或当地拉丁字母官方名，不要翻译成中文。
 5. 当前待补照片缺 GPS 时，只有 confidence 低于 0.55 才输出 keep_pending；confidence 大于等于 0.55 时必须输出 bind_photos_to_place 或 create_place_from_candidate，除非没有任何具体地点候选。
 6. 当前照片没有明确地标、城市、店名、教堂/建筑名称、湖泊/山峰/桥梁等可定位线索，且前后上下文不足时，输出 keep_pending。
 7. 只有“室内、街道、夜景、建筑、山、水、天空、餐厅”等泛语义时，输出 keep_pending，除非当前照片图像或 initialLocationCandidate 中有明确地点名。
@@ -97,5 +97,5 @@ rewrittenInitialAnalysis 输出规则：
 7. caption 禁止出现「GPS」「画面呈现」「图中」「检测到」「可见」「可能位于」「系统判断」「候选」这类分析口吻。
 8. 不要做人脸身份识别，不要推断敏感真实身份，但可以对人物进行模糊描述。
 9. locationCandidate 是重写后的唯一地点候选，必须和二次判断的最终地点一致。
-10. locationCandidate 必须包含 name 和 confidence；尽量包含 city 和 country；不要包含 lat 或 lng。
+10. locationCandidate 必须包含 name 和 confidence；尽量包含 city 和 country；不要包含 lat 或 lng。name 保持中文地点名或地标名；city 和 country 必须使用英文或当地拉丁字母官方名。
 11. locationCandidate 的 confidence 范围是 0 到 1；低于 0.55 的候选只作为弱线索。

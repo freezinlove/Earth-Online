@@ -10,8 +10,8 @@
   "caption": "24-54 个中文字符的旅行日记短句",
   "locationCandidate": {
     "name": "地点名",
-    "country": "国家名，可省略",
-    "city": "城市名，可省略",
+    "country": "英文或当地拉丁字母国家名，可省略",
+    "city": "英文或当地拉丁字母城市名，可省略",
     "confidence": 0.0
   }
 }
@@ -38,6 +38,7 @@
 9. 永远不要输出纬度、经度、坐标或 point 字段。有 GPS 时后端已经有真实坐标；无 GPS 时后端会用 city/country 查本地地名库。
 10. locationCandidate 的 confidence 范围是 0 到 1；低于 0.55 的候选只作为弱线索。
 11. EXIF/GPS 上下文只是参考。若 GPS 城市候选和当前图像明显冲突，可以保留图像判断，但不要为了迎合 GPS 把一个城市标签强行套到另一座城市。
+12. locationCandidate.name 保持中文地点名或地标名；locationCandidate.city 和 locationCandidate.country 是后端查库字段，必须使用英文或当地拉丁字母官方名，不要翻译成中文。
 
 caption 风格示例：
 

@@ -1,4 +1,5 @@
 import { safeArray } from "./arrays.mjs";
+import { normalizeCountryDescription } from "./country-normalizer.mjs";
 import { isUsableLocation } from "./geo.mjs";
 
 export function toAiEvidence(ai, { makeId, analyzedAt = new Date().toISOString() } = {}) {
@@ -12,16 +13,20 @@ export function toAiEvidence(ai, { makeId, analyzedAt = new Date().toISOString()
     caption: ai.caption,
     tags: ai.tags,
     visiblePlaceNames: safeArray(ai.visiblePlaceNames),
-    locationCandidates: safeArray(ai.locationCandidates).map((candidate) => ({
-      id: candidate.id ?? makeId?.("candidate") ?? `candidate-${Date.now().toString(36)}`,
-      name: candidate.name,
-      country: candidate.country,
-      city: candidate.city,
-      confidence: candidate.confidence,
-      source: candidate.source ?? "ai_vision",
-      precision: candidate.precision,
-      reason: candidate.reason,
-    })),
+    locationCandidates: safeArray(ai.locationCandidates).map((candidate) => {
+      const country = normalizeCountryDescription(candidate.country, candidate.localizedCountryNames);
+      return {
+        id: candidate.id ?? makeId?.("candidate") ?? `candidate-${Date.now().toString(36)}`,
+        name: candidate.name,
+        country: country.country ?? candidate.country,
+        localizedCountryNames: country.countryNames ?? candidate.localizedCountryNames,
+        city: candidate.city,
+        confidence: candidate.confidence,
+        source: candidate.source ?? "ai_vision",
+        precision: candidate.precision,
+        reason: candidate.reason,
+      };
+    }),
     uncertainties: safeArray(ai.uncertainties),
     fallbackReason: ai.fallbackReason,
   };

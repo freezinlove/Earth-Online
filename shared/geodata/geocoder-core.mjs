@@ -1,4 +1,4 @@
-import { countryAliasKeys, normalizeCountryDescription, normalizedCountryText } from "../domain/country-normalizer.mjs";
+import { countryAliasKeys, countryRecord, normalizeCountryDescription, normalizedCountryText } from "../domain/country-normalizer.mjs";
 import { haversineKm, isUsableLocation } from "../domain/geo.mjs";
 import { cityPresets } from "../domain/geo-catalog.mjs";
 import { zhPlaceNameOverride } from "../domain/place-name-overrides.mjs";
@@ -109,7 +109,7 @@ function localizedNames(row) {
   const zh = localizedName(row);
   const normalizedValues = [row.name, row.ascii_name, row.name_en].map(normalizedCountryText);
   const en = normalizedValues.map((value) => englishNameOverrides[value]).find(Boolean) || row.name_en || row.ascii_name || row.name;
-  const local = row.name;
+  const local = normalizedCountryCode(row) === "CN" ? zh : row.name;
   return {
     zh,
     en,
@@ -123,6 +123,10 @@ function countryNames(row) {
     en: row.country_name_en,
     local: row.country_name,
   }).countryNames;
+}
+
+function normalizedCountryCode(row) {
+  return countryRecord(row.country_code)?.code ?? row.country_code;
 }
 
 export function rowToCandidate(row, { point, confidence, reason, makeId, index = 0 } = {}) {
@@ -146,7 +150,7 @@ export function rowToCandidate(row, { point, confidence, reason, makeId, index =
     reason,
     admin1: row.admin1_name || undefined,
     admin2: row.admin2_name || undefined,
-    countryCode: row.country_code,
+    countryCode: normalizedCountryCode(row),
     featureCode: row.feature_code,
     featureLabel: row.feature_label || undefined,
     geocodeRank: index + 1,
