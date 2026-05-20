@@ -7,6 +7,7 @@ import { OnboardingGuide } from "@/features/onboarding/OnboardingGuide";
 import { SearchPanel } from "@/features/search/SearchPanel";
 import { SettingsPanel } from "@/features/settings/SettingsPanel";
 import { TimelineDock } from "@/features/timeline/TimelineDock";
+import { installAndroidBackDispatcher } from "@/platform/androidBack";
 import { useAppStore } from "@/store/appStore";
 import { useEffect, useRef, useState } from "react";
 
@@ -38,6 +39,24 @@ export function App() {
   useEffect(() => {
     void loadState();
   }, [loadState]);
+
+  useEffect(() => {
+    return installAndroidBackDispatcher(() => {
+      const state = useAppStore.getState();
+
+      if (state.manualPlacePick?.isPicking) {
+        state.cancelManualPlacePickPoint();
+        return true;
+      }
+
+      if (state.activePanel !== "globe") {
+        state.setActivePanel("globe");
+        return true;
+      }
+
+      return false;
+    });
+  }, []);
 
   useEffect(() => {
     window.clearTimeout(archiveExitTimer.current);

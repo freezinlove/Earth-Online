@@ -10,6 +10,7 @@ import { capturedDateTimeLabel } from "@/domain/datetime";
 import { countryLabel, markerLabel, photoAltText, photoLabel, placeLabel } from "@/domain/labels";
 import { useI18n } from "@/i18n/useI18n";
 import type { GeoPoint, GlobeMarker, Photo, Trip } from "@/domain/models";
+import { registerAndroidBackHandler } from "@/platform/androidBack";
 import { useAppStore, type GlobeViewIntent, type Locale } from "@/store/appStore";
 
 export type TravelMarker = {
@@ -1314,6 +1315,7 @@ export function EarthStage() {
   const globeMarkers = useAppStore((state) => state.globeMarkers);
   const selectTrip = useAppStore((state) => state.selectTrip);
   const selectPlace = useAppStore((state) => state.selectPlace);
+  const clearPlaceSelection = useAppStore((state) => state.clearPlaceSelection);
   const setActivePanel = useAppStore((state) => state.setActivePanel);
   const globeViewIntent = useAppStore((state) => state.globeViewIntent);
   const setGlobeViewIntent = useAppStore((state) => state.setGlobeViewIntent);
@@ -1442,6 +1444,24 @@ export function EarthStage() {
     if (!selectedPlaceId && selectedMapItem?.kind === "place") closeSelectedMapItem();
   }, [selectedMapItem?.kind, selectedPlaceId]);
 
+  useEffect(() => {
+    if (activePanel === "globe") return;
+    if (selectedMapItem) {
+      window.clearTimeout(infoPanelCloseTimer.current);
+      setInfoPanelClosing(false);
+      setSelectedMapItem(undefined);
+    }
+    if (selectedPlaceId) clearPlaceSelection();
+  }, [activePanel, clearPlaceSelection, selectedMapItem, selectedPlaceId]);
+
+  useEffect(() => {
+    return registerAndroidBackHandler(() => {
+      if (!previewPhoto) return false;
+      setPreviewPhoto(undefined);
+      return true;
+    });
+  }, [previewPhoto]);
+
   const handleSelect = (marker: TravelMarker) => {
     if (pointPicking) return;
     if (selectedMapItem?.id === marker.id) {
@@ -1495,15 +1515,17 @@ export function EarthStage() {
           </Suspense>
         </Canvas>
       </div>
-      <MobileTravelMapNote
-        selected={selectedMarker}
-        trip={annotationTrip}
-        photos={tripPhotos}
-        isClosing={infoPanelClosing}
-        locale={locale}
-        onOpenArchive={handleOpenArchive}
-        onOpenPhoto={setPreviewPhoto}
-      />
+      {activePanel === "globe" ? (
+        <MobileTravelMapNote
+          selected={selectedMarker}
+          trip={annotationTrip}
+          photos={tripPhotos}
+          isClosing={infoPanelClosing}
+          locale={locale}
+          onOpenArchive={handleOpenArchive}
+          onOpenPhoto={setPreviewPhoto}
+        />
+      ) : null}
       {pointPicking ? (
         <div className="globe-point-pick-hint">
           <MapPin size={15} />

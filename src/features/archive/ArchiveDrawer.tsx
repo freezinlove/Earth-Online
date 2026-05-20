@@ -28,7 +28,10 @@ function tripCountryLine(trip: Trip, locale: "zh" | "en") {
 }
 
 function tripCoverCandidates(trip: Trip, photos: Photo[]) {
-  return Array.from(new Set([trip.coverUrl, ...photos.flatMap((photo) => [photo.thumbnailUrl, photo.storageUrl])].filter(Boolean)));
+  const coverPhoto = photos.find((photo) => photo.thumbnailUrl === trip.coverUrl || photo.storageUrl === trip.coverUrl);
+  return Array.from(
+    new Set([coverPhoto?.thumbnailUrl, trip.coverUrl, ...photos.map((photo) => photo.thumbnailUrl), ...photos.map((photo) => photo.storageUrl)].filter(Boolean)),
+  );
 }
 
 function ArchiveTripCover({ photos, trip }: { photos: Photo[]; trip: Trip }) {
@@ -48,6 +51,8 @@ function ArchiveTripCover({ photos, trip }: { photos: Photo[]; trip: Trip }) {
           src={src}
           alt={tripLabel(trip)}
           className="h-full w-full object-cover"
+          decoding="async"
+          loading="lazy"
           onError={() => setCoverIndex((index) => Math.min(index + 1, candidates.length))}
         />
       ) : (
@@ -146,7 +151,7 @@ export function ArchiveDrawer({ isClosing = false }: { isClosing?: boolean }) {
                         </span>
                       </span>
 
-                      <span className="archive-entry-action hidden md:grid">
+                      <span className="archive-entry-action grid">
                         {isConfirmingDelete ? (
                           <span className="archive-delete-confirm" onClick={(event) => event.stopPropagation()}>
                             <span>{t("confirmDeleteTrip")}</span>

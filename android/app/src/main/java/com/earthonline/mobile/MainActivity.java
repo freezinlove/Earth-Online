@@ -6,6 +6,7 @@ import android.os.Bundle;
 import android.view.View;
 import android.view.Window;
 
+import androidx.activity.OnBackPressedCallback;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
@@ -21,6 +22,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(EarthSecretsPlugin.class);
         super.onCreate(savedInstanceState);
         configureFullscreen();
+        configureBackNavigation();
     }
 
     @Override
@@ -35,6 +37,31 @@ public class MainActivity extends BridgeActivity {
         if (hasFocus) {
             configureFullscreen();
         }
+    }
+
+    private void configureBackNavigation() {
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                dispatchBackNavigationToWeb();
+            }
+        });
+    }
+
+    private void dispatchBackNavigationToWeb() {
+        if (getBridge() == null || getBridge().getWebView() == null) {
+            finish();
+            return;
+        }
+
+        getBridge().getWebView().evaluateJavascript(
+            "(function(){try{return Boolean(window.__earthOnlineHandleAndroidBack&&window.__earthOnlineHandleAndroidBack());}catch(error){return false;}})();",
+            consumed -> {
+                if (!"true".equals(consumed)) {
+                    finish();
+                }
+            }
+        );
     }
 
     @SuppressWarnings("deprecation")

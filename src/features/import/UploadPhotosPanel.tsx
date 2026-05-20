@@ -1,5 +1,5 @@
 import { Check, Circle, Clock3, FileImage, FolderOpen, ImagePlus, LoaderCircle, MapPin, PencilLine, RotateCcw, Sparkles, X } from "lucide-react";
-import type { ChangeEvent, DragEvent } from "react";
+import type { CSSProperties, ChangeEvent, DragEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { capturedDateLabel } from "@/domain/datetime";
@@ -446,13 +446,14 @@ function ProgressLine({ step, showIcon = true }: { step: ImportStep; showIcon?: 
   const hasMeter = typeof step.done === "number" && typeof step.total === "number";
   const total = Math.max(1, step.total ?? 1);
   const width = hasMeter ? Math.max(step.done && step.done > 0 ? 8 : 0, Math.min(100, ((step.done ?? 0) / total) * 100)) : 0;
+  const progressStyle = { width: `${width}%`, "--progress-ratio": width / 100 } as CSSProperties;
 
   return (
     <div className="import-progress-line" data-active={step.active || undefined} data-no-icon={!showIcon || !Icon || undefined} title={step.label}>
       {showIcon && Icon ? <Icon size={15} /> : null}
       <span className="import-progress-label">{step.label}</span>
       <span className="import-progress-track">
-        <span style={{ width: `${width}%` }} />
+        <span style={progressStyle} />
       </span>
       <strong>{hasMeter ? `${step.done}/${step.total}` : ""}</strong>
     </div>

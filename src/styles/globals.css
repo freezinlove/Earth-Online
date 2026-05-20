@@ -2418,13 +2418,13 @@ select {
 
   .travel-map-note {
     position: fixed;
-    left: 50%;
-    right: auto;
-    bottom: calc(env(safe-area-inset-bottom, 0px) + 152px);
-    width: min(312px, calc(100vw - 72px));
+    left: 24px;
+    right: 24px;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 176px);
+    width: auto;
     height: auto;
     max-width: none;
-    transform: translateX(-50%);
+    transform: none;
     z-index: 120;
   }
 
@@ -2441,11 +2441,11 @@ select {
     max-width: none;
     filter: none;
     transform: none;
-    border: 1px solid rgba(151, 71, 35, 0.14);
-    border-radius: 8px;
-    background: #fbf8ef;
-    padding: 12px 13px;
-    box-shadow: 0 8px 18px rgba(48, 43, 36, 0.1);
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    padding: 0;
+    box-shadow: none;
   }
 
   .travel-map-note[data-state="open"] .travel-map-note-body {
@@ -2458,19 +2458,34 @@ select {
 
   .travel-map-note-title-row,
   .travel-map-note-country-row {
+    justify-content: flex-start;
     min-width: 0;
   }
 
   .travel-map-note-title-row h2,
   .travel-map-note-country-row h2 {
     min-width: 0;
+    max-width: calc(100vw - 96px);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .travel-photo-strip {
-    max-width: calc(100vw - 58px);
+    width: 100%;
+    max-width: 100%;
+    gap: 8px;
+    margin-top: 12px;
+    padding: 0 0 4px;
+  }
+
+  .travel-photo-thumb {
+    flex-basis: calc((100% - 16px) / 3);
+    width: auto;
+    height: auto;
+    aspect-ratio: 16 / 10;
+    border: 0;
+    background: transparent;
   }
 
   @keyframes travel-map-note-mobile-in {
@@ -4599,6 +4614,16 @@ select {
 
   .photo-import-panel {
     padding-bottom: calc(124px + env(safe-area-inset-bottom));
+    overflow-x: hidden;
+    overscroll-behavior-x: none;
+  }
+
+  .import-progress-track span {
+    width: 100% !important;
+    transform: scaleX(var(--progress-ratio, 0));
+    transform-origin: left center;
+    transition: transform 520ms cubic-bezier(0.2, 0.9, 0.26, 1);
+    will-change: transform;
   }
 
   .photo-import-dropzone {
@@ -4713,6 +4738,8 @@ select {
     grid-template-columns: 1fr;
     margin-top: 20px;
     padding-top: 18px;
+    max-width: 100%;
+    overflow-x: hidden;
   }
 
   .import-missing-list,
@@ -4758,8 +4785,19 @@ select {
     gap: 6px;
   }
 
+  :is(
+    .import-missing-heading-actions button,
+    .import-inline-confirm,
+    .import-inline-manual,
+    .import-inline-infer,
+    .import-inline-cancel
+  )[data-tooltip]::after {
+    display: none;
+  }
+
   .import-missing-list {
-    overflow-x: visible;
+    max-width: 100%;
+    overflow-x: hidden;
   }
 
   .import-missing-row {
@@ -4768,11 +4806,15 @@ select {
     column-gap: 6px;
     row-gap: 5px;
     align-items: start;
+    width: 100%;
+    max-width: 100%;
     min-width: 0;
   }
 
   .import-ai-failure-row {
     grid-template-columns: 70px 43px 42px minmax(58px, 1fr);
+    width: 100%;
+    max-width: 100%;
     min-width: 0;
   }
 
@@ -4859,6 +4901,8 @@ select {
     grid-row: 2 / span 2;
     align-self: start;
     font-size: 10px;
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 
   .import-photo-preview {
@@ -5086,27 +5130,27 @@ select {
 @media (max-width: 767px) {
   .time-incision-shell {
     bottom: 4.7rem;
-    width: min(100vw - 72px, 680px);
-    height: 66px;
+    width: min(calc(100vw - 112px), 560px);
+    height: 70px;
   }
 
   .time-incision-rail,
   .time-incision-track,
   .time-incision-ticks {
-    right: 30px;
+    right: 28px;
   }
 
   .time-incision-segment {
-    top: 9px;
+    top: 8px;
     min-width: 11px;
-    height: 18px;
+    height: 22px;
     background: transparent;
   }
 
   .time-incision-segment[data-kind="place"] {
-    top: 9px;
+    top: 8px;
     min-width: 10px;
-    height: 18px;
+    height: 22px;
     background: transparent;
   }
 
@@ -5115,9 +5159,9 @@ select {
     position: absolute;
     left: 0;
     right: 0;
-    top: 6px;
-    height: 4px;
-    border-radius: 1px;
+    top: 5px;
+    height: 7px;
+    border-radius: 2px;
     background: rgba(151, 71, 35, 0.46);
     transition:
       background-color 160ms ease,
@@ -5134,8 +5178,8 @@ select {
   }
 
   .time-incision-segment[data-kind="place"]::before {
-    top: 7px;
-    height: 3px;
+    top: 5px;
+    height: 6px;
     background: rgba(15, 111, 120, 0.44);
   }
 
@@ -5576,6 +5620,49 @@ select {
     left: 13px;
     right: 13px;
     bottom: 12px;
+  }
+
+  .archive-drawer {
+    overflow-x: hidden;
+  }
+
+  .archive-entry {
+    grid-template-columns: minmax(0, 1fr) 44px;
+    align-items: start;
+    gap: 14px;
+    animation: none;
+  }
+
+  .archive-entry-media {
+    grid-column: 1 / -1;
+  }
+
+  .archive-entry > .flex {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .archive-entry-action {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: end;
+    opacity: 1;
+    transform: none;
+  }
+
+  .archive-entry-action:has(.archive-delete-confirm) {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .archive-delete-confirm {
+    flex-wrap: wrap;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .archive-entry-media img {
+    transform: none;
   }
 }
 
@@ -6494,6 +6581,11 @@ select {
     padding-bottom: 112px !important;
   }
 
+  .trip-dossier {
+    overflow-x: hidden;
+    overscroll-behavior-y: contain;
+  }
+
   .trip-dossier-hero {
     min-height: 430px;
   }
@@ -6514,6 +6606,10 @@ select {
     gap: 12px;
   }
 
+  .trip-day-section {
+    animation: none;
+  }
+
   .trip-photo-piece-featured {
     grid-column: span 1;
   }
@@ -6522,14 +6618,23 @@ select {
     grid-column: span 1;
   }
 
+  .trip-photo-piece img,
+  .trip-photo-frame:hover img {
+    transform: none;
+  }
+
   .trip-photo-caption {
     display: grid;
     align-items: end;
     justify-content: stretch;
     gap: 3px;
-    padding: 34px 10px 10px;
+    padding: 30px 10px 10px;
     opacity: 1;
     transform: none;
+  }
+
+  .trip-photo-caption strong {
+    display: none;
   }
 
   .trip-photo-caption strong,
@@ -6582,6 +6687,7 @@ select {
   .trip-day-content {
     grid-column: 1;
     min-width: 0;
+    padding-left: 18px;
   }
 
   .trip-country-days {
@@ -6591,12 +6697,13 @@ select {
   .trip-day-section {
     grid-template-columns: 1fr;
     gap: 10px;
-    padding-left: 18px;
+    padding-left: 0;
   }
 
   .trip-route-dot {
     width: 8px;
     height: 8px;
+    margin-left: -4px;
     margin-top: 0;
     box-shadow:
       0 0 0 4px rgba(255, 219, 206, 0.55),
@@ -6629,27 +6736,79 @@ select {
   }
 
   .trip-photo-modal {
-    padding: 14px;
+    display: block;
+    overflow-y: auto;
+    padding: 0;
+    background: #faf9f5;
+    backdrop-filter: none;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
   }
 
   .trip-photo-modal-shell {
-    grid-template-columns: 1fr;
-    width: calc(100vw - 28px);
-    max-height: calc(100svh - 28px);
+    display: block;
+    width: 100%;
+    max-width: none;
+    min-height: 100svh;
+    max-height: none;
+    overflow: visible;
+    border-radius: 0;
+    background:
+      linear-gradient(116deg, rgba(250, 249, 245, 0.98), rgba(245, 246, 241, 0.94) 58%, rgba(228, 241, 238, 0.74)),
+      #faf9f5;
+    box-shadow: none;
+    animation: none;
   }
 
   .trip-photo-modal-media {
     width: 100%;
+    background: transparent;
   }
 
   .trip-photo-modal-media img {
     width: 100%;
     max-width: 100%;
-    height: min(48svh, 420px);
+    height: auto;
+    max-height: none;
+    object-fit: contain;
   }
 
   .trip-photo-modal-copy {
-    padding: 22px;
+    overflow: visible;
+    padding: 26px 24px calc(116px + env(safe-area-inset-bottom));
+  }
+
+  .trip-photo-modal-heading {
+    gap: 12px;
+  }
+
+  .trip-photo-modal-heading > div {
+    padding-right: 0;
+  }
+
+  .trip-photo-modal-heading h3,
+  .trip-photo-modal-title-input {
+    font-size: 24px;
+    line-height: 1.18;
+  }
+
+  .trip-photo-modal-caption,
+  .trip-photo-modal-caption-input {
+    font-size: 15px;
+    line-height: 2;
+  }
+
+  .trip-photo-modal-close {
+    position: fixed;
+    top: calc(12px + env(safe-area-inset-top, 0px));
+    right: 14px;
+    z-index: 3;
+    width: 40px;
+    height: 40px;
+    border-radius: 999px;
+    background: rgba(250, 249, 245, 0.78);
+    color: #944521;
+    backdrop-filter: blur(10px);
   }
 
   .manual-pending-modal {

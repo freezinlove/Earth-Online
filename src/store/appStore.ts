@@ -139,6 +139,7 @@ interface AppState {
   ) => Promise<void>;
   openManualPlacePick: (pendingId: ID, name: string, returnPanel?: AppPanel) => void;
   closeManualPlacePick: () => void;
+  cancelManualPlacePickPoint: () => void;
   startManualPlacePick: (pendingId: ID, name: string, nameDirty?: boolean, returnPanel?: AppPanel) => void;
   finishManualPlacePick: (point: { lat: number; lng: number }, nearestLabel?: string) => Promise<void>;
 }
@@ -441,6 +442,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   openManualPlacePick: (pendingId, name, returnPanel = "upload") => set({ manualPlacePick: { pendingId, name, mode: "bind", returnPanel, isPicking: false, nameDirty: false } }),
   closeManualPlacePick: () => set({ manualPlacePick: undefined }),
+  cancelManualPlacePickPoint: () =>
+    set((state) => ({
+      manualPlacePick: state.manualPlacePick ? { ...state.manualPlacePick, isPicking: false } : undefined,
+      activePanel: state.manualPlacePick?.returnPanel ?? state.activePanel,
+    })),
   startManualPlacePick: (pendingId, name, nameDirty = false, returnPanel) =>
     set((state) => ({
       manualPlacePick: {

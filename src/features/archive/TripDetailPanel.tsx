@@ -7,6 +7,7 @@ import { countryLabel, photoAltText, photoLabel, placeLabel, tripLabel } from "@
 import { useI18n } from "@/i18n/useI18n";
 import type { LocalizedNames, Photo, PlaceNode } from "@/domain/models";
 import { ManualPlaceResolutionPanel, type ManualPlaceMode, type ManualPlaceResolutionAction } from "@/features/places/ManualPlaceResolutionModal";
+import { registerAndroidBackHandler } from "@/platform/androidBack";
 import { useAppStore } from "@/store/appStore";
 
 type DayGroup = {
@@ -28,7 +29,13 @@ function formatDay(day: string) {
 }
 
 function getPhotoSource(photo?: Photo) {
-  return getHighResolutionSource(photo?.storageUrl ?? photo?.thumbnailUrl ?? "");
+  if (!photo) return "";
+  return photo.thumbnailUrl || getHighResolutionSource(photo.storageUrl ?? "", 960);
+}
+
+function getFullPhotoSource(photo?: Photo) {
+  if (!photo) return "";
+  return getHighResolutionSource(photo.storageUrl ?? photo.thumbnailUrl, 2200);
 }
 
 function getHighResolutionSource(source: string, width = 1800) {
@@ -51,6 +58,7 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
   const allPhotos = useAppStore((state) => state.photos);
   const allPlaces = useAppStore((state) => state.placeNodes);
   const dossierGroups = useAppStore((state) => state.dossierGroups);
+  const activePanel = useAppStore((state) => state.activePanel);
   const setActivePanel = useAppStore((state) => state.setActivePanel);
   const updateTripTitle = useAppStore((state) => state.updateTripTitle);
   const updatePhotoUserEdits = useAppStore((state) => state.updatePhotoUserEdits);
@@ -70,6 +78,7 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
   const [openPhotoId, setOpenPhotoId] = useState<string>();
   const [manualPhotoId, setManualPhotoId] = useState<string>();
   const [manualPhotoBusy, setManualPhotoBusy] = useState(false);
+  const [isMobileViewport, setIsMobileViewport] = useState(() => (typeof window === "undefined" ? false : window.matchMedia("(max-width: 767px)").matches));
   const photos = useMemo(
     () => allPhotos.filter((photo) => photo.tripId === selectedTripId).sort((left, right) => (left.capturedAt ?? "").localeCompare(right.capturedAt ?? "")),
     [allPhotos, selectedTripId],
@@ -102,13 +111,30 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
     setTitle(tripLabel(trip));
   }, [trip]);
 
-  if (!trip) return null;
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const query = window.matchMedia("(max-width: 767px)");
+    const update = () => setIsMobileViewport(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
 
-  const heroPhoto = getPhotoSource(photos[0]) || getHighResolutionSource(trip.coverUrl, 2200);
   const focusPlaceOnGlobe = (place: PlaceNode) => {
     selectPlace(place.id);
     setGlobeViewIntent(placeFocusIntent(place));
   };
+  const closePhotoDetail = useCallback(() => {
+    setOpenPhotoId(undefined);
+    setEditingPhotoId(undefined);
+    setManualPhotoId(undefined);
+    closeManualPlacePick();
+  }, [closeManualPlacePick]);
+  const closeManualPhotoMove = useCallback(() => {
+    if (activeManualPhotoId) setOpenPhotoId(activeManualPhotoId);
+    setManualPhotoId(undefined);
+    closeManualPlacePick();
+  }, [activeManualPhotoId, closeManualPlacePick]);
   const openManualPhotoMove = (photo: Photo) => {
     const sessionId = `photo:${photo.id}`;
     setOpenPhotoId(photo.id);
@@ -130,12 +156,29 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
     }
   };
 
+  useEffect(() => {
+    return registerAndroidBackHandler(() => {
+      if (activePanel !== "tripDetail") return false;
+      if (openPhoto) {
+        closePhotoDetail();
+        return true;
+      }
+
+      setActivePanel("archive");
+      return true;
+    });
+  }, [activePanel, closePhotoDetail, openPhoto, setActivePanel]);
+
+  if (!trip) return null;
+
+  const heroPhoto = isMobileViewport ? getPhotoSource(photos[0]) || getHighResolutionSource(trip.coverUrl, 960) : getFullPhotoSource(photos[0]) || getHighResolutionSource(trip.coverUrl, 2200);
+
   return (
     <section className="trip-dossier fixed inset-0 z-[70] overflow-y-auto bg-background/94 backdrop-blur-2xl" data-state={isClosing ? "closing" : "open"}>
       <TripDossierBackButton isClosing={isClosing} onBack={() => setActivePanel("archive")} />
 
       <header className="trip-dossier-hero">
-        <img src={heroPhoto} alt={tripLabel(trip)} className="trip-dossier-hero-image" />
+        <img src={heroPhoto} alt={tripLabel(trip)} className="trip-dossier-hero-image" decoding="async" />
         <div className="trip-dossier-hero-copy">
           <label className="mt-4 block max-w-4xl">
             <span className="sr-only">{t("archive")}</span>
@@ -205,7 +248,7 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
                               <article key={photo.id} className={index === 0 ? "trip-photo-piece trip-photo-piece-featured" : "trip-photo-piece"}>
                                 <div className="trip-photo-frame">
                                   <button className="trip-photo-open" onClick={() => setOpenPhotoId(photo.id)} type="button">
-                                    <img src={getPhotoSource(photo)} alt={photoAltText(photo)} />
+                                    <img src={getPhotoSource(photo)} alt={photoAltText(photo)} decoding="async" loading="lazy" />
                                     <span className="trip-photo-caption">
                                       <strong>{photoLabel(photo)}</strong>
                                       <em>{capturedTimeLabel(photo.capturedAt) || photo.fileName}</em>
@@ -243,12 +286,7 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
           photo={openPhoto}
           place={openPhotoPlace}
           editing={editingPhotoId === openPhotoId}
-          onClose={() => {
-            setOpenPhotoId(undefined);
-            setEditingPhotoId(undefined);
-            setManualPhotoId(undefined);
-            closeManualPlacePick();
-          }}
+          onClose={closePhotoDetail}
           onLocate={(photo) => {
             const place = photo.placeNodeId ? placeById.get(photo.placeNodeId) : undefined;
             if (place) {
@@ -276,10 +314,7 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
                   places: allPlaces,
                   sessionId: activeManualSessionId,
                   title: t("moveToOtherPlace"),
-                  onClose: () => {
-                    setManualPhotoId(undefined);
-                    closeManualPlacePick();
-                  },
+                  onClose: closeManualPhotoMove,
                   onPickPoint: (sessionId, name, nameDirty) => startManualPlacePick(sessionId, name, nameDirty, "tripDetail"),
                   onSubmit: (body) => void submitManualPhotoMove(body),
                 }
@@ -418,7 +453,7 @@ function PhotoDetailModal({
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="trip-photo-modal-media">
-          <img src={getHighResolutionSource(photo.storageUrl ?? photo.thumbnailUrl, 2200)} alt={photoAltText(photo)} />
+          <img src={getFullPhotoSource(photo)} alt={photoAltText(photo)} decoding="async" />
         </div>
         {manual ? (
           <ManualPlaceResolutionPanel
@@ -434,6 +469,7 @@ function PhotoDetailModal({
             initialMode={manual.initialMode}
             pickedPoint={manual.pickedPoint}
             panelClassName="trip-photo-modal-copy trip-photo-manual-copy manual-pending-copy"
+            showCloseButton={false}
             onClose={manual.onClose}
             onPickPoint={manual.onPickPoint}
             onSubmit={manual.onSubmit}

@@ -72,7 +72,11 @@ function OnboardingGuideDialog({ onDismiss }: { onDismiss: () => void }) {
   const welcomeTimer = useRef<number | undefined>(undefined);
   const completeTimer = useRef<number | undefined>(undefined);
   const closeTimer = useRef<number | undefined>(undefined);
-  const lastSetupPageIndex = 3;
+  const androidRuntime = isAndroidRuntime();
+  const storagePageIndex = androidRuntime ? -1 : 1;
+  const lastSetupPageIndex = androidRuntime ? 2 : 3;
+  const visionStep = androidRuntime ? "01" : "02";
+  const embeddingStep = androidRuntime ? "02" : "03";
 
   useEffect(() => {
     return () => {
@@ -154,7 +158,7 @@ function OnboardingGuideDialog({ onDismiss }: { onDismiss: () => void }) {
       enterSetup();
       return;
     }
-    if (pageIndex === 1 && !isStorageReady) return;
+    if (pageIndex === storagePageIndex && !isStorageReady) return;
     if (pageIndex === lastSetupPageIndex) {
       finishOnboarding();
       return;
@@ -188,12 +192,16 @@ function OnboardingGuideDialog({ onDismiss }: { onDismiss: () => void }) {
         <p className="settings-inline-note">{t("languageSwitchWarning")}</p>
       </div>
     </div>,
-    <div className="onboarding-storage-page" key="storage">
-      <p className="onboarding-kicker">01</p>
-      <DataStorageSection onReadyChange={setIsStorageReady} variant="onboarding" />
-    </div>,
+    ...(!androidRuntime
+      ? [
+          <div className="onboarding-storage-page" key="storage">
+            <p className="onboarding-kicker">01</p>
+            <DataStorageSection onReadyChange={setIsStorageReady} variant="onboarding" />
+          </div>,
+        ]
+      : []),
     <div className="onboarding-model-page" key="vision">
-      <p className="onboarding-kicker">02</p>
+      <p className="onboarding-kicker">{visionStep}</p>
       <ModelProfileSection
         credential={imageCredentialKey ? settings?.profileCredentials.imageUnderstanding[imageCredentialKey] : emptyCredential}
         credentialStatus={imageCredentialKey ? statuses.imageUnderstanding[imageCredentialKey] : profileStatus}
@@ -230,7 +238,7 @@ function OnboardingGuideDialog({ onDismiss }: { onDismiss: () => void }) {
       {statusText[profileStatus] ? <div className="local-secret-state"><span>{statusText[profileStatus]}</span></div> : null}
     </div>,
     <div className="onboarding-model-page" key="embedding">
-      <p className="onboarding-kicker">03</p>
+      <p className="onboarding-kicker">{embeddingStep}</p>
       <ModelProfileSection
         credential={embeddingCredentialKey ? settings?.profileCredentials.crossModalEmbedding[embeddingCredentialKey] : emptyCredential}
         credentialStatus={embeddingCredentialKey ? statuses.crossModalEmbedding[embeddingCredentialKey] : profileStatus}
@@ -326,14 +334,14 @@ function OnboardingGuideDialog({ onDismiss }: { onDismiss: () => void }) {
                 <span className="onboarding-icon-button-spacer" />
               )}
               <div className="onboarding-dots" aria-hidden="true">
-                {[0, 1, 2, 3].map((item) => (
+                {pages.map((_page, item) => (
                   <span className={item === pageIndex ? "is-active" : ""} key={item} />
                 ))}
               </div>
               <button
                 aria-label={pageIndex === lastSetupPageIndex ? t("onboardingFinish") : t("onboardingNext")}
                 className="onboarding-icon-button"
-                disabled={isPageClosing || (pageIndex === 1 && !isStorageReady)}
+                disabled={isPageClosing || (pageIndex === storagePageIndex && !isStorageReady)}
                 onClick={goNext}
                 type="button"
               >

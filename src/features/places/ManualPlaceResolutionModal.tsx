@@ -24,6 +24,7 @@ type ManualPlaceResolutionPanelProps = {
   initialMode?: ManualPlaceMode;
   pickedPoint?: { lat: number; lng: number; nearestLabel?: string };
   panelClassName?: string;
+  showCloseButton?: boolean;
   onClose: () => void;
   onPickPoint: (sessionId: string, name: string, nameDirty: boolean) => void;
   onSubmit: (body: ManualPlaceResolutionAction) => void;
@@ -42,6 +43,7 @@ export function ManualPlaceResolutionPanel({
   initialMode,
   pickedPoint,
   panelClassName = "manual-pending-copy",
+  showCloseButton = true,
   onClose,
   onPickPoint,
   onSubmit,
@@ -84,9 +86,11 @@ export function ManualPlaceResolutionPanel({
     <div className={panelClassName}>
       <div className="manual-pending-heading">
         <h3>{title ?? t("manualResolve")}</h3>
-        <button className="manual-pending-close" onClick={onClose} type="button" aria-label={t("closePreview")}>
-          <X size={18} />
-        </button>
+        {showCloseButton ? (
+          <button className="manual-pending-close" onClick={onClose} type="button" aria-label={t("closePreview")}>
+            <X size={18} />
+          </button>
+        ) : null}
       </div>
 
       <div className="manual-pending-tabs">
