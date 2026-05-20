@@ -3,7 +3,7 @@ import path from "node:path";
 import sharp from "sharp";
 import { safeArray } from "../domain/arrays.mjs";
 import { parseExif } from "../domain/exif-parser.mjs";
-import { geoContextFor, inferPreset, isUsableLocation, normalizeLocale } from "../domain/geo.mjs";
+import { geoContextFor, isUsableLocation, normalizeLocale } from "../domain/geo.mjs";
 import { forwardLocalGeocode, reverseLocalGeocode } from "../domain/local-geocoder.mjs";
 import { mergeLocationCandidates, resolveImportedLocation, toAiEvidence } from "../domain/location-resolver.mjs";
 import { isWeakPlaceName } from "../domain/place-name-selector.mjs";
@@ -11,10 +11,9 @@ import { makePhotoTitle } from "../domain/text-normalizer.mjs";
 import { rebuildTrips } from "../domain/trip-rebuilder.mjs";
 import { readMultipartFormDataToDir } from "../http/body.mjs";
 import { extFromName, hashBuffer } from "../storage/file-storage.mjs";
-import { createLimiter, importPipelineConfig, mapConcurrent } from "../../shared/application/import-pipeline.mjs";
+import { importPipelineConfig, mapConcurrent } from "../../shared/application/import-pipeline.mjs";
 import {
   appendMissingInfoPendingIfNeeded as appendMissingInfoPendingIfNeededCore,
-  buildImportStateFromPhotos,
   cancelImportPhotosState,
   confirmImportState,
   mergeImportTripsState,
@@ -31,9 +30,7 @@ import {
   normalizeMissingInfoAiProposal,
 } from "../../shared/import/missing-info-inference-core.mjs";
 import {
-  buildAiFailure,
   buildEmbeddingRebuildReport,
-  buildRetryAiFailure,
   clearAiFailureForPhoto as clearAiFailureForPhotoCore,
   applyEmbeddingFields,
   embeddingRebuildFailure,
@@ -41,8 +38,17 @@ import {
   failureReasonText,
   mergeRebuiltPhotosState,
   patchVectorIndexForEmbedding,
-  pendingReasonFromExif,
 } from "../../shared/import/import-photo-core.mjs";
+import {
+  applyImportAiFailureRetryResultsCore,
+  buildRetryImportAiFailureResultCore,
+  createImportAiStats,
+  recordImportEmbeddingStats,
+  recordImportVisionStats,
+  runImportAiFailuresBatchCore,
+  runInitialImportPipeline,
+  runMissingInferenceBatchCore,
+} from "../../shared/import/import-orchestrator-core.mjs";
 
 export function createImportServices({
   analyzeTravelImage,
@@ -144,208 +150,104 @@ export function createImportServices({
     const locale = normalizeLocale(payload.locale);
     if (files.length === 0) throw new Error("没有收到可导入图片。");
 
-    const batchId = makeId("batch");
-    const imported = [];
-    const duplicateNames = [];
-    const aiStats = {
-      qwenCount: 0,
-      fallbackCount: 0,
-      embeddingCount: 0,
-      qwenEmbeddingCount: 0,
-      deterministicEmbeddingCount: 0,
-    };
-    const knownHashToPhoto = new Map(state.photos.filter((photo) => photo.originalHash).map((photo) => [photo.originalHash, photo]));
-    const knownHashes = new Set(knownHashToPhoto.keys());
-    const duplicatePhotoIds = new Set();
-    let exifDone = 0;
-    let thumbnailDone = 0;
-    let aiDone = 0;
-    let embeddingDone = 0;
-    progress.update?.({ phase: "exif", done: 0, total: files.length });
-    progress.update?.({ phase: "thumbnails", done: 0, total: files.length });
-    progress.update?.({ phase: "ai", done: 0, total: files.length });
-    progress.update?.({ phase: "embedding", done: 0, total: files.length });
-
-    const storageLimit = createLimiter(storageWriteConcurrency);
-    const visionLimit = createLimiter(aiConcurrency);
-    const embeddingLimit = createLimiter(embeddingConcurrency);
-    const downstreamTasks = [];
-    const importedSlots = new Array(files.length);
-    const allowCloud = payload.allowCloudAi !== false;
-
-    const markThumbnailDone = (fileName) => {
-      thumbnailDone += 1;
-      progress.update?.({ phase: "thumbnails", done: thumbnailDone, total: files.length, currentFileName: fileName });
-    };
-    const markAiDone = (fileName) => {
-      aiDone += 1;
-      progress.update?.({ phase: "ai", done: aiDone, total: files.length, currentFileName: fileName });
-    };
-    const markEmbeddingDone = (fileName) => {
-      embeddingDone += 1;
-      progress.update?.({ phase: "embedding", done: embeddingDone, total: files.length, currentFileName: fileName });
-    };
-
-    await mapConcurrent(files, metadataConcurrency, async (file, index) => {
-      const fileName = file.name || `photo-${index + 1}`;
-      progress.update?.({ phase: "exif", done: exifDone, total: files.length, currentFileName: fileName });
-      const parsed = await readImportFile(file);
-      const { fullPath, mime, buffer } = parsed;
-      const ext = extFromName(file.name, mime);
-      const originalHash = hashBuffer(buffer);
-      const exif = parseExif(buffer);
-      exifDone += 1;
-      progress.update?.({ phase: "exif", done: exifDone, total: files.length, currentFileName: fileName });
-
-      if (knownHashes.has(originalHash)) {
-        duplicateNames.push(fileName);
-        const duplicatePhoto = knownHashToPhoto.get(originalHash);
-        if (duplicatePhoto?.id) duplicatePhotoIds.add(duplicatePhoto.id);
-        markThumbnailDone(fileName);
-        if (payload.reanalyzeDuplicates) {
-          const existingPhoto = duplicatePhoto;
-          if (existingPhoto) {
-            const parsedLocation = isUsableLocation(exif.location) ? exif.location : existingPhoto.location;
-            const aiImagePayload = allowCloud ? readAiImagePayloadFromFile(fullPath, mime) : Promise.resolve(undefined);
-            downstreamTasks.push(
-              Promise.all([
-                visionLimit(async () => {
-                  const imagePayload = await aiImagePayload;
-                  const ai = await analyzePhotoVision({
-                    fileName,
-                    mime: imagePayload?.mime ?? mime,
-                    dataUrl: imagePayload?.dataUrl,
-                    preset: inferPreset(fileName, parsedLocation),
-                    location: parsedLocation,
-                    allowCloud,
-                    locale,
-                  });
-                  recordVisionStats(ai, aiStats);
-                  markAiDone(fileName);
-                  return ai;
-                }),
-                embeddingLimit(async () => {
-                  const imagePayload = await aiImagePayload;
-                  const embedding = await embedPhotoImage({ fileName, mime: imagePayload?.mime ?? mime, dataUrl: imagePayload?.dataUrl, allowCloud });
-                  recordEmbeddingStats(embedding, aiStats);
-                  markEmbeddingDone(fileName);
-                  return embedding;
-                }),
-              ]).then(([ai, embedding]) => {
-                const resolvedLocation = existingPhoto.location ?? parsedLocation;
-                const aiEvidenceBase = toAiEvidence(ai, { makeId });
-                const aiEvidence = withBackendLocationCandidates({ location: resolvedLocation, aiEvidence: aiEvidenceBase, locale });
-                existingPhoto.tags = ai.tags;
-                existingPhoto.title = ai.title || makePhotoTitle(existingPhoto);
-                existingPhoto.aiCaption = ai.caption;
-                existingPhoto.ai = aiEvidence;
-                existingPhoto.locationResolution = resolveImportedLocation({
-                  location: resolvedLocation,
-                  aiEvidence,
-                  pendingReason: existingPhoto.pendingReason,
-                });
-                existingPhoto.aiProvider = ai.provider;
-                existingPhoto.aiModel = ai.model;
-                existingPhoto.aiFallbackReason = ai.fallbackReason;
-                existingPhoto.embeddingProvider = embedding.embeddingProvider;
-                existingPhoto.embeddingModel = embedding.embeddingModel;
-                existingPhoto.embeddingSpaceId = embedding.embeddingSpaceId;
-                existingPhoto.embeddingDimension = embedding.embeddingDimension ?? embedding.embedding?.length;
-                existingPhoto.embeddingMode = embedding.embeddingMode;
-                existingPhoto.embeddingFallbackReason = embedding.embeddingFallbackReason;
-                if (parsedLocation && !existingPhoto.location) existingPhoto.location = parsedLocation;
-                if (Array.isArray(embedding.embedding)) vectorIndex[existingPhoto.id] = embedding.embedding;
-                else delete vectorIndex[existingPhoto.id];
-              }),
-            );
-          }
-        } else {
-          markAiDone(fileName);
-          markEmbeddingDone(fileName);
-        }
-        return;
-      }
-
-      knownHashes.add(originalHash);
-      const photoId = makeId("photo");
-      const storageName = `${photoId}${ext}`;
-      const storagePath = path.join(paths.photoDir, storageName);
-      const parsedLocation = isUsableLocation(exif.location) ? exif.location : undefined;
-      const preset = inferPreset(fileName, parsedLocation);
-      const capturedAt =
-        exif.capturedAt ??
-        (file.lastModified ? new Date(file.lastModified).toISOString() : new Date(now.getTime() - (files.length - index) * 86400000).toISOString());
-      const hasExifLocation = Boolean(parsedLocation);
-      const location = parsedLocation;
-      const pendingReason = !location ? "missing_gps" : !exif.capturedAt ? "missing_time" : undefined;
-      const newAiJob = {
-        type: "new",
-        index,
-        photoId,
-        fileName,
-        storageName,
-        thumbName: `${photoId}.jpg`,
-        originalHash,
-        mime,
-        fullPath,
-        preset,
-        location,
-        capturedAt,
-        pendingReason,
-        hasExifLocation,
-        hasExifTime: Boolean(exif.capturedAt),
-      };
-      const aiImagePayload = allowCloud ? readAiImagePayloadFromFile(fullPath, mime) : Promise.resolve(undefined);
-      downstreamTasks.push(
-        Promise.all([
-          storageLimit(async () => {
-            const thumbnail = await createThumbnailFromFile(fullPath, ext);
-            const thumbName = `${photoId}${thumbnail.ext}`;
-            await Promise.all([fs.copyFile(fullPath, storagePath), fs.writeFile(path.join(paths.thumbDir, thumbName), thumbnail.buffer)]);
-            markThumbnailDone(fileName);
-            return thumbName;
-          }),
-          visionLimit(async () => {
-            const imagePayload = await aiImagePayload;
-            const ai = await analyzePhotoVision({
-              fileName,
-              mime: imagePayload?.mime ?? mime,
-              dataUrl: imagePayload?.dataUrl,
-              preset,
-              location,
-              allowCloud,
-              locale,
-            });
-            recordVisionStats(ai, aiStats);
-            markAiDone(fileName);
-            return ai;
-          }),
-          embeddingLimit(async () => {
-            const imagePayload = await aiImagePayload;
-            const embedding = await embedPhotoImage({ fileName, mime: imagePayload?.mime ?? mime, dataUrl: imagePayload?.dataUrl, allowCloud });
-            recordEmbeddingStats(embedding, aiStats);
-            markEmbeddingDone(fileName);
-            return embedding;
-          }),
-        ]).then(([thumbName, ai, embedding]) => {
-          const aiFailure = buildAiFailure(ai, embedding, newAiJob);
-          const photoPendingReason = aiFailure ? "ai_processing_failed" : newAiJob.pendingReason;
+    const result = await runInitialImportPipeline({
+      items: files,
+      state,
+      vectorIndex,
+      now,
+      locale,
+      makeId,
+      allowCloud: payload.allowCloudAi !== false,
+      reanalyzeDuplicates: payload.reanalyzeDuplicates,
+      concurrency: {
+        metadata: metadataConcurrency,
+        storageWrite: storageWriteConcurrency,
+        ai: aiConcurrency,
+        embedding: embeddingConcurrency,
+      },
+      progress,
+      adapter: {
+        initialPhases: ["exif", "thumbnails", "ai", "embedding"],
+        countsPhase: (phase) => phase !== "reading",
+        itemFileName: (file, index) => file.name || `photo-${index + 1}`,
+        createAiStats: createImportAiStats,
+        async prepareItem(file) {
+          const parsed = await readImportFile(file);
+          const { fullPath, mime, buffer } = parsed;
+          const ext = extFromName(file.name, mime);
+          const exif = parseExif(buffer);
+          return {
+            file,
+            fileName: file.name,
+            fullPath,
+            mime,
+            ext,
+            originalHash: hashBuffer(buffer),
+            location: exif.location,
+            capturedAt: exif.capturedAt,
+          };
+        },
+        storageName: (prepared, { photoId }) => `${photoId}${prepared.ext}`,
+        capturedAt: (prepared, { now: importNow, total, index }) =>
+          prepared.capturedAt ??
+          (prepared.file.lastModified ? new Date(prepared.file.lastModified).toISOString() : new Date(importNow.getTime() - (total - index) * 86400000).toISOString()),
+        createAiImagePayload: (prepared) => readAiImagePayloadFromFile(prepared.fullPath, prepared.mime),
+        async storeOriginalAndThumbnail(prepared, job) {
+          const thumbnail = await createThumbnailFromFile(prepared.fullPath, prepared.ext);
+          const thumbName = `${job.photoId}${thumbnail.ext}`;
+          await Promise.all([
+            fs.copyFile(prepared.fullPath, path.join(paths.photoDir, job.storageName)),
+            fs.writeFile(path.join(paths.thumbDir, thumbName), thumbnail.buffer),
+          ]);
+          return { name: thumbName };
+        },
+        thumbnailName: (thumbnail) => thumbnail.name,
+        analyzeVision: (input) => analyzePhotoVision(input),
+        embedImage: (input) => embedPhotoImage(input),
+        recordVisionStats: recordImportVisionStats,
+        recordEmbeddingStats: recordImportEmbeddingStats,
+        withLocationCandidates: ({ location, aiEvidence, locale }) => withBackendLocationCandidates({ location, aiEvidence, locale }),
+        applyDuplicateAnalysis({ duplicatePhoto, parsedLocation, ai, embedding, vectorIndex, makeId, locale }) {
+          const resolvedLocation = duplicatePhoto.location ?? parsedLocation;
           const aiEvidenceBase = toAiEvidence(ai, { makeId });
-          const aiEvidence = withBackendLocationCandidates({ location: newAiJob.location, aiEvidence: aiEvidenceBase, locale });
-          const photo = {
-            id: newAiJob.photoId,
-            fileName: newAiJob.fileName || newAiJob.storageName,
-            title: ai.title || makePhotoTitle({ fileName: newAiJob.fileName || newAiJob.storageName, tags: ai.tags, aiCaption: ai.caption }),
-            originalHash: newAiJob.originalHash,
-            mime: newAiJob.mime,
-            thumbnailUrl: `/data/thumbs/${thumbName}`,
-            storageUrl: `/data/photos/${newAiJob.storageName}`,
-            capturedAt: newAiJob.capturedAt,
-            location: newAiJob.location,
+          const aiEvidence = withBackendLocationCandidates({ location: resolvedLocation, aiEvidence: aiEvidenceBase, locale });
+          duplicatePhoto.tags = ai.tags;
+          duplicatePhoto.title = ai.title || makePhotoTitle(duplicatePhoto);
+          duplicatePhoto.aiCaption = ai.caption;
+          duplicatePhoto.ai = aiEvidence;
+          duplicatePhoto.locationResolution = resolveImportedLocation({
+            location: resolvedLocation,
+            aiEvidence,
+            pendingReason: duplicatePhoto.pendingReason,
+          });
+          duplicatePhoto.aiProvider = ai.provider;
+          duplicatePhoto.aiModel = ai.model;
+          duplicatePhoto.aiFallbackReason = ai.fallbackReason;
+          duplicatePhoto.embeddingProvider = embedding.embeddingProvider;
+          duplicatePhoto.embeddingModel = embedding.embeddingModel;
+          duplicatePhoto.embeddingSpaceId = embedding.embeddingSpaceId;
+          duplicatePhoto.embeddingDimension = embedding.embeddingDimension ?? embedding.embedding?.length;
+          duplicatePhoto.embeddingMode = embedding.embeddingMode;
+          duplicatePhoto.embeddingFallbackReason = embedding.embeddingFallbackReason;
+          if (parsedLocation && !duplicatePhoto.location) duplicatePhoto.location = parsedLocation;
+          if (Array.isArray(embedding.embedding)) vectorIndex[duplicatePhoto.id] = embedding.embedding;
+          else delete vectorIndex[duplicatePhoto.id];
+        },
+        buildNewPhoto({ job, thumbnail, ai, embedding, aiFailure, aiEvidence, photoPendingReason }) {
+          return {
+            id: job.photoId,
+            fileName: job.fileName || job.storageName,
+            title: ai.title || makePhotoTitle({ fileName: job.fileName || job.storageName, tags: ai.tags, aiCaption: ai.caption }),
+            originalHash: job.originalHash,
+            mime: job.mime,
+            thumbnailUrl: `/data/thumbs/${thumbnail.name}`,
+            storageUrl: `/data/photos/${job.storageName}`,
+            capturedAt: job.capturedAt,
+            location: job.location,
             tags: ai.tags,
             aiCaption: ai.caption,
             ai: aiEvidence,
-            locationResolution: resolveImportedLocation({ location: newAiJob.location, aiEvidence, pendingReason: photoPendingReason }),
+            locationResolution: resolveImportedLocation({ location: job.location, aiEvidence, pendingReason: photoPendingReason }),
             aiProvider: ai.provider,
             aiModel: ai.model,
             aiFallbackReason: ai.fallbackReason,
@@ -356,40 +258,23 @@ export function createImportServices({
             embeddingMode: embedding.embeddingMode,
             embeddingFallbackReason: embedding.embeddingFallbackReason,
             aiFailure,
-            importedBatchId: batchId,
+            importedBatchId: job.batchId,
             pendingReason: photoPendingReason,
             exifStatus: {
-              time: newAiJob.hasExifTime ? "read" : "fallback",
-              gps: newAiJob.hasExifLocation ? "read" : "missing",
+              time: job.hasExifTime ? "read" : "fallback",
+              gps: job.hasExifLocation ? "read" : "missing",
             },
           };
-          if (Array.isArray(embedding.embedding)) vectorIndex[photo.id] = embedding.embedding;
-          importedSlots[newAiJob.index] = photo;
+        },
+        buildStateOptions: ({ photos }) => ({
+          storedFileNames: photos.map((photo) => path.basename(photo.storageUrl)),
+          storedThumbnailNames: photos.map((photo) => path.basename(photo.thumbnailUrl)),
+          completeCandidatePoint,
         }),
-      );
+      },
     });
-
-    await Promise.all(downstreamTasks);
-    imported.push(...importedSlots.filter(Boolean));
-
-    progress.update?.({ phase: "grouping", done: files.length, total: files.length });
-    const nextState = buildImportStateFromPhotos(state, {
-      batchId,
-      totalCount: files.length,
-      photos: imported,
-      duplicateCount: duplicateNames.length,
-      duplicatePhotoIds: Array.from(duplicatePhotoIds),
-      duplicateNames,
-      makeId,
-      now,
-      locale,
-      aiStats,
-      storedFileNames: imported.map((photo) => path.basename(photo.storageUrl)),
-      storedThumbnailNames: imported.map((photo) => path.basename(photo.thumbnailUrl)),
-      completeCandidatePoint,
-    });
-    await writeVectorIndex(vectorIndex);
-    await writeState(nextState);
+    await writeVectorIndex(result.vectorIndex);
+    await writeState(result.state);
     progress.update?.({ phase: "completed", done: files.length, total: files.length });
     return responseState();
   }
@@ -1016,37 +901,22 @@ export function createImportServices({
     const locale = normalizeLocale(rawLocale);
     const batch = state.importBatches.find((item) => item.id === batchId);
     if (!batch || batch.status !== "pending_confirmation") return responseState();
-    const requestedIds = new Set(safeArray(pendingIds).map(String));
-    const items = state.pendingItems.filter(
-      (item) =>
-        batch.pendingItemIds.includes(item.id) &&
-        item.status === "open" &&
-        ["missing_gps", "confirm_location_candidate"].includes(item.type) &&
-        requestedIds.has(item.id),
-    );
-    const total = items.length;
-    let done = 0;
-    progress.update?.({ phase: "ai", done, total });
-    const results = await mapConcurrent(items, missingInferenceConcurrency, async (pending) => {
-      const photo = state.photos.find((item) => pending.relatedPhotoIds.includes(item.id));
-      try {
-        const proposal = await buildMissingInfoInferenceProposal(state, batch, pending, { locale });
-        return { pendingId: pending.id, proposal };
-      } catch (error) {
-        return {
-          pendingId: pending.id,
-          proposal: keepPending(error instanceof Error ? error.message : missingInferenceText(locale, "secondInferenceFailed"), 0, locale),
-        };
-      } finally {
-        done += 1;
-        progress.update?.({ phase: "ai", done, total, currentFileName: photo?.fileName });
-      }
+    const result = await runMissingInferenceBatchCore({
+      state,
+      batchId,
+      pendingIds,
+      locale,
+      concurrency: missingInferenceConcurrency,
+      progress,
+      buildProposal: buildMissingInfoInferenceProposal,
+      now: () => new Date().toISOString(),
+      emitCompleted: false,
     });
     const latestState = await readState();
     const latestBatch = latestState.importBatches.find((item) => item.id === batchId);
     if (!latestBatch || latestBatch.status !== "pending_confirmation") return responseState();
-    await writeState(applyMissingInfoProposalResultsState(latestState, batchId, results, { now: () => new Date().toISOString() }));
-    progress.update?.({ phase: "completed", done: total, total });
+    await writeState(applyMissingInfoProposalResultsState(latestState, batchId, result.results ?? [], { now: () => new Date().toISOString() }));
+    progress.update?.({ phase: "completed", done: result.total, total: result.total });
     return responseState();
   }
 
@@ -1101,66 +971,37 @@ export function createImportServices({
     const batch = state.importBatches.find((item) => item.id === batchId);
     if (!batch || batch.status !== "pending_confirmation") return responseState();
     const locale = normalizeLocale(rawLocale);
-    const requestedIds = new Set(safeArray(pendingIds).map(String));
-    const items = state.pendingItems
-      .filter((pending) => pending.status === "open" && pending.type === "ai_processing_failed" && batch.pendingItemIds.includes(pending.id) && requestedIds.has(pending.id))
-      .map((pending) => ({
-        pending,
-        photo: state.photos.find((photo) => pending.relatedPhotoIds?.includes(photo.id)),
-      }))
-      .filter((item) => Boolean(item.photo));
-    const total = items.length;
-    let done = 0;
-    progress.update?.({ phase: "ai", done, total });
-    const results = await mapConcurrent(items, aiConcurrency, async ({ pending, photo }) => {
-      try {
-        const retry = await buildRetryImportAiFailureResult(state, batch, pending, photo, action, { locale });
-        return { pendingId: pending.id, photoId: photo.id, retry };
-      } catch (error) {
-        return { pendingId: pending.id, photoId: photo.id, error: error instanceof Error ? error.message : "AI Vision 重跑失败。" };
-      } finally {
-        done += 1;
-        progress.update?.({ phase: "ai", done, total, currentFileName: photo?.fileName });
-      }
+    const results = await runImportAiFailuresBatchCore({
+      state,
+      vectorIndex: {},
+      batchId,
+      pendingIds,
+      action,
+      locale,
+      concurrency: aiConcurrency,
+      progress,
+      buildRetryResult: buildRetryImportAiFailureResult,
+      appendMissingInfoPendingIfNeeded,
+      makeId,
+      emitCompleted: false,
+      applyState: false,
     });
 
     const latestState = await readState();
     const latestBatch = latestState.importBatches.find((item) => item.id === batchId);
     if (!latestBatch || latestBatch.status !== "pending_confirmation") return responseState();
 
-    let nextState = latestState;
-    const vectorIndex = await readVectorIndex();
-    const affectedTripIds = new Set([...latestBatch.createdTripIds, ...(latestBatch.updatedTripIds ?? [])].filter(Boolean));
-    const resultByPendingId = new Map(results.map((item) => [item.pendingId, item]));
-    nextState = {
-      ...nextState,
-      photos: nextState.photos.map((photo) => {
-        const pending = nextState.pendingItems.find((item) => item.status === "open" && item.type === "ai_processing_failed" && latestBatch.pendingItemIds.includes(item.id) && item.relatedPhotoIds?.includes(photo.id));
-        const result = pending ? resultByPendingId.get(pending.id) : undefined;
-        if (!result?.retry) return photo;
-        if (photo.tripId) affectedTripIds.add(photo.tripId);
-        if (result.retry.retryEmbedding && Array.isArray(result.retry.embedding.embedding)) vectorIndex[photo.id] = result.retry.embedding.embedding;
-        else if (result.retry.retryEmbedding) delete vectorIndex[photo.id];
-        return result.retry.patchedPhoto;
-      }),
-      pendingItems: nextState.pendingItems.map((pending) => {
-        const result = resultByPendingId.get(pending.id);
-        if (!result || !latestBatch.pendingItemIds.includes(pending.id) || pending.status !== "open" || pending.type !== "ai_processing_failed") return pending;
-        if (result.error) return { ...pending, reason: result.error, suggestion: "初次导入 AI 重跑失败，需要重新选择处理方式。" };
-        if (!result.retry) return pending;
-        return result.retry.failed
-          ? { ...pending, reason: failureReasonText(result.retry.patchedPhoto), suggestion: `${result.retry.patchedPhoto.title ?? result.retry.patchedPhoto.fileName} 初次导入 AI 仍处理失败，需要重新选择处理方式。` }
-          : { ...pending, status: "accepted" };
-      }),
-    };
-    await writeVectorIndex(vectorIndex);
-    for (const result of results) {
-      if (!result.retry || result.retry.failed) continue;
-      const currentBatch = nextState.importBatches.find((item) => item.id === batchId) ?? latestBatch;
-      nextState = appendMissingInfoPendingIfNeeded(nextState, currentBatch, result.retry.patchedPhoto);
-    }
-    await writeState(rebuildTrips(nextState, affectedTripIds, { makeId, allowExistingPlaceMerge: true }));
-    progress.update?.({ phase: "completed", done: total, total });
+    const latestResult = applyImportAiFailureRetryResultsCore({
+      state: latestState,
+      vectorIndex: await readVectorIndex(),
+      batchId,
+      results: results.results ?? [],
+      appendMissingInfoPendingIfNeeded,
+      makeId,
+    });
+    await writeVectorIndex(latestResult.vectorIndex);
+    await writeState(latestResult.state);
+    progress.update?.({ phase: "completed", done: results.total, total: results.total });
     return responseState();
   }
 
@@ -1184,80 +1025,16 @@ export function createImportServices({
   }
 
   async function buildRetryImportAiFailureResult(state, batch, pending, photo, action, { locale = "zh" } = {}) {
-    const imagePayload = await readPhotoImagePayload(photo);
-    if (!imagePayload) throw new Error("找不到原图，无法重跑初次导入 AI。");
-    const retryVision = action === "retry_vision" || action === "retry_both";
-    const retryEmbedding = action === "retry_embedding" || action === "retry_both";
-    let ai = photo.ai
-      ? {
-          provider: photo.aiProvider ?? photo.ai.provider,
-          promptId: photo.ai.promptId,
-          promptVersion: photo.ai.promptVersion,
-          model: photo.aiModel ?? photo.ai.model,
-          title: photo.title,
-          tags: photo.tags ?? [],
-          caption: photo.aiCaption,
-          visiblePlaceNames: photo.ai.visiblePlaceNames ?? [],
-          locationCandidates: photo.ai.locationCandidates ?? [],
-          uncertainties: photo.ai.uncertainties ?? [],
-          fallbackReason: photo.aiFallbackReason,
-        }
-      : undefined;
-    let embedding = {
-      embedding: undefined,
-      embeddingProvider: photo.embeddingProvider,
-      embeddingModel: photo.embeddingModel,
-      embeddingSpaceId: photo.embeddingSpaceId,
-      embeddingDimension: photo.embeddingDimension,
-      embeddingMode: photo.embeddingMode,
-      embeddingFallbackReason: photo.embeddingFallbackReason,
-    };
-    if (retryVision) {
-      ai = await analyzePhotoVision({
-        fileName: photo.fileName,
-        mime: imagePayload.mime,
-        dataUrl: imagePayload.dataUrl,
-        preset: inferPreset(photo.fileName, photo.location),
-        location: photo.location,
-        allowCloud: true,
-        locale,
-      });
-    }
-    if (!ai) throw new Error("照片缺少可用的初次导入分析结果。");
-    if (retryEmbedding) {
-      embedding = await embedPhotoImage({
-        fileName: photo.fileName,
-        mime: imagePayload.mime,
-        dataUrl: imagePayload.dataUrl,
-        allowCloud: true,
-      });
-    }
-
-    const nextFailure = buildRetryAiFailure(photo, { retryVision, retryEmbedding, ai, embedding });
-    const failed = Boolean(nextFailure);
-    const aiEvidenceBase = toAiEvidence(ai, { makeId });
-    const aiEvidence = withBackendLocationCandidates({ location: photo.location, aiEvidence: aiEvidenceBase, locale });
-    const patchedPhoto = {
-      ...photo,
-      title: ai.title || makePhotoTitle({ fileName: photo.fileName, tags: ai.tags, aiCaption: ai.caption }),
-      tags: ai.tags,
-      aiCaption: ai.caption,
-      ai: aiEvidence,
-      locationResolution: resolveImportedLocation({ location: photo.location, aiEvidence, pendingReason: failed ? "ai_processing_failed" : pendingReasonFromExif(photo) }),
-      aiProvider: ai.provider,
-      aiModel: ai.model,
-      aiFallbackReason: ai.fallbackReason,
-      embeddingProvider: retryEmbedding ? embedding.embeddingProvider : photo.embeddingProvider,
-      embeddingModel: retryEmbedding ? embedding.embeddingModel : photo.embeddingModel,
-      embeddingSpaceId: retryEmbedding ? embedding.embeddingSpaceId : photo.embeddingSpaceId,
-      embeddingDimension: retryEmbedding ? embedding.embeddingDimension ?? embedding.embedding?.length : photo.embeddingDimension,
-      embeddingMode: retryEmbedding ? embedding.embeddingMode : photo.embeddingMode,
-      embeddingFallbackReason: retryEmbedding ? embedding.embeddingFallbackReason : photo.embeddingFallbackReason,
-      aiFailure: failed ? nextFailure : undefined,
-      pendingReason: failed ? "ai_processing_failed" : pendingReasonFromExif(photo),
-    };
-
-    return { patchedPhoto, embedding, failed, retryEmbedding };
+    return buildRetryImportAiFailureResultCore({
+      photo,
+      action,
+      locale,
+      makeId,
+      readPhotoImagePayload,
+      analyzeVision: analyzePhotoVision,
+      embedImage: embedPhotoImage,
+      withLocationCandidates: ({ location, aiEvidence, locale }) => withBackendLocationCandidates({ location, aiEvidence, locale }),
+    });
   }
 
   async function retryImportAiFailure(state, batch, pending, photo, action, { locale = "zh" } = {}) {
@@ -1349,17 +1126,6 @@ export function createImportServices({
       dataUrl,
       allowCloud,
     });
-  }
-
-  function recordVisionStats(ai, aiStats) {
-    if (ai.provider === "qwen" || ai.provider === "aliyun") aiStats.qwenCount += 1;
-    else aiStats.fallbackCount += 1;
-  }
-
-  function recordEmbeddingStats(ai, aiStats) {
-    if (Array.isArray(ai.embedding) && ai.embedding.length > 0) aiStats.embeddingCount += 1;
-    if (ai.embeddingProvider === "qwen" || ai.embeddingProvider === "aliyun") aiStats.qwenEmbeddingCount += 1;
-    else if (ai.embeddingMode !== "cross_modal") aiStats.deterministicEmbeddingCount += 1;
   }
 
   async function buildMissingInfoInferenceProposal(state, batch, pending, { locale = "zh" } = {}) {

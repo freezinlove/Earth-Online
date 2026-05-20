@@ -10,8 +10,8 @@ The JSON must follow this structure. Do not add extra fields:
   "caption": "A natural travel diary sentence",
   "locationCandidate": {
     "name": "Place name",
-    "country": "Country name, optional",
-    "city": "City name, optional",
+    "country": "Country name",
+    "city": "City name",
     "confidence": 0.0
   }
 }

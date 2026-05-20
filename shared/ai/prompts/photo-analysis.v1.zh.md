@@ -10,8 +10,8 @@
   "caption": "24-54 个中文字符的旅行日记短句",
   "locationCandidate": {
     "name": "地点名",
-    "country": "英文或当地拉丁字母国家名，可省略",
-    "city": "英文或当地拉丁字母城市名，可省略",
+    "country": "英文国家名",
+    "city": "英文城市名",
     "confidence": 0.0
   }
 }

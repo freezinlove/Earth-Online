@@ -40,8 +40,8 @@ The output structure must be exactly one of the following three forms:
     "type": "new_place",
     "locationCandidate": {
       "name": "Place name",
-      "country": "Country name, optional",
-      "city": "City name, optional",
+      "country": "Country name",
+      "city": "City name",
       "confidence": 0.0
     }
   },
@@ -54,8 +54,8 @@ The output structure must be exactly one of the following three forms:
     "caption": "A natural travel diary sentence",
     "locationCandidate": {
       "name": "Place name",
-      "country": "Country name, optional",
-      "city": "City name, optional",
+      "country": "Country name",
+      "city": "City name",
       "confidence": 0.0
     }
   }
