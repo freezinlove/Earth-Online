@@ -64,6 +64,8 @@ type InferFeedback = {
   message: string;
 };
 
+type BulkAiFailureAction = "retry_vision" | "retry_embedding";
+
 const previewExitMs = 180;
 
 function unplacedPreviewKey(tripId: string, photos: Photo[]) {
@@ -878,6 +880,8 @@ function AiFailureSuggestions({
   onManual,
   onOpenPreview,
   onReject,
+  bulkAction,
+  onResolveAllEmbedding,
   onResolveAllVision,
   onResolve,
   onSelectPhoto,
@@ -891,6 +895,8 @@ function AiFailureSuggestions({
   onManual: (item?: PendingItem) => void;
   onOpenPreview: (photo: Photo) => void;
   onReject: (photoIds: string[]) => void;
+  bulkAction?: BulkAiFailureAction;
+  onResolveAllEmbedding: (items: PendingItem[]) => void;
   onResolveAllVision: (items: PendingItem[]) => void;
   onResolve: (item: PendingItem | undefined, action: "retry_vision" | "retry_embedding" | "retry_both" | "archive_exif") => void;
   onSelectPhoto: (photoId: string) => void;
@@ -907,13 +913,25 @@ function AiFailureSuggestions({
         .map((item) => [item.id, item]),
     ).values(),
   );
-  const bulkTotal = bulkProgress?.steps?.ai?.total ?? bulkProgress?.total ?? retryableVisionItems.length;
+  const retryableEmbeddingItems = Array.from(
+    new Map(
+      failures
+        .filter((failure) => failure.photo.aiFailure?.embedding)
+        .map((failure) => failure.pending)
+        .filter((item): item is PendingItem => Boolean(item))
+        .map((item) => [item.id, item]),
+    ).values(),
+  );
+  const activeRetryableItems = bulkAction === "retry_embedding" ? retryableEmbeddingItems : retryableVisionItems;
+  const bulkLabel = bulkAction === "retry_embedding" ? t("retryEmbedding") : t("retryAiVision");
+  const bulkIcon = bulkAction === "retry_embedding" ? Circle : Sparkles;
+  const bulkTotal = bulkProgress?.steps?.ai?.total ?? bulkProgress?.total ?? activeRetryableItems.length;
   const bulkDone = bulkProgress?.steps?.ai?.done ?? bulkProgress?.done ?? 0;
   const bulkStep: ImportStep = {
-    icon: Sparkles,
-    label: t("retryAiVision"),
+    icon: bulkIcon,
+    label: bulkLabel,
     done: isBulkResolving ? bulkDone : 0,
-    total: Math.max(bulkTotal, retryableVisionItems.length, 1),
+    total: Math.max(bulkTotal, activeRetryableItems.length, 1),
     active: isBulkResolving,
   };
 
@@ -935,10 +953,19 @@ function AiFailureSuggestions({
             type="button"
             data-tooltip={t("retryAiVision")}
           >
-            {isBulkResolving ? <LoaderCircle className="animate-spin" size={14} /> : <Sparkles size={14} />}
+            {isBulkResolving && bulkAction === "retry_vision" ? <LoaderCircle className="animate-spin" size={14} /> : <Sparkles size={14} />}
+          </button>
+          <button
+            onClick={() => onResolveAllEmbedding(retryableEmbeddingItems)}
+            disabled={!retryableEmbeddingItems.length || isBulkResolving}
+            aria-label={t("retryEmbedding")}
+            type="button"
+            data-tooltip={t("retryEmbedding")}
+          >
+            {isBulkResolving && bulkAction === "retry_embedding" ? <LoaderCircle className="animate-spin" size={14} /> : <Circle size={14} />}
           </button>
         </div>
-        <div className="import-progress-stack import-progress-stack-inline" aria-label={t("retryAiVision")}>
+        <div className="import-progress-stack import-progress-stack-inline" aria-label={bulkLabel}>
           <ProgressLine step={bulkStep} showIcon={false} />
         </div>
       </div>
@@ -1030,6 +1057,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
   const [bulkInferProgress, setBulkInferProgress] = useState<ImportJobProgress>();
   const [isBulkInferring, setIsBulkInferring] = useState(false);
   const [bulkAiFailureProgress, setBulkAiFailureProgress] = useState<ImportJobProgress>();
+  const [bulkAiFailureAction, setBulkAiFailureAction] = useState<BulkAiFailureAction>();
   const [isBulkResolvingAiFailures, setIsBulkResolvingAiFailures] = useState(false);
   const [lockedMissingOrderIds, setLockedMissingOrderIds] = useState<string[]>();
   const [previewPhoto, setPreviewPhoto] = useState<Photo>();
@@ -1274,10 +1302,11 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
     }
   };
 
-  const resolveAllAiVisionFailures = async (items: PendingItem[]) => {
+  const resolveAllAiFailures = async (items: PendingItem[], action: BulkAiFailureAction) => {
     const ids = items.map((item) => item.id);
     if (!ids.length || isBulkResolvingAiFailures) return;
     setIsBulkResolvingAiFailures(true);
+    setBulkAiFailureAction(action);
     setBulkAiFailureProgress({ phase: "queued", done: 0, total: ids.length, steps: { ai: { done: 0, total: ids.length } } });
     setAcceptingIds((current) => {
       const next = new Set(current);
@@ -1285,7 +1314,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
       return next;
     });
     try {
-      await resolveImportAiFailures(ids, "retry_vision", (progress) => {
+      await resolveImportAiFailures(ids, action, (progress) => {
         setBulkAiFailureProgress(progress);
       });
     } catch (error) {
@@ -1297,6 +1326,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
       });
     } finally {
       setIsBulkResolvingAiFailures(false);
+      setBulkAiFailureAction(undefined);
       setBulkAiFailureProgress(undefined);
       setAcceptingIds((current) => {
         const next = new Set(current);
@@ -1305,6 +1335,10 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
       });
     }
   };
+
+  const resolveAllAiVisionFailures = async (items: PendingItem[]) => resolveAllAiFailures(items, "retry_vision");
+
+  const resolveAllAiEmbeddingFailures = async (items: PendingItem[]) => resolveAllAiFailures(items, "retry_embedding");
 
   const confirmBatch = async () => {
     if (!canConfirm) return;
@@ -1422,6 +1456,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
             acceptingIds={acceptingIds}
             isBulkResolving={isBulkResolvingAiFailures}
             selectedPhotoId={selectedPhotoId}
+            bulkAction={bulkAiFailureAction}
             onManual={(item) => {
               setManualPending(item);
               if (item) {
@@ -1431,6 +1466,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
             }}
             onOpenPreview={openPhotoPreview}
             onReject={(photoIds) => void cancelPendingImportPhotos(photoIds)}
+            onResolveAllEmbedding={(items) => void resolveAllAiEmbeddingFailures(items)}
             onResolveAllVision={(items) => void resolveAllAiVisionFailures(items)}
             onResolve={(item, action) => void resolveAiFailure(item, action)}
             onSelectPhoto={setSelectedPhotoId}
