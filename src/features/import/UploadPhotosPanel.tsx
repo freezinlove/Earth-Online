@@ -66,6 +66,10 @@ type InferFeedback = {
 
 const previewExitMs = 180;
 
+function unplacedPreviewKey(tripId: string, photos: Photo[]) {
+  return `unplaced:${tripId}:${photos.map((photo) => photo.id).sort().join(",")}`;
+}
+
 function isPendingBatch(batch?: ImportBatch) {
   return batch?.status === "pending_confirmation";
 }
@@ -286,7 +290,8 @@ function buildTripPreview({
             photos: placePhotos,
             timeLabel: compactTimeLabel(place.timeRange.start, place.timeRange.end) ?? t("timeMissing"),
           };
-        });
+        })
+        .filter((place) => place.photos.length > 0);
       const placedPhotoIds = new Set(places.flatMap((place) => place.photos.map((photo) => photo.id)));
       const unplacedPhotos = tripPhotos.filter((photo) => !placedPhotoIds.has(photo.id));
 
@@ -478,16 +483,57 @@ function ReviewTree({
   const [editingTripId, setEditingTripId] = useState<string>();
   const [tripTitleDraft, setTripTitleDraft] = useState("");
   const [editingPlaceId, setEditingPlaceId] = useState<string>();
+  const [editingUnplacedKey, setEditingUnplacedKey] = useState<string>();
   const [placeNameDraft, setPlaceNameDraft] = useState("");
+  const [unplacedLabels, setUnplacedLabels] = useState<Record<string, string>>({});
   const [draggingPhotoId, setDraggingPhotoId] = useState<string>();
   const [droppingPlaceId, setDroppingPlaceId] = useState<string>();
   const dragPreviewRef = useRef<HTMLElement | null>(null);
-  if (!previews.length) return null;
 
-  const clearDragPreview = () => {
+  const visibleTripIds = useMemo(() => new Set(previews.map((preview) => preview.trip.id)), [previews]);
+  const visiblePlaceIds = useMemo(
+    () => new Set(previews.flatMap((preview) => preview.places.map((place) => place.place?.id).filter((id): id is string => Boolean(id)))),
+    [previews],
+  );
+  const visiblePhotoIds = useMemo(
+    () => new Set(previews.flatMap((preview) => preview.places.flatMap((place) => place.photos.map((photo) => photo.id)))),
+    [previews],
+  );
+  const visibleUnplacedKeys = useMemo(
+    () => new Set(previews.flatMap((preview) => preview.places.filter((place) => !place.place).map((place) => unplacedPreviewKey(preview.trip.id, place.photos)))),
+    [previews],
+  );
+
+  const clearDragPreview = useCallback(() => {
     dragPreviewRef.current?.remove();
     dragPreviewRef.current = null;
-  };
+  }, []);
+
+  useEffect(() => {
+    if (editingTripId && !visibleTripIds.has(editingTripId)) {
+      setEditingTripId(undefined);
+      setTripTitleDraft("");
+    }
+    if (editingPlaceId && !visiblePlaceIds.has(editingPlaceId)) {
+      setEditingPlaceId(undefined);
+      setPlaceNameDraft("");
+    }
+    if (editingUnplacedKey && !visibleUnplacedKeys.has(editingUnplacedKey)) {
+      setEditingUnplacedKey(undefined);
+      setPlaceNameDraft("");
+    }
+    if (droppingPlaceId && !visiblePlaceIds.has(droppingPlaceId)) setDroppingPlaceId(undefined);
+    if (draggingPhotoId && !visiblePhotoIds.has(draggingPhotoId)) {
+      setDraggingPhotoId(undefined);
+      clearDragPreview();
+    }
+    setUnplacedLabels((labels) => {
+      const next = Object.fromEntries(Object.entries(labels).filter(([key]) => visibleUnplacedKeys.has(key)));
+      return Object.keys(next).length === Object.keys(labels).length ? labels : next;
+    });
+  }, [clearDragPreview, draggingPhotoId, droppingPlaceId, editingPlaceId, editingTripId, editingUnplacedKey, visiblePhotoIds, visiblePlaceIds, visibleTripIds, visibleUnplacedKeys]);
+
+  if (!previews.length) return null;
 
   const setPhotoDragPreview = (event: DragEvent<HTMLSpanElement>) => {
     clearDragPreview();
@@ -501,16 +547,33 @@ function ReviewTree({
     event.dataTransfer.setDragImage(preview, preview.offsetWidth / 2, preview.offsetHeight / 2);
   };
 
-  const submitPlaceName = async (place?: PlaceNode) => {
+  const submitPlaceName = async (place?: PlaceNode, currentLabel = "") => {
     const name = placeNameDraft.trim();
     setEditingPlaceId(undefined);
-    if (!place || !name || name === placeLabel(place)) return;
+    setPlaceNameDraft("");
+    if (!place || !name || name === currentLabel) return;
     await onRenamePlace(place.id, name);
+  };
+
+  const submitUnplacedName = (key: string, currentLabel: string) => {
+    const name = placeNameDraft.trim();
+    setEditingUnplacedKey(undefined);
+    setPlaceNameDraft("");
+    setUnplacedLabels((labels) => {
+      const next = { ...labels };
+      if (!name || name === currentLabel) {
+        delete next[key];
+      } else {
+        next[key] = name;
+      }
+      return next;
+    });
   };
 
   const submitTripTitle = async (trip?: Trip) => {
     const title = tripTitleDraft.trim();
     setEditingTripId(undefined);
+    setTripTitleDraft("");
     if (!trip || !title || title === tripLabel(trip)) return;
     await onRenameTrip(trip.id, title);
   };
@@ -561,100 +624,116 @@ function ReviewTree({
             <em>{preview.isNew ? t("newTrip") : t("existingTrip")}</em>
           </div>
           <div className="import-place-branch">
-            {preview.places.map((placePreview) => (
-              <div
-                key={placePreview.place?.id ?? `${preview.trip.id}-${placePreview.label}`}
-                className="import-place-node"
-                data-new={placePreview.isNew || undefined}
-                data-drop-target={droppingPlaceId === placePreview.place?.id || undefined}
-                onDragEnter={(event) => {
-                  if (!canEdit || !placePreview.place || !draggingPhotoId || placePreview.photos.some((photo) => photo.id === draggingPhotoId)) return;
-                  event.preventDefault();
-                  setDroppingPlaceId(placePreview.place.id);
-                }}
-                onDragOver={(event) => {
-                  if (!canEdit || !placePreview.place || !draggingPhotoId || placePreview.photos.some((photo) => photo.id === draggingPhotoId)) return;
-                  event.preventDefault();
-                  event.dataTransfer.dropEffect = "move";
-                }}
-                onDragLeave={(event) => {
-                  if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
-                  setDroppingPlaceId((current) => (current === placePreview.place?.id ? undefined : current));
-                }}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  const photoId = event.dataTransfer.getData("application/x-earth-online-photo-id") || draggingPhotoId;
-                  setDroppingPlaceId(undefined);
-                  setDraggingPhotoId(undefined);
-                  if (!canEdit || !placePreview.place || !photoId || placePreview.photos.some((photo) => photo.id === photoId)) return;
-                  void onMovePhoto(photoId, placePreview.place.id);
-                }}
-              >
-                <div className="import-node-label">
-                  {placePreview.isNew ? <Circle size={10} /> : <span className="import-solid-dot import-solid-dot-small" />}
-                  <MapPin size={14} />
-                  {editingPlaceId === placePreview.place?.id ? (
-                    <input
-                      className="import-place-name-input"
-                      autoFocus
-                      value={placeNameDraft}
-                      onBlur={() => void submitPlaceName(placePreview.place)}
-                      onChange={(event) => setPlaceNameDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          event.currentTarget.blur();
-                        }
-                        if (event.key === "Escape") {
-                          setEditingPlaceId(undefined);
-                          setPlaceNameDraft("");
-                        }
-                      }}
-                    />
-                  ) : (
-                    <span>{placePreview.label}</span>
-                  )}
-                  {canEdit && placePreview.place ? (
-                    <button
-                      className="import-place-rename"
-                      type="button"
-                      aria-label={t("editPlaceName")}
-                      title={t("editPlaceName")}
-                      onClick={() => {
-                        setEditingPlaceId(placePreview.place?.id);
-                        setPlaceNameDraft(placePreview.label);
-                      }}
-                    >
-                      <PencilLine size={12} />
-                    </button>
-                  ) : null}
-                  <em>{placePreview.isNew ? t("newPlace") : t("merge")}</em>
-                  <time>{placePreview.timeLabel}</time>
-                </div>
-                <PhotoStrip
-                  photos={placePreview.photos}
-                  draggable={canEdit}
-                  draggingPhotoId={draggingPhotoId}
-                  selectedPhotoId={selectedPhotoId}
-                  onDragEnd={() => {
-                    setDraggingPhotoId(undefined);
+            {preview.places.map((placePreview) => {
+              const placeId = placePreview.place?.id;
+              const placeKey = placeId ?? unplacedPreviewKey(preview.trip.id, placePreview.photos);
+              const label = placeId ? placePreview.label : unplacedLabels[placeKey] ?? placePreview.label;
+              const isEditingPlace = Boolean(placeId && editingPlaceId === placeId);
+              const isEditingUnplaced = !placeId && editingUnplacedKey === placeKey;
+              return (
+                <div
+                  key={placeKey}
+                  className="import-place-node"
+                  data-new={placePreview.isNew || undefined}
+                  data-drop-target={(placeId && droppingPlaceId === placeId) || undefined}
+                  onDragEnter={(event) => {
+                    if (!canEdit || !placeId || !draggingPhotoId || placePreview.photos.some((photo) => photo.id === draggingPhotoId)) return;
+                    event.preventDefault();
+                    setDroppingPlaceId(placeId);
+                  }}
+                  onDragOver={(event) => {
+                    if (!canEdit || !placeId || !draggingPhotoId || placePreview.photos.some((photo) => photo.id === draggingPhotoId)) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                  }}
+                  onDragLeave={(event) => {
+                    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+                    if (placeId) setDroppingPlaceId((current) => (current === placeId ? undefined : current));
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const photoId = event.dataTransfer.getData("application/x-earth-online-photo-id") || draggingPhotoId;
                     setDroppingPlaceId(undefined);
-                    clearDragPreview();
+                    setDraggingPhotoId(undefined);
+                    if (!canEdit || !placeId || !photoId || placePreview.photos.some((photo) => photo.id === photoId)) return;
+                    void onMovePhoto(photoId, placeId);
                   }}
-                  onDragStart={(photo, event) => {
-                    setDraggingPhotoId(photo.id);
-                    event.dataTransfer.effectAllowed = "move";
-                    event.dataTransfer.setData("application/x-earth-online-photo-id", photo.id);
-                    event.dataTransfer.setData("text/plain", photo.fileName);
-                    setPhotoDragPreview(event);
-                  }}
-                  onOpenPreview={onOpenPreview}
-                  onRemovePhoto={onRemovePhoto}
-                  onSelect={onSelectPhoto}
-                  t={t}
-                />
-              </div>
-            ))}
+                >
+                  <div className="import-node-label">
+                    {placePreview.isNew ? <Circle size={10} /> : <span className="import-solid-dot import-solid-dot-small" />}
+                    <MapPin size={14} />
+                    {isEditingPlace || isEditingUnplaced ? (
+                      <input
+                        className="import-place-name-input"
+                        autoFocus
+                        value={placeNameDraft}
+                        onBlur={() => {
+                          if (isEditingPlace) void submitPlaceName(placePreview.place, label);
+                          if (isEditingUnplaced) submitUnplacedName(placeKey, placePreview.label);
+                        }}
+                        onChange={(event) => setPlaceNameDraft(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            event.currentTarget.blur();
+                          }
+                          if (event.key === "Escape") {
+                            setEditingPlaceId(undefined);
+                            setEditingUnplacedKey(undefined);
+                            setPlaceNameDraft("");
+                          }
+                        }}
+                      />
+                    ) : (
+                      <span>{label}</span>
+                    )}
+                    {canEdit && (placePreview.place || placePreview.photos.length > 0) ? (
+                      <button
+                        className="import-place-rename"
+                        type="button"
+                        aria-label={t("editPlaceName")}
+                        title={t("editPlaceName")}
+                        onClick={() => {
+                          if (placePreview.place) {
+                            setEditingPlaceId(placeId);
+                            setPlaceNameDraft(label);
+                            return;
+                          }
+                          setEditingUnplacedKey(placeKey);
+                          setPlaceNameDraft(label);
+                        }}
+                      >
+                        <PencilLine size={12} />
+                      </button>
+                    ) : null}
+                    <em>{placePreview.isNew ? t("newPlace") : t("merge")}</em>
+                    <time>{placePreview.timeLabel}</time>
+                  </div>
+                  <PhotoStrip
+                    photos={placePreview.photos}
+                    draggable={canEdit}
+                    draggingPhotoId={draggingPhotoId}
+                    selectedPhotoId={selectedPhotoId}
+                    onDragEnd={() => {
+                      setDraggingPhotoId(undefined);
+                      setDroppingPlaceId(undefined);
+                      clearDragPreview();
+                    }}
+                    onDragStart={(photo, event) => {
+                      setDraggingPhotoId(photo.id);
+                      event.dataTransfer.effectAllowed = "move";
+                      event.dataTransfer.setData("application/x-earth-online-photo-id", photo.id);
+                      event.dataTransfer.setData("text/plain", photo.fileName);
+                      setPhotoDragPreview(event);
+                    }}
+                    onOpenPreview={onOpenPreview}
+                    onRemovePhoto={onRemovePhoto}
+                    onSelect={onSelectPhoto}
+                    t={t}
+                  />
+                </div>
+              );
+            })}
           </div>
         </div>
         );
