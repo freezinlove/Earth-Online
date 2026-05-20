@@ -1,6 +1,7 @@
 import { multiCityCountryLabel } from "../domain/country-normalizer.mjs";
 import { toDateInput } from "../domain/dates.mjs";
 import { inferPreset, localizedGeoHint, normalizeLocale } from "../domain/geo.mjs";
+import { hasAiProcessingFailure, hasMissingImportInfo } from "../domain/photo-status.mjs";
 import { buildPlacesForGroup } from "../domain/place-projector.mjs";
 import { buildPhotoRoute } from "../domain/route-projector.mjs";
 import { dominantPresetsForPhotos, findAdjacentTrip, groupImportedPhotos } from "../domain/trip-resolver.mjs";
@@ -15,15 +16,9 @@ function importTripMultiCityLabel(countries = [], locale = "zh") {
   return multiCityCountryLabel(countries, locale);
 }
 
-function hasAiProcessingFailure(photo) {
-  return Boolean(photo.aiFailure?.vision || photo.aiFailure?.embedding || photo.pendingReason === "ai_processing_failed");
-}
+export { hasAiProcessingFailure, hasMissingImportInfo };
 
-function hasMissingImportInfo(photo) {
-  return photo.pendingReason === "missing_gps" || photo.pendingReason === "missing_time" || photo.exifStatus?.gps === "missing" || photo.exifStatus?.time !== "read";
-}
-
-function addLocationPendingItems(imported, pendingItems, { makeId, completeCandidatePoint = (candidate) => candidate } = {}) {
+export function addLocationPendingItems(imported, pendingItems, { makeId, completeCandidatePoint = (candidate) => candidate } = {}) {
   const suggestedLocations = imported.filter((photo) => !hasAiProcessingFailure(photo) && photo.locationResolution?.status === "suggested" && photo.locationResolution.candidateId);
   for (const photo of suggestedLocations) {
     const candidate = completeCandidatePoint(photo.locationResolution.candidates.find((item) => item.id === photo.locationResolution.candidateId));
@@ -46,7 +41,7 @@ function addLocationPendingItems(imported, pendingItems, { makeId, completeCandi
   }
 }
 
-function addMissingInfoPendingItems(imported, pendingItems, { makeId } = {}) {
+export function addMissingInfoPendingItems(imported, pendingItems, { makeId } = {}) {
   for (const photo of imported.filter((item) => hasMissingImportInfo(item) && !hasAiProcessingFailure(item))) {
     const missingGps = photo.exifStatus?.gps === "missing" || photo.pendingReason === "missing_gps";
     const missingTime = photo.exifStatus?.time !== "read";
@@ -62,7 +57,7 @@ function addMissingInfoPendingItems(imported, pendingItems, { makeId } = {}) {
   }
 }
 
-function addAiFailurePendingItems(imported, pendingItems, { makeId } = {}) {
+export function addAiFailurePendingItems(imported, pendingItems, { makeId } = {}) {
   for (const photo of imported.filter(hasAiProcessingFailure)) {
     const failedParts = [photo.aiFailure?.vision ? "AI Vision" : undefined, photo.aiFailure?.embedding ? "Embedding" : undefined].filter(Boolean).join(" / ");
     const gpsLabel = photo.aiFailure?.hasRealExifGps ? "真实GPS" : "无GPS";
@@ -95,6 +90,7 @@ export function buildImportStateFromPhotos(
     duplicateCount = 0,
     duplicatePhotoIds = [],
     duplicateNames = [],
+    batchId,
     makeId,
     now = new Date(),
     locale = "zh",
@@ -105,7 +101,7 @@ export function buildImportStateFromPhotos(
   } = {},
 ) {
   if (typeof makeId !== "function") throw new TypeError("buildImportStateFromPhotos requires makeId");
-  const batchId = makeId("batch");
+  const resolvedBatchId = batchId ?? makeId("batch");
   const imported = photos.slice();
   const groups = imported.length ? groupImportedPhotos(imported) : [];
   const createdTrips = [];
@@ -226,7 +222,7 @@ export function buildImportStateFromPhotos(
   }
 
   const batch = {
-    id: batchId,
+    id: resolvedBatchId,
     importedAt: now.toISOString(),
     totalCount,
     successCount: imported.length - missing.length - aiFailures.length,
@@ -248,10 +244,14 @@ export function buildImportStateFromPhotos(
       qwenEmbeddingCount: 0,
       deterministicEmbeddingCount: 0,
     },
-    summary:
-      imported.length > 0
-        ? `新增 ${imported.length} 张照片，跳过 ${duplicateCount} 张重复照片，创建 ${createdTrips.length} 个待确认旅行档案，${missing.length} 张需要补充时间或地点，${aiFailures.length} 张 AI 初次处理失败。`
-        : `没有新增照片，已跳过 ${duplicateCount} 张重复照片。`,
+    summary: importSummary({
+      importedCount: imported.length,
+      duplicateCount,
+      createdTripCount: createdTrips.length,
+      missingCount: missing.length,
+      aiFailureCount: aiFailures.length,
+      reanalyzedCount: Number(aiStats?.qwenCount ?? 0) + Number(aiStats?.fallbackCount ?? 0),
+    }),
   };
 
   return {
@@ -262,4 +262,13 @@ export function buildImportStateFromPhotos(
     importBatches: [...state.importBatches, batch],
     pendingItems: [...state.pendingItems, ...pendingItems],
   };
+}
+
+function importSummary({ importedCount, duplicateCount, createdTripCount, missingCount, aiFailureCount, reanalyzedCount = 0 }) {
+  if (importedCount > 0) {
+    return `新增 ${importedCount} 张照片，跳过 ${duplicateCount} 张重复照片，创建 ${createdTripCount} 个待确认旅行档案，${missingCount} 张需要补充时间或地点，${aiFailureCount} 张 AI 初次处理失败。`;
+  }
+  return reanalyzedCount > 0
+    ? `没有新增照片，已跳过 ${duplicateCount} 张重复照片；其中 ${reanalyzedCount} 张完成了 AI 重新分析。`
+    : `没有新增照片，已跳过 ${duplicateCount} 张重复照片。`;
 }

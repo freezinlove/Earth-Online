@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AiConfig, AiModelOption, AiProviderOption, ImportJobProgress, LocalAiCredential, ProviderCredentialKey } from "@/services/apiClient";
 import { platformApi } from "@/platform";
 import type { Locale } from "@/store/appStore";
+import { providerCredentialKey as sharedProviderCredentialKey } from "../../../shared/ai/provider-runtime.mjs";
 
 export type FieldStatus = "idle" | "loading" | "saving" | "saved" | "cleared" | "unchanged" | "error";
 export type ProfileKey = "imageUnderstanding" | "crossModalEmbedding";
@@ -28,14 +29,6 @@ export type ModelProfileText = {
   modelProvider: string;
   save: string;
   savedApiKey: string;
-};
-
-const providerCredentialKeyById: Record<string, ProviderCredentialKey> = {
-  aliyun: "aliyunApiKey",
-  openai: "openaiApiKey",
-  openrouter: "openrouterApiKey",
-  siliconflow: "siliconflowApiKey",
-  voyage: "voyageApiKey",
 };
 
 export const emptyCredential: LocalAiCredential = { isSet: false, preview: "", source: "none" };
@@ -86,7 +79,7 @@ export function profileModels(config: AiConfig | undefined, profile: ProfileKey,
 }
 
 function providerCredentialKey(providerId: string | null | undefined) {
-  return providerId ? providerCredentialKeyById[providerId] : undefined;
+  return sharedProviderCredentialKey(providerId) as ProviderCredentialKey | undefined;
 }
 
 function providerDisplayName(provider: AiProviderOption, locale: Locale) {

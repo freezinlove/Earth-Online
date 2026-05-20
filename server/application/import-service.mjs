@@ -2,21 +2,33 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import { safeArray } from "../domain/arrays.mjs";
-import { multiCityCountryLabel } from "../domain/country-normalizer.mjs";
 import { toDateInput } from "../domain/dates.mjs";
 import { parseExif } from "../domain/exif-parser.mjs";
-import { geoContextFor, haversineKm, inferPreset, isUsableLocation, localizedGeoHint, normalizeLocale } from "../domain/geo.mjs";
+import { geoContextFor, inferPreset, isUsableLocation, normalizeLocale } from "../domain/geo.mjs";
 import { forwardLocalGeocode, reverseLocalGeocode } from "../domain/local-geocoder.mjs";
 import { mergeLocationCandidates, resolveImportedLocation, toAiEvidence } from "../domain/location-resolver.mjs";
-import { cleanPlaceName, isWeakPlaceName } from "../domain/place-name-selector.mjs";
-import { buildPlacesForGroup } from "../domain/place-projector.mjs";
-import { buildPhotoRoute, buildRoute } from "../domain/route-projector.mjs";
+import { isWeakPlaceName } from "../domain/place-name-selector.mjs";
+import { buildRoute } from "../domain/route-projector.mjs";
 import { makePhotoTitle } from "../domain/text-normalizer.mjs";
 import { rebuildTrips } from "../domain/trip-rebuilder.mjs";
-import { dominantPresetsForPhotos, findAdjacentTrip, groupImportedPhotos } from "../domain/trip-resolver.mjs";
 import { readMultipartFormDataToDir } from "../http/body.mjs";
 import { extFromName, hashBuffer } from "../storage/file-storage.mjs";
 import { createLimiter, importPipelineConfig, mapConcurrent } from "../../shared/application/import-pipeline.mjs";
+import {
+  addLocationPendingItems,
+  addMissingInfoPendingItems,
+  buildImportStateFromPhotos,
+  hasAiProcessingFailure,
+  hasMissingImportInfo,
+} from "../../shared/import/import-state-core.mjs";
+import {
+  allowedInferencePlaces,
+  buildInferenceContextPhotos,
+  buildMissingInfoInferenceInput,
+  keepPending,
+  missingInferenceText,
+  normalizeMissingInfoAiProposal,
+} from "../../shared/import/missing-info-inference-core.mjs";
 
 export function createImportServices({
   analyzeTravelImage,
@@ -47,8 +59,6 @@ export function createImportServices({
   const aiImageJpegQuality = pipelineConfig.images.aiImageJpegQuality;
   const thumbnailMaxDimension = pipelineConfig.images.thumbnailMaxDimension;
   const thumbnailJpegQuality = pipelineConfig.images.thumbnailJpegQuality;
-  const missingGpsLowConfidenceThreshold = 0.55;
-  const closeNeighborContextMs = 15 * 60 * 1000;
 
   async function readImportFile(file) {
     const fullPath = file.tempPath || file.sourcePath;
@@ -349,157 +359,23 @@ export function createImportServices({
     imported.push(...importedSlots.filter(Boolean));
 
     progress.update?.({ phase: "grouping", done: files.length, total: files.length });
-    const groups = imported.length ? groupImportedPhotos(imported) : [];
-    const createdTrips = [];
-    const updatedTripIds = new Set();
-    const pendingItems = [];
-    let workingTrips = state.trips.slice();
-    let workingPhotos = [...state.photos, ...imported];
-    let workingPlaceNodes = state.placeNodes.slice();
-    let workingRoutes = state.routes.slice();
-
-    for (const [groupIndex, group] of groups.entries()) {
-      const first = group[0];
-      const firstLocated = group.find((photo) => photo.location);
-      const preset = inferPreset(first.fileName, firstLocated?.location);
-      const start = toDateInput(group[0]?.capturedAt);
-      const end = toDateInput(group.at(-1)?.capturedAt);
-      const adjacentTrip = findAdjacentTrip({ ...state, trips: workingTrips }, group);
-      const tripId = adjacentTrip?.id ?? makeId("trip");
-      const title = importTripTitle({ month: start.slice(0, 7), city: preset.city, groupIndex, groupCount: groups.length, locale });
-      let trip = adjacentTrip;
-      if (!trip) {
-        trip = {
-          id: tripId,
-          title,
-          dateRange: { start, end },
-          countries: [preset.country],
-          cities: [preset.city],
-          coverUrl: first.thumbnailUrl,
-          photoCount: group.length,
-          placeNodeCount: 0,
-          status: "pending",
-          source: "import",
-        };
-        createdTrips.push(trip);
-        workingTrips.push(trip);
-      } else {
-        updatedTripIds.add(tripId);
-      }
-      for (const photo of group) photo.tripId = tripId;
-      const tripPhotosAfter = workingPhotos.filter((photo) => photo.tripId === tripId);
-      const archivableTripPhotos = tripPhotosAfter.filter((photo) => !hasMissingImportInfo(photo) && !hasAiProcessingFailure(photo));
-      const tripLocatedAfter = archivableTripPhotos.filter((photo) => photo.location);
-      if (tripLocatedAfter.length) {
-        const places = buildPlacesForGroup(archivableTripPhotos, tripId, { makeId, existingPlaces: workingPlaceNodes.filter((place) => place.tripId === tripId) });
-        workingPlaceNodes = workingPlaceNodes.filter((place) => place.tripId !== tripId).concat(places);
-        workingRoutes = workingRoutes.filter((route) => route.tripId !== tripId).concat(buildPhotoRoute(tripId, tripLocatedAfter));
-        for (const photo of tripPhotosAfter) photo.placeNodeId = undefined;
-        for (const place of places) {
-          for (const photoId of place.photoIds) {
-            const photo = tripPhotosAfter.find((item) => item.id === photoId);
-            if (photo) photo.placeNodeId = place.id;
-          }
-        }
-      }
-      const tripDates = tripPhotosAfter.map((photo) => photo.capturedAt).filter(Boolean).sort();
-      const geoSummary = dominantPresetsForPhotos(tripPhotosAfter);
-      workingTrips = workingTrips.map((item) =>
-        item.id === tripId
-          ? {
-              ...item,
-              title: createdTrips.some((createdTrip) => createdTrip.id === tripId)
-                ? importTripTitle({
-                    month: toDateInput(tripDates[0]).slice(0, 7),
-                    city: geoSummary.cities.length > 1 ? importTripMultiCityLabel(geoSummary.countries, locale) : geoSummary.cities[0],
-                    locale,
-                  })
-                : item.title,
-              dateRange: { start: toDateInput(tripDates[0] ?? start), end: toDateInput(tripDates.at(-1) ?? end) },
-              countries: geoSummary.countries.length ? geoSummary.countries : item.countries,
-              cities: geoSummary.cities,
-              coverUrl: item.coverUrl || first.thumbnailUrl,
-            }
-          : item,
-      );
-      pendingItems.push({
-        id: makeId("pending"),
-        type: "needs_trip_confirmation",
-        relatedPhotoIds: group.map((photo) => photo.id),
-        relatedTripId: tripId,
-        suggestion: adjacentTrip ? `建议把这次导入追加到已有旅行档案「${adjacentTrip.title}」。` : `建议创建新的旅行档案「${title}」。`,
-        reason: "系统基于拍摄时间、GPS/文件名地点线索和 Qwen 标签给出建议，需要用户确认。",
-        status: "open",
-        proposal: {
-          action: "confirm_trip_assignment",
-          tripId,
-          photoIds: group.map((photo) => photo.id),
-        },
-      });
-    }
-
-    addLocationPendingItems(imported, pendingItems);
-    addMissingInfoPendingItems(imported, pendingItems);
-    addAiFailurePendingItems(imported, pendingItems);
-
-    const aiFailures = imported.filter(hasAiProcessingFailure);
-    const missing = imported.filter((photo) => hasMissingImportInfo(photo) && !hasAiProcessingFailure(photo));
-    if (groups.length > 1 || imported.length >= 6) {
-      pendingItems.push({
-        id: makeId("pending"),
-        type: "split_suggestion",
-        relatedPhotoIds: imported.map((photo) => photo.id),
-        suggestion: groups.length > 1 ? `这批照片可能包含 ${groups.length} 段旅行，已按明显时间断层拆成多个待确认 Trip。` : "这批照片数量较多，可能包含多段旅行，请确认是否仍保留为当前归档建议。",
-        reason: "MVP 使用明显时间断层作为拆分建议依据，不做强制静默拆分。",
-        status: "open",
-      });
-    }
-    const recent = imported.some((photo) => Math.abs(now.getTime() - new Date(photo.capturedAt).getTime()) <= 24 * 60 * 60 * 1000);
-    if (recent) {
-      pendingItems.push({
-        id: makeId("pending"),
-        type: "recent_import",
-        relatedPhotoIds: imported.map((photo) => photo.id),
-        relatedTripId: createdTrips[0]?.id,
-        suggestion: "这批照片拍摄于最近 24 小时内，可加入当前旅行、新建正在进行的旅行，或暂不归档。",
-        reason: "近期照片归属必须由用户确认。",
-        status: "open",
-      });
-    }
-
-    const batch = {
-      id: batchId,
-      importedAt: now.toISOString(),
+    const nextState = buildImportStateFromPhotos(state, {
+      batchId,
       totalCount: files.length,
-      successCount: imported.length - missing.length - aiFailures.length,
-      failedCount: missing.length + aiFailures.length,
+      photos: imported,
       duplicateCount: duplicateNames.length,
       duplicatePhotoIds: Array.from(duplicatePhotoIds),
       duplicateNames,
-      status: imported.length > 0 ? "pending_confirmation" : "confirmed",
-      createdTripIds: createdTrips.map((trip) => trip.id),
-      updatedTripIds: Array.from(updatedTripIds),
-      addedPhotoIds: imported.map((photo) => photo.id),
-      pendingItemIds: pendingItems.map((item) => item.id),
+      makeId,
+      now,
+      locale,
+      aiStats,
       storedFileNames: imported.map((photo) => path.basename(photo.storageUrl)),
       storedThumbnailNames: imported.map((photo) => path.basename(photo.thumbnailUrl)),
-      aiStats,
-      summary:
-        imported.length > 0
-          ? `新增 ${imported.length} 张照片，跳过 ${duplicateNames.length} 张重复照片，创建 ${createdTrips.length} 个待确认旅行档案，${missing.length} 张需要补充时间或地点，${aiFailures.length} 张 AI 初次处理失败。`
-          : `没有新增照片，已跳过 ${duplicateNames.length} 张重复照片；其中 ${aiStats.qwenCount + aiStats.fallbackCount} 张完成了 AI 重新分析。`,
-    };
-
-    await writeVectorIndex(vectorIndex);
-    await writeState({
-      ...state,
-      trips: workingTrips,
-      photos: workingPhotos,
-      placeNodes: workingPlaceNodes,
-      routes: workingRoutes,
-      importBatches: [...state.importBatches, batch],
-      pendingItems: [...state.pendingItems, ...pendingItems],
+      completeCandidatePoint,
     });
+    await writeVectorIndex(vectorIndex);
+    await writeState(nextState);
     progress.update?.({ phase: "completed", done: files.length, total: files.length });
     return responseState();
   }
@@ -1553,8 +1429,8 @@ export function createImportServices({
     );
     if (alreadyOpen) return state;
     const nextItems = [];
-    addLocationPendingItems([photo], nextItems);
-    addMissingInfoPendingItems([photo], nextItems);
+    addLocationPendingItems([photo], nextItems, { makeId, completeCandidatePoint });
+    addMissingInfoPendingItems([photo], nextItems, { makeId });
     if (!nextItems.length) return state;
     return {
       ...state,
@@ -1627,16 +1503,6 @@ export function createImportServices({
     });
   }
 
-  function importTripTitle({ month, city, groupIndex = 0, groupCount = 1, locale = "zh" }) {
-    const suffix = groupCount > 1 ? ` ${groupIndex + 1}` : "";
-    if (normalizeLocale(locale) === "en") return `${month} ${localizedGeoHint(city, locale)} trip${suffix}`;
-    return `${month} ${city}旅行${suffix}`;
-  }
-
-  function importTripMultiCityLabel(countries = [], locale = "zh") {
-    return multiCityCountryLabel(countries, locale);
-  }
-
   async function embedPhotoAnalysis({ fileName, analysis, allowCloud }) {
     if (!embedTravelImageAnalysis) {
       return {
@@ -1705,78 +1571,6 @@ export function createImportServices({
     };
   }
 
-  function hasAiProcessingFailure(photo) {
-    return Boolean(photo.aiFailure?.vision || photo.aiFailure?.embedding || photo.pendingReason === "ai_processing_failed");
-  }
-
-  function addLocationPendingItems(imported, pendingItems) {
-    const suggestedLocations = imported.filter((photo) => !hasAiProcessingFailure(photo) && photo.locationResolution?.status === "suggested" && photo.locationResolution.candidateId);
-    for (const photo of suggestedLocations) {
-      const candidate = completeCandidatePoint(photo.locationResolution.candidates.find((item) => item.id === photo.locationResolution.candidateId));
-      if (!candidate?.point) continue;
-      pendingItems.push({
-        id: makeId("pending"),
-        type: "confirm_location_candidate",
-        relatedPhotoIds: [photo.id],
-        relatedTripId: photo.tripId,
-        suggestion: `AI 建议将「${photo.title ?? photo.fileName}」定位到「${photo.locationResolution.effectiveName}」。`,
-        reason: "照片缺少可靠 EXIF GPS，但 AI 给出了可解释的地点候选，需要用户确认后才写入确定坐标。",
-        status: "open",
-        proposal: {
-          action: "create_place_from_candidate",
-          tripId: photo.tripId,
-          photoIds: [photo.id],
-          candidate,
-        },
-      });
-    }
-  }
-
-  function addMissingInfoPendingItems(imported, pendingItems) {
-    for (const photo of imported.filter((item) => hasMissingImportInfo(item) && !hasAiProcessingFailure(item))) {
-      const missingGps = photo.exifStatus?.gps === "missing" || photo.pendingReason === "missing_gps";
-      const missingTime = photo.exifStatus?.time !== "read";
-      pendingItems.push({
-        id: makeId("pending"),
-        type: missingGps ? "missing_gps" : "missing_time",
-        relatedPhotoIds: [photo.id],
-        relatedTripId: photo.tripId,
-        suggestion: `${photo.title ?? photo.fileName} 缺少${missingGps && missingTime ? " GPS 和 EXIF 时间" : missingGps ? " GPS" : " EXIF 时间"}，可手动触发基于上下文推断。`,
-        reason: "初次导入只完成单张照片理解；需要用户在待补信息中手动触发上下文推断后再确认。",
-        status: "open",
-      });
-    }
-  }
-
-  function addAiFailurePendingItems(imported, pendingItems) {
-    for (const photo of imported.filter(hasAiProcessingFailure)) {
-      const failedParts = [photo.aiFailure?.vision ? "AI Vision" : undefined, photo.aiFailure?.embedding ? "Embedding" : undefined].filter(Boolean).join(" / ");
-      const gpsLabel = photo.aiFailure?.hasRealExifGps ? "真实GPS" : "无GPS";
-      pendingItems.push({
-        id: makeId("pending"),
-        type: "ai_processing_failed",
-        relatedPhotoIds: [photo.id],
-        relatedTripId: photo.tripId,
-        suggestion: `${photo.title ?? photo.fileName} 初次导入 ${failedParts || "AI"} 处理失败，需要选择处理方式。`,
-        reason: `${gpsLabel}。${[
-          photo.aiFailure?.vision ? `AI Vision：${photo.aiFailure.vision}` : undefined,
-          photo.aiFailure?.embedding ? `Embedding：${photo.aiFailure.embedding}` : undefined,
-        ]
-          .filter(Boolean)
-          .join("；")}`,
-        status: "open",
-        proposal: {
-          action: "resolve_ai_processing_failed",
-          photoIds: [photo.id],
-        },
-      });
-    }
-  }
-
-  function hasMissingImportInfo(photo) {
-    return photo.pendingReason === "missing_gps" || photo.pendingReason === "missing_time" || photo.exifStatus?.gps === "missing" || photo.exifStatus?.time !== "read";
-  }
-
   async function buildMissingInfoInferenceProposal(state, batch, pending, { locale = "zh" } = {}) {
     const photo = state.photos.find((item) => item.id === pending.relatedPhotoIds[0]);
     if (!photo) return keepPending(missingInferenceText(locale, "photoNotFound"), 0.2, locale);
@@ -1794,40 +1588,7 @@ export function createImportServices({
       allowCloud: true,
       locale,
     });
-    return normalizeMissingInfoAiProposal({ aiResult, photo, context, contextPlaces, locale });
-  }
-
-  function buildInferenceContextPhotos(state, batch, photo) {
-    const batchPhotoIds = new Set(batch.addedPhotoIds);
-    const currentTime = new Date(photo.capturedAt).getTime();
-    let previous;
-    let next;
-    let previousLocated;
-    let nextLocated;
-    for (const item of state.photos) {
-      if (item.id === photo.id) continue;
-      const itemTime = new Date(item.capturedAt).getTime();
-      if (!Number.isFinite(currentTime) || !Number.isFinite(itemTime)) continue;
-      const distance = timeDistanceMs(item.capturedAt, photo.capturedAt);
-      const isSameTripOrBatch = item.tripId === photo.tripId || batchPhotoIds.has(item.id);
-      if (!isSameTripOrBatch) continue;
-      const located = hasReadExifGps(item);
-      if (itemTime <= currentTime) {
-        if (!previous || distance < previous.distance) previous = { item, distance };
-        if (located && (!previousLocated || distance < previousLocated.distance)) previousLocated = { item, distance };
-      } else if (!next || distance < next.distance) {
-        next = { item, distance };
-      }
-      if (itemTime > currentTime && located) {
-        if (!nextLocated || distance < nextLocated.distance) nextLocated = { item, distance };
-      }
-    }
-    return { previousPhoto: previous?.item, nextPhoto: next?.item, previousLocatedPhoto: previousLocated?.item, nextLocatedPhoto: nextLocated?.item };
-  }
-
-  function allowedInferencePlaces(state, context) {
-    const placeIds = new Set([context.previousPhoto?.placeNodeId, context.nextPhoto?.placeNodeId].filter(Boolean));
-    return state.placeNodes.filter((place) => placeIds.has(place.id));
+    return normalizeMissingInfoAiProposal({ aiResult, photo, context, contextPlaces, locale, completeCandidatePoint });
   }
 
   async function readPhotoImagePayload(photo) {
@@ -1837,297 +1598,6 @@ export function createImportServices({
     const ext = path.extname(fileName).toLowerCase();
     const mime = photo.mime || (ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : ext === ".heic" ? "image/heic" : "image/jpeg");
     return fs.access(fullPath).then(() => readAiImagePayloadFromFile(fullPath, mime)).catch(() => undefined);
-  }
-
-  function buildMissingInfoInferenceInput({ photo, context, contextPlaces, locale = "zh" }) {
-    return {
-      task: "missing_gps_second_pass",
-      currentPhoto: {
-        capturedAt: formatAiTimestamp(photo.capturedAt),
-        initialLocationCandidate: serializeInitialLocationCandidate(photo),
-      },
-      neighbors: {
-        previous: serializeNeighborPhoto(context.previousPhoto, contextPlaces, locale),
-        next: serializeNeighborPhoto(context.nextPhoto, contextPlaces, locale),
-      },
-      allowedPlaces: contextPlaces.map((place) => ({
-        id: place.id,
-        name: localizedPlaceValue(place, "name", locale),
-        city: localizedPlaceValue(place, "city", locale),
-        country: localizedPlaceValue(place, "country", locale),
-      })),
-    };
-  }
-
-  function serializeInitialLocationCandidate(photo) {
-    const candidate = bestPhotoLocationCandidate(photo);
-    if (!candidate) return null;
-    return {
-      name: candidate.name,
-      city: candidate.city,
-    };
-  }
-
-  function bestPhotoLocationCandidate(photo) {
-    return [...(photo.locationResolution?.candidates ?? []), ...(photo.ai?.locationCandidates ?? [])]
-      .filter((candidate) => candidate?.name)
-      .sort((left, right) => Number(right.confidence ?? 0) - Number(left.confidence ?? 0))[0];
-  }
-
-  function serializeNeighborPhoto(photo, contextPlaces, locale = "zh") {
-    if (!photo) {
-      return {
-        capturedAt: null,
-        placeId: null,
-        placeName: null,
-        city: null,
-        country: null,
-        hasRealExifGps: false,
-      };
-    }
-    const hasReliableGps = hasReadExifGps(photo);
-    const place = photo.placeNodeId ? contextPlaces.find((item) => item.id === photo.placeNodeId) : undefined;
-    const candidate = bestPhotoLocationCandidate(photo);
-    return {
-      capturedAt: formatAiTimestamp(photo.capturedAt),
-      placeId: place?.id ?? null,
-      placeName: place ? localizedPlaceValue(place, "displayName", locale) : (photo.locationResolution?.effectiveName ?? candidate?.name ?? null),
-      city: place ? localizedPlaceValue(place, "city", locale) : (candidate?.city ?? null),
-      country: place ? localizedPlaceValue(place, "country", locale) : (candidate?.country ?? null),
-      hasRealExifGps: hasReliableGps,
-    };
-  }
-
-  function localizedPlaceValue(place, field, locale = "zh") {
-    if (!place) return null;
-    if (normalizeLocale(locale) !== "en") {
-      if (field === "displayName") return place.displayName ?? place.name ?? null;
-      return place[field] ?? null;
-    }
-    if (field === "name" || field === "displayName") return place.names?.en ?? place.displayName ?? place.name ?? null;
-    if (field === "city") return place.cityNames?.en ?? place.city ?? null;
-    if (field === "country") return place.countryNames?.en ?? place.country ?? null;
-    return place[field] ?? null;
-  }
-
-  function formatAiTimestamp(value) {
-    if (!value) return null;
-    const date = new Date(value);
-    if (!Number.isFinite(date.getTime())) return String(value).slice(0, 16).replace("T", " ");
-    const pad = (number) => String(number).padStart(2, "0");
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-  }
-
-  function normalizeMissingInfoAiProposal({ aiResult, photo, context, contextPlaces, locale = "zh" }) {
-    if (aiResult.action === "bind_photos_to_place") {
-      const place = contextPlaces.find((item) => item.id === aiResult.targetPlaceId);
-      if (!place) return keepPending(missingInferenceText(locale, "targetNotAllowed"), aiResult.confidence ?? 0, locale);
-      const closeNeighbor = closeNeighborForPlace(photo, context, place);
-      if (isMissingGpsPhoto(photo) && Number(aiResult.confidence ?? 0) < missingGpsLowConfidenceThreshold && !closeNeighbor) {
-        return keepPending(aiResult.reason || missingInferenceText(locale, "lowConfidence"), aiResult.confidence ?? 0, locale);
-      }
-      const reason = withCloseNeighborReason(aiResult.reason, closeNeighbor, locale);
-      return {
-        actionable: true,
-        confidence: aiResult.confidence,
-        displayTarget: `${missingInferenceText(locale, "mergeBadge")} ${place.displayName ?? place.name}`,
-        displayTargetLabel: place.displayName ?? place.name,
-        displayTargetBadge: missingInferenceText(locale, "mergeBadge"),
-        suggestion: `${missingInferenceText(locale, "mergeBadge")} ${place.displayName ?? place.name}`,
-        reason,
-        proposal: {
-          action: "bind_photos_to_place",
-          photoIds: [photo.id],
-          placeId: place.id,
-          confidence: aiResult.confidence,
-          reason,
-          rewrittenInitialAnalysis: normalizedRewriteForProposal(aiResult.rewrittenInitialAnalysis),
-        },
-      };
-    }
-
-    if (aiResult.action === "create_place_from_candidate") {
-      return createCandidateInferenceProposal({ candidate: aiResult.candidate, aiResult, photo, context, contextPlaces, locale });
-    }
-
-    const highConfidenceFallback = highConfidenceKeepPendingProposal({ aiResult, photo, context, contextPlaces, locale });
-    if (highConfidenceFallback) return highConfidenceFallback;
-    return keepPending(aiResult.reason || missingInferenceText(locale, "noAutoArchive"), aiResult.confidence ?? 0, locale);
-  }
-
-  function createCandidateInferenceProposal({ candidate: rawCandidate, aiResult, photo, context, contextPlaces, locale = "zh" }) {
-    const candidate = completeCandidatePoint(rawCandidate, locale);
-    if (!candidate?.name) return keepPending(candidate?.reason || missingInferenceText(locale, "invalidPlaceName"), candidate?.confidence ?? 0, locale);
-    if (!candidate.point) return keepPending(geocodeBlockedReason(candidate, locale), candidate.confidence ?? 0, locale);
-    const mergePlace = findMergeableContextPlace(candidate, contextPlaces);
-    if (mergePlace) {
-      const closeNeighbor = closeNeighborForPlace(photo, context, mergePlace);
-      const strongOverlap = hasStrongGeographicOverlap(candidate, mergePlace);
-      if (isMissingGpsPhoto(photo) && Number(candidate.confidence ?? 0) < missingGpsLowConfidenceThreshold && !closeNeighbor && !strongOverlap) {
-        return keepPending(candidate.reason || missingInferenceText(locale, "lowConfidence"), candidate.confidence ?? 0, locale);
-      }
-      const placeName = mergePlace.displayName ?? mergePlace.name;
-      const reason = withInferenceSupportReason(
-        `${candidate.reason || missingInferenceText(locale, "clearPlace")} ${missingInferenceText(locale, "matchedExistingPlace")}: ${placeName}.`,
-        { closeNeighbor, strongOverlap },
-        locale,
-      );
-      return {
-        actionable: true,
-        confidence: candidate.confidence,
-        displayTarget: `${missingInferenceText(locale, "mergeBadge")} ${placeName}`,
-        displayTargetLabel: placeName,
-        displayTargetBadge: missingInferenceText(locale, "mergeBadge"),
-        suggestion: `${missingInferenceText(locale, "mergeBadge")} ${placeName}`,
-        reason,
-        proposal: {
-          action: "bind_photos_to_place",
-          photoIds: [photo.id],
-          placeId: mergePlace.id,
-          confidence: candidate.confidence,
-          reason,
-          rewrittenInitialAnalysis: normalizedRewriteForProposal(aiResult.rewrittenInitialAnalysis),
-        },
-      };
-    }
-    if (isMissingGpsPhoto(photo) && Number(candidate.confidence ?? 0) < missingGpsLowConfidenceThreshold) return keepPending(candidate.reason || missingInferenceText(locale, "lowConfidence"), candidate.confidence ?? 0, locale);
-    return {
-      actionable: true,
-      confidence: candidate.confidence,
-      displayTarget: `${missingInferenceText(locale, "newPlaceBadge")} ${candidate.name}`,
-      displayTargetLabel: candidate.name,
-      displayTargetBadge: missingInferenceText(locale, "newPlaceBadge"),
-      suggestion: `${missingInferenceText(locale, "newPlaceBadge")} ${candidate.name}`,
-      reason: candidate.reason,
-      proposal: {
-        action: "create_place_from_candidate",
-        tripId: photo.tripId,
-        photoIds: [photo.id],
-        candidate: {
-          ...candidate,
-          source: "ai_context_inference",
-          precision: "estimated",
-        },
-        rewrittenInitialAnalysis: normalizedRewriteForProposal(aiResult.rewrittenInitialAnalysis),
-      },
-    };
-  }
-
-  function highConfidenceKeepPendingProposal({ aiResult, photo, context, contextPlaces, locale = "zh" }) {
-    if (Number(aiResult.confidence ?? 0) < missingGpsLowConfidenceThreshold) return undefined;
-    const candidate = highConfidenceCandidate(aiResult, photo);
-    if (!candidate) {
-      return keepPending(missingInferenceText(locale, "highConfidenceMissingCandidate"), aiResult.confidence ?? 0, locale);
-    }
-    return createCandidateInferenceProposal({
-      candidate: {
-        ...candidate,
-        confidence: Math.max(Number(candidate.confidence ?? 0), Number(aiResult.confidence ?? 0)),
-        reason: aiResult.reason || candidate.reason,
-      },
-      aiResult,
-      photo,
-      context,
-      contextPlaces,
-      locale,
-    });
-  }
-
-  function highConfidenceCandidate(aiResult, photo) {
-    const candidates = [aiResult.candidate, bestPhotoLocationCandidate(photo)].filter(Boolean);
-    return candidates.find((candidate) => candidate?.name && !isWeakPlaceName(candidate.name));
-  }
-
-  function closeNeighborForPlace(photo, context, place) {
-    if (!place?.id) return undefined;
-    return uniquePhotos([context.previousPhoto, context.nextPhoto, context.previousLocatedPhoto, context.nextLocatedPhoto])
-      .map((neighbor) => ({
-        neighbor,
-        distance: timeDistanceMs(neighbor.capturedAt, photo.capturedAt),
-      }))
-      .filter(({ neighbor, distance }) => hasReadExifGps(neighbor) && neighbor.placeNodeId === place.id && distance <= closeNeighborContextMs)
-      .sort((left, right) => left.distance - right.distance)[0];
-  }
-
-  function normalizedRewriteForProposal(rewrittenInitialAnalysis) {
-    if (!rewrittenInitialAnalysis?.caption || !Array.isArray(rewrittenInitialAnalysis.tags) || !rewrittenInitialAnalysis.locationCandidate) return undefined;
-    const candidate = rewrittenInitialAnalysis.locationCandidate;
-    return {
-      title: rewrittenInitialAnalysis.title,
-      tags: rewrittenInitialAnalysis.tags,
-      caption: rewrittenInitialAnalysis.caption,
-      locationCandidate: {
-        name: candidate.name,
-        country: candidate.country,
-        city: candidate.city,
-        confidence: candidate.confidence,
-      },
-    };
-  }
-
-  function hasReadExifGps(photo) {
-    return photo?.exifStatus?.gps === "read" && isUsableLocation(photo.location);
-  }
-
-  function uniquePhotos(photos) {
-    const seen = new Set();
-    return photos.filter((photo) => {
-      if (!photo || seen.has(photo.id)) return false;
-      seen.add(photo.id);
-      return true;
-    });
-  }
-
-  function withCloseNeighborReason(reason, closeNeighbor, locale = "zh") {
-    if (!closeNeighbor) return reason;
-    const minutes = Math.max(1, Math.round(closeNeighbor.distance / 60000));
-    const baseReason = reason || missingInferenceText(locale, "bindablePlace");
-    return normalizeLocale(locale) === "en"
-      ? `${baseReason} A neighboring geotagged photo is only ${minutes} minutes away and matches the target place, so the low-confidence nearby context is allowed.`
-      : `${baseReason} 与相邻已定位照片仅相隔 ${minutes} 分钟，且目标地点一致，已允许低置信度近时间上下文通过。`;
-  }
-
-  function withInferenceSupportReason(reason, { closeNeighbor, strongOverlap }, locale = "zh") {
-    if (strongOverlap) return reason;
-    return withCloseNeighborReason(reason, closeNeighbor, locale);
-  }
-
-  function hasStrongGeographicOverlap(candidate, place) {
-    if (!candidate?.point || !place?.center) return false;
-    const distance = haversineKm(candidate.point, place.center);
-    const candidateName = cleanPlaceName(candidate.name);
-    const placeName = cleanPlaceName(place.displayName ?? place.name);
-    const candidateCity = cleanPlaceName(candidate.city);
-    const placeCity = cleanPlaceName(place.city);
-    const candidateCountry = cleanPlaceName(candidate.country);
-    const placeCountry = cleanPlaceName(place.country);
-    const sameCountry = !candidateCountry || !placeCountry || candidateCountry === placeCountry;
-    const sameCity = Boolean(candidateCity && placeCity && candidateCity === placeCity);
-    const sameName = Boolean(candidateName && placeName && (candidateName === placeName || candidateName.includes(placeName) || placeName.includes(candidateName)));
-    return sameCountry && (distance <= 1.2 || (sameCity && distance <= 5) || (sameName && distance <= 12));
-  }
-
-  function findMergeableContextPlace(candidate, contextPlaces) {
-    if (!candidate?.point) return undefined;
-    const candidateName = cleanPlaceName(candidate.name);
-    const candidateCity = cleanPlaceName(candidate.city);
-    const candidateCountry = cleanPlaceName(candidate.country);
-    return contextPlaces
-      .map((place) => {
-        if (!place.center) return undefined;
-        const distance = haversineKm(candidate.point, place.center);
-        const placeName = cleanPlaceName(place.displayName ?? place.name);
-        const placeCity = cleanPlaceName(place.city);
-        const placeCountry = cleanPlaceName(place.country);
-        const sameCountry = !candidateCountry || !placeCountry || candidateCountry === placeCountry;
-        const sameCity = Boolean(candidateCity && placeCity && candidateCity === placeCity);
-        const sameName = Boolean(candidateName && placeName && (candidateName === placeName || candidateName.includes(placeName) || placeName.includes(candidateName)));
-        const threshold = sameName ? 25 : sameCity ? 25 : 25;
-        if (!sameCountry || distance > threshold) return undefined;
-        return { place, distance, sameName, sameCity };
-      })
-      .filter(Boolean)
-      .sort((left, right) => Number(right.sameName) - Number(left.sameName) || Number(right.sameCity) - Number(left.sameCity) || left.distance - right.distance)[0]?.place;
   }
 
   function completeCandidatePoint(candidate, locale = "zh") {
@@ -2158,15 +1628,6 @@ export function createImportServices({
       source: "geocode",
       precision: "estimated",
     };
-  }
-
-  function geocodeBlockedReason(candidate, locale = "zh") {
-    const name = candidate?.name || candidate?.city;
-    const english = normalizeLocale(locale) === "en";
-    if (!name) return missingInferenceText(locale, "invalidPlaceName");
-    return english
-      ? `AI gave a high-confidence clue for ${name}, but the local gazetteer could not estimate usable coordinates, so manual placement is still required.`
-      : `AI 给出了「${name}」的高置信地点线索，但本地地名库无法估计可用坐标，仍需手动补点。`;
   }
 
   function withBackendLocationCandidates({ location, aiEvidence, locale = "zh" }) {
@@ -2211,53 +1672,6 @@ export function createImportServices({
           ? `${candidate.reason || "AI provided a place name."} Local gazetteer coordinates were added from ${fallback.name}.`
           : `${candidate.reason || "AI 给出了地点名。"} 已用本地地名库补入估计坐标：${fallback.name}。`,
     };
-  }
-
-  function isMissingGpsPhoto(photo) {
-    return photo.pendingReason === "missing_gps" || photo.exifStatus?.gps === "missing" || !isUsableLocation(photo.location);
-  }
-
-  function missingInferenceText(locale, key) {
-    const english = normalizeLocale(locale) === "en";
-    const messages = {
-      photoNotFound: english ? "The pending photo could not be found." : "找不到待补照片。",
-      imageMissing: english ? "The original image for this pending photo could not be found, so context inference cannot run." : "找不到当前待补照片原图，无法执行基于上下文推断。",
-      secondInferenceFailed: english ? "Context inference failed." : "基于上下文推断失败。",
-      targetNotAllowed: english ? "AI suggested a target place that is not in the backend allowed-place list." : "AI 建议的目标地点不在后端允许的地点列表中。",
-      lowConfidence: english ? "The inferred location confidence is too low for this pending photo." : "待补照片地点置信度不足。",
-      invalidPlaceName: english ? "AI did not provide a valid place name that can be created." : "AI 未给出可创建地点的合法名称。",
-      noGeocode: english ? "AI provided a place name, but the local gazetteer could not estimate usable coordinates, so manual placement is still required." : "AI 给出了地点名，但本地地名库无法估计可用坐标，仍需手动补点。",
-      noAutoArchive: english ? "AI still cannot determine a reliable location for this photo." : "AI 认为当前照片仍无法可靠判断地点。",
-      highConfidenceMissingCandidate: english ? "AI returned high confidence but did not provide a concrete place candidate that can be created or bound, so manual confirmation is still required." : "AI 返回了高置信度，但没有给出可创建或可绑定的具体地点候选，仍需手动确认。",
-      clearPlace: english ? "AI provided a clear place." : "AI 给出了明确地点。",
-      matchedExistingPlace: english ? "It matched an existing place in the same trip" : "已匹配到同一行程中的现有地点",
-      bindablePlace: english ? "AI suggested a place that can be bound to the same location." : "AI 给出了可绑定到同一地点的建议。",
-      mergeBadge: english ? "Merge" : "合并",
-      newPlaceBadge: english ? "New place" : "新地点",
-      pendingTarget: english ? "Still pending" : "仍待确认",
-      pendingLabel: english ? "Pending" : "待确认",
-      keepPendingSuggestion: english ? "AI does not recommend automatic archiving yet. Manual handling is still required." : "AI 暂不建议自动归档，仍需手动处理。",
-    };
-    return messages[key] ?? messages.noAutoArchive;
-  }
-
-  function keepPending(reason, confidence, locale = "zh") {
-    const cappedConfidence = Math.min(Number(confidence ?? 0), Math.max(0, missingGpsLowConfidenceThreshold - 0.01));
-    return {
-      actionable: false,
-      confidence: cappedConfidence,
-      displayTarget: missingInferenceText(locale, "pendingTarget"),
-      displayTargetLabel: missingInferenceText(locale, "pendingLabel"),
-      displayTargetBadge: missingInferenceText(locale, "pendingLabel"),
-      suggestion: missingInferenceText(locale, "keepPendingSuggestion"),
-      reason,
-      proposal: { action: "keep_pending", confidence: cappedConfidence, reason },
-    };
-  }
-
-  function timeDistanceMs(left, right) {
-    if (!left || !right) return Number.MAX_SAFE_INTEGER;
-    return Math.abs(new Date(left).getTime() - new Date(right).getTime());
   }
 
   return {

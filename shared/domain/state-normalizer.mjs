@@ -1,10 +1,7 @@
 import { safeArray } from "./arrays.mjs";
 import { multiCityCountryLabel, normalizeCountryDescription, uniqueNormalizedCountries } from "./country-normalizer.mjs";
 import { isUsableLocation } from "./geo.mjs";
-
-function hasAiProcessingFailure(photo) {
-  return Boolean(photo?.aiFailure?.vision || photo?.aiFailure?.embedding || photo?.pendingReason === "ai_processing_failed");
-}
+import { hasAiProcessingFailure } from "./photo-status.mjs";
 
 function reconcileResolvedAiFailurePendingItems(pendingItems, photos) {
   const photosById = new Map(photos.map((photo) => [photo.id, photo]));

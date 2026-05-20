@@ -292,7 +292,7 @@ server/ai/provider-registry.mjs
 server/ai/ai-config.mjs
 server/ai/ai-gateway.mjs
 server/ai/providers/*.mjs
-server/ai/prompts/*.md
+shared/ai/prompts/*.md
 ```
 
 主要 AI 任务：

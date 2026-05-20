@@ -21,7 +21,7 @@ import { mergeLocationCandidates, resolveImportedLocation, toAiEvidence } from "
 import { applyPendingDecision } from "../../shared/domain/pending-workflow.mjs";
 import { buildRoute } from "../../shared/domain/route-projector.mjs";
 import { rebuildTrips, rebuildTripsForPhotos } from "../../shared/domain/trip-rebuilder.mjs";
-import { buildImportStateFromPhotos } from "../../shared/import/import-state-core.mjs";
+import { addLocationPendingItems, addMissingInfoPendingItems, buildImportStateFromPhotos, hasAiProcessingFailure, hasMissingImportInfo } from "../../shared/import/import-state-core.mjs";
 import { allowedInferencePlaces, buildInferenceContextPhotos, buildMissingInfoInferenceInput, keepPending, missingInferenceText, normalizeMissingInfoAiProposal } from "../../shared/import/missing-info-inference-core.mjs";
 import type {
   GeoPoint,
@@ -235,18 +235,10 @@ function applyManualPlaceAssignment(
   };
 }
 
-function hasAiProcessingFailure(photo: Photo | undefined) {
-  return Boolean(photo?.aiFailure?.vision || photo?.aiFailure?.embedding || photo?.pendingReason === "ai_processing_failed");
-}
-
 function pendingReasonFromExif(photo: Photo) {
   if (photo.exifStatus?.gps === "missing" || !isUsableLocation(photo.location)) return "missing_gps";
   if (photo.exifStatus?.time !== "read") return "missing_time";
   return undefined;
-}
-
-function hasMissingImportInfo(photo: Photo) {
-  return photo.pendingReason === "missing_gps" || photo.pendingReason === "missing_time" || photo.exifStatus?.gps === "missing" || photo.exifStatus?.time !== "read";
 }
 
 function mobileAiFailurePatch(photo: Photo, embedding?: MobileEmbeddingResult): Photo {
@@ -279,45 +271,6 @@ function clearAiFailureForPhoto(photo: Photo): Photo {
   };
 }
 
-function addMobileLocationPendingItems(photos: Photo[], pendingItems: PendingItem[]) {
-  const suggested = photos.filter((photo) => !hasAiProcessingFailure(photo) && photo.locationResolution?.status === "suggested" && photo.locationResolution.candidateId);
-  for (const photo of suggested) {
-    const candidate = photo.locationResolution?.candidates?.find((item) => item.id === photo.locationResolution?.candidateId);
-    if (!candidate?.point || !photo.tripId) continue;
-    pendingItems.push({
-      id: makeId("pending"),
-      type: "confirm_location_candidate",
-      relatedPhotoIds: [photo.id],
-      relatedTripId: photo.tripId,
-      suggestion: `AI 建议将「${photo.title ?? photo.fileName}」定位到「${photo.locationResolution?.effectiveName}」。`,
-      reason: "照片缺少可靠 EXIF GPS，但 AI 给出了可解释的地点候选，需要用户确认后才写入确定坐标。",
-      status: "open",
-      proposal: {
-        action: "create_place_from_candidate",
-        tripId: photo.tripId,
-        photoIds: [photo.id],
-        candidate,
-      },
-    });
-  }
-}
-
-function addMobileMissingInfoPendingItems(photos: Photo[], pendingItems: PendingItem[]) {
-  for (const photo of photos.filter((item) => hasMissingImportInfo(item) && !hasAiProcessingFailure(item))) {
-    const missingGps = photo.exifStatus?.gps === "missing" || photo.pendingReason === "missing_gps";
-    const missingTime = photo.exifStatus?.time !== "read";
-    pendingItems.push({
-      id: makeId("pending"),
-      type: missingGps ? "missing_gps" : "missing_time",
-      relatedPhotoIds: [photo.id],
-      relatedTripId: photo.tripId,
-      suggestion: `${photo.title ?? photo.fileName} 缺少${missingGps && missingTime ? " GPS 和 EXIF 时间" : missingGps ? " GPS" : " EXIF 时间"}，可手动触发基于上下文推断。`,
-      reason: "初次导入只完成单张照片理解；需要用户在待补信息中手动触发上下文推断后再确认。",
-      status: "open",
-    });
-  }
-}
-
 function appendMissingInfoPendingIfNeeded(state: MobilePersistedState, batch: ImportBatch, photo: Photo): MobilePersistedState {
   if (hasAiProcessingFailure(photo) || !hasMissingImportInfo(photo)) return state;
   const alreadyOpen = state.pendingItems.some(
@@ -325,8 +278,8 @@ function appendMissingInfoPendingIfNeeded(state: MobilePersistedState, batch: Im
   );
   if (alreadyOpen) return state;
   const nextItems: PendingItem[] = [];
-  addMobileLocationPendingItems([photo], nextItems);
-  addMobileMissingInfoPendingItems([photo], nextItems);
+  addLocationPendingItems([photo], nextItems, { makeId });
+  addMissingInfoPendingItems([photo], nextItems, { makeId });
   if (!nextItems.length) return state;
   return {
     ...state,

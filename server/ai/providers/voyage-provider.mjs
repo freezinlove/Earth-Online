@@ -1,9 +1,5 @@
 import { readProviderApiKey } from "../embedding-service.mjs";
-import { voyageEmbeddingRequestBody } from "../../../shared/ai/provider-runtime.mjs";
-
-function requestSignal() {
-  return globalThis.AbortSignal.timeout(80000);
-}
+import { embedContentWithProvider } from "../../../shared/ai/provider-runtime.mjs";
 
 export const voyageProvider = {
   id: "voyage",
@@ -17,25 +13,14 @@ export const voyageProvider = {
   },
   async embed({ rootDir, secretProvider, fileName, dataUrl, text, modelId }) {
     const apiKey = readProviderApiKey("voyage", rootDir, secretProvider);
-    if (!apiKey) throw new Error("missing Voyage API key");
-    if (!modelId) throw new Error("missing Voyage model id");
-    const response = await fetch("https://api.voyageai.com/v1/multimodalembeddings", {
-      method: "POST",
-      signal: requestSignal(),
-      headers: {
-        authorization: `Bearer ${apiKey}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(voyageEmbeddingRequestBody({ model: modelId, dataUrl, text, fileName })),
+    const result = await embedContentWithProvider({
+      profile: { enabled: true, providerId: this.id, modelId, modelSource: "custom" },
+      apiKey,
+      fileName,
+      dataUrl,
+      text,
     });
-    if (!response.ok) throw new Error(`voyage embedding failed: ${response.status}`);
-    const json = await response.json();
-    const embedding = json.data?.[0]?.embedding;
-    if (!Array.isArray(embedding)) throw new Error("voyage embedding returned unexpected content");
-    return {
-      embedding: embedding.map(Number),
-      embeddingProvider: this.id,
-      embeddingModel: modelId,
-    };
+    if (!result) throw new Error("embedding unavailable");
+    return result;
   },
 };

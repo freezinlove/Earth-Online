@@ -1,8 +1,15 @@
-import { validateMissingInfoInferenceResult, validatePhotoAnalysisResult } from "../ai-schemas.mjs";
+import { collectRequestIds, emitAiDebugRecord } from "../ai-debug.mjs";
 import { readProviderApiKey } from "../embedding-service.mjs";
-import { openAiCompatibleChatCompletion, openAiCompatibleEmbedding } from "../openai-compatible-client.mjs";
 import { loadPrompt } from "../prompt-registry.mjs";
-import { parseJsonObject } from "../../../shared/ai/provider-runtime.mjs";
+import { analyzePhotoWithProviderCore, embedContentWithProvider, inferMissingInfoWithProviderCore } from "../../../shared/ai/provider-runtime.mjs";
+
+async function emitProviderDebugRecord(record) {
+  const { json, ...debugRecord } = record;
+  await emitAiDebugRecord({
+    ...debugRecord,
+    requestIds: collectRequestIds({ headers: debugRecord.headers, json }),
+  });
+}
 
 export function createOpenAiCompatibleProvider({
   id,
@@ -29,12 +36,19 @@ export function createOpenAiCompatibleProvider({
     async analyzeImage({ rootDir, secretProvider, fileName, mime, dataUrl, preset, geoContext, locale, modelId }) {
       const prompt = await loadPrompt("photoAnalysis", locale);
       const apiKey = readProviderApiKey(id, rootDir, secretProvider);
-      const content = await openAiCompatibleChatCompletion({
-        rootDir,
+      return analyzePhotoWithProviderCore({
+        providerId: id,
         apiKey,
         baseUrl,
-        model: modelId,
+        modelId,
         headers,
+        prompt,
+        fileName,
+        mime,
+        dataUrl,
+        preset,
+        geoContext,
+        locale: prompt.locale,
         debugContext: {
           providerId: id,
           operation: "photoAnalysis",
@@ -44,45 +58,23 @@ export function createOpenAiCompatibleProvider({
           promptVersion: prompt.version,
           locale: prompt.locale,
         },
-        messages: [
-          { role: "system", content: prompt.content },
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({
-                  exif: geoContext ?? { hasGps: false, cityHint: preset?.city ?? "待确认", countryHint: preset?.country ?? "待确认" },
-                }),
-              },
-              { type: "image_url", image_url: { url: dataUrl || `data:${mime};base64,` } },
-            ],
-          },
-        ],
+        onDebugRecord: emitProviderDebugRecord,
       });
-      const parsed = parseJsonObject(content);
-      return {
-        ...validatePhotoAnalysisResult(parsed, prompt.locale === "en" ? undefined : preset, { locale: prompt.locale }),
-        provider: this.id,
-        model: modelId,
-        promptId: prompt.id,
-        promptVersion: prompt.version,
-      };
     },
     async inferMissingInfo({ rootDir, secretProvider, dataUrl, mime, inferenceInput, locale, modelId }) {
       const prompt = await loadPrompt("missingInfoInference", locale);
       const apiKey = readProviderApiKey(id, rootDir, secretProvider);
-      const userInstruction =
-        prompt.locale === "en"
-          ? "Use the current missing-GPS photo image and the strictly sectioned JSON data below. Output one second-pass missing-information inference JSON."
-          : "请根据当前待补照片图像和下方严格分区的 JSON 数据，输出一个待补信息二次推断 JSON。";
-      const content = await openAiCompatibleChatCompletion({
-        rootDir,
+      return inferMissingInfoWithProviderCore({
+        providerId: id,
         apiKey,
         baseUrl,
-        model: modelId,
-        temperature: 0.1,
+        modelId,
         headers,
+        prompt,
+        dataUrl,
+        mime,
+        inferenceInput,
+        locale: prompt.locale,
         debugContext: {
           providerId: id,
           operation: "missingInfoInference",
@@ -92,34 +84,23 @@ export function createOpenAiCompatibleProvider({
           promptVersion: prompt.version,
           locale: prompt.locale,
         },
-        messages: [
-          { role: "system", content: prompt.content },
-          {
-            role: "user",
-            content: [
-              { type: "text", text: [userInstruction, JSON.stringify(inferenceInput)].join("\n\n") },
-              { type: "image_url", image_url: { url: dataUrl || `data:${mime};base64,` } },
-            ],
-          },
-        ],
+        onDebugRecord: emitProviderDebugRecord,
       });
-      const parsed = parseJsonObject(content);
-      return {
-        ...validateMissingInfoInferenceResult(parsed, { locale: prompt.locale }),
-        provider: this.id,
-        model: modelId,
-        promptId: prompt.id,
-        promptVersion: prompt.version,
-      };
     },
     async embed({ rootDir, secretProvider, fileName, dataUrl, text, modelId, dimensions }) {
       const apiKey = readProviderApiKey(id, rootDir, secretProvider);
-      const embedding = await openAiCompatibleEmbedding({ rootDir, apiKey, baseUrl, providerId: id, model: modelId, fileName, dataUrl, text, dimensions, headers });
-      return {
-        embedding,
-        embeddingProvider: this.id,
-        embeddingModel: modelId,
-      };
+      const result = await embedContentWithProvider({
+        profile: { enabled: true, providerId: id, modelId, modelSource: "custom" },
+        apiKey,
+        baseUrl,
+        headers,
+        fileName,
+        dataUrl,
+        text,
+        dimensions,
+      });
+      if (!result) throw new Error("embedding unavailable");
+      return result;
     },
   };
 }

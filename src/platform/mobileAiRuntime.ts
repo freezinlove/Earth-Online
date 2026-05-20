@@ -2,6 +2,7 @@ import type { GeoPoint, LocationCandidate, Photo } from "@/domain/models";
 import { readMobileAiSettings, secretForMobileAiProfile } from "@/platform/mobileAiSettings";
 import { analyzePhotoWithProvider, embedContentWithProvider, inferMissingInfoWithProvider } from "../../shared/ai/provider-runtime.mjs";
 import { inferPreset } from "../../shared/domain/geo.mjs";
+import { loadMobilePrompt } from "./mobilePromptRegistry";
 
 export type MobileEmbeddingResult = {
   embedding?: number[];
@@ -120,7 +121,8 @@ export async function analyzeMobilePhoto({
   const settings = await readMobileAiSettings();
   const profile = settings.aiConfig.profiles.imageUnderstanding;
   const apiKey = await secretForMobileAiProfile("imageUnderstanding", profile.providerId);
-  return analyzePhotoWithProvider({ profile, apiKey, fileName, mime, dataUrl, preset, location, allowCloud, locale }) as Promise<MobilePhotoAnalysis>;
+  const prompt = loadMobilePrompt("photoAnalysis", locale);
+  return analyzePhotoWithProvider({ profile, apiKey, fileName, mime, dataUrl, preset, location, allowCloud, locale, prompt }) as Promise<MobilePhotoAnalysis>;
 }
 
 export async function inferMobileMissingInfoWithImage({
@@ -137,5 +139,6 @@ export async function inferMobileMissingInfoWithImage({
   const settings = await readMobileAiSettings();
   const profile = settings.aiConfig.profiles.imageUnderstanding;
   const apiKey = await secretForMobileAiProfile("imageUnderstanding", profile.providerId);
-  return inferMissingInfoWithProvider({ profile, apiKey, dataUrl, mime, inferenceInput, locale });
+  const prompt = loadMobilePrompt("missingInfoInference", locale);
+  return inferMissingInfoWithProvider({ profile, apiKey, dataUrl, mime, inferenceInput, locale, prompt });
 }

@@ -5,6 +5,7 @@ import { normalizeState } from "../shared/domain/state-normalizer.mjs";
 import { applyPendingDecision } from "../shared/domain/pending-workflow.mjs";
 import { buildImportStateFromPhotos } from "../shared/import/import-state-core.mjs";
 import { buildSearchResults } from "../shared/search/search-core.mjs";
+import { chatCompletionRequestBody, chatCompletionWithProvider, multimodalEmbeddingRequestBody, openAiCompatibleEmbeddingRequestBody } from "../shared/ai/provider-runtime.mjs";
 
 function makeIdFactory() {
   let sequence = 0;
@@ -139,5 +140,140 @@ assert.deepEqual(normalizeForParity(projectAndroidEquivalentState(acceptedAndroi
 const desktopSearch = buildSearchResults({ documents: desktopProjection.searchDocuments, photos: desktopProjection.photos, query: "Reine Norway harbor" });
 const androidSearch = buildSearchResults({ documents: androidProjection.searchDocuments, photos: androidProjection.photos, query: "Reine Norway harbor" });
 assert.deepEqual(androidSearch, desktopSearch, "Text search output must match");
+
+assert.deepEqual(
+  multimodalEmbeddingRequestBody({
+    model: "tongyi-embedding-vision-plus-2026-03-06",
+    dataUrl: "data:image/jpeg;base64,aaa",
+    dimensions: 1024,
+  }).parameters,
+  { dimension: 1024 },
+  "Aliyun dated Tongyi vision embedding models must request the configured 1024D output",
+);
+assert.deepEqual(
+  multimodalEmbeddingRequestBody({
+    model: "qwen3-vl-embedding",
+    dataUrl: "data:image/jpeg;base64,aaa",
+    dimensions: 1024,
+  }).parameters,
+  { dimension: 1024 },
+  "Aliyun qwen3-vl-embedding must request the configured 1024D output instead of the 2560D default",
+);
+assert.deepEqual(
+  openAiCompatibleEmbeddingRequestBody({
+    providerId: "siliconflow",
+    model: "Qwen/Qwen3-VL-Embedding-8B",
+    dataUrl: "data:image/jpeg;base64,aaa",
+    dimensions: 1024,
+  }).input,
+  { image: "data:image/jpeg;base64,aaa" },
+  "SiliconFlow VL embedding should pass image base64 through the provider-specific image input field",
+);
+assert.equal(
+  openAiCompatibleEmbeddingRequestBody({
+    providerId: "siliconflow",
+    model: "Qwen/Qwen3-VL-Embedding-8B",
+    dataUrl: "data:image/jpeg;base64,aaa",
+    dimensions: 1024,
+  }).dimensions,
+  1024,
+  "SiliconFlow Qwen3 embedding should request the configured 1024D output",
+);
+assert.equal(
+  openAiCompatibleEmbeddingRequestBody({
+    providerId: "openrouter",
+    model: "nvidia/llama-nemotron-embed-vl-1b-v2:free",
+    dataUrl: "data:image/jpeg;base64,aaa",
+    dimensions: 1024,
+  }).dimensions,
+  1024,
+  "OpenRouter Llama Nemotron VL should request the configured 1024D output",
+);
+assert.equal(
+  chatCompletionRequestBody({
+    providerId: "aliyun",
+    model: "qwen3.6-flash",
+    messages: [{ role: "user", content: "Return JSON." }],
+  }).enable_thinking,
+  false,
+  "Aliyun/Qwen chat models must default thinking mode off",
+);
+assert.equal(
+  chatCompletionRequestBody({
+    providerId: "siliconflow",
+    model: "Qwen/Qwen3.6-35B-A3B",
+    messages: [{ role: "user", content: "Return JSON." }],
+  }).enable_thinking,
+  false,
+  "SiliconFlow Qwen chat models must default thinking mode off",
+);
+assert.equal(
+  chatCompletionRequestBody({
+    providerId: "openai",
+    model: "gpt-4o-mini",
+    messages: [{ role: "user", content: "Return JSON." }],
+  }).enable_thinking,
+  undefined,
+  "Providers without Qwen-style thinking controls should not receive non-standard thinking fields",
+);
+assert.equal(
+  chatCompletionRequestBody({
+    providerId: "openai",
+    model: "gpt-4o-mini",
+    messages: [{ role: "user", content: "Return JSON." }],
+  }).reasoning,
+  undefined,
+  "OpenAI mini chat models must not receive OpenRouter-only reasoning controls",
+);
+assert.deepEqual(
+  chatCompletionRequestBody({
+    providerId: "openrouter",
+    model: "qwen/qwen3.6-flash",
+    messages: [{ role: "user", content: "Return JSON." }],
+  }).reasoning,
+  { effort: "none" },
+  "OpenRouter Qwen chat models must default reasoning mode off",
+);
+assert.deepEqual(
+  chatCompletionRequestBody({
+    providerId: "openrouter",
+    model: "~openai/gpt-mini-latest",
+    messages: [{ role: "user", content: "Return JSON." }],
+  }).reasoning,
+  { effort: "none" },
+  "OpenRouter GPT Mini Latest must default reasoning mode off",
+);
+assert.deepEqual(
+  chatCompletionRequestBody({
+    providerId: "openrouter",
+    model: "google/gemini-3.1-flash-lite",
+    messages: [{ role: "user", content: "Return JSON." }],
+  }).reasoning,
+  { effort: "minimal" },
+  "OpenRouter Gemini Flash Lite must request the minimum supported reasoning budget",
+);
+
+{
+  let attempts = 0;
+  const content = await chatCompletionWithProvider({
+    fetchImpl: async () => {
+      attempts += 1;
+      if (attempts < 3) {
+        const cause = new Error("socket reset");
+        cause.code = "ECONNRESET";
+        throw new TypeError("fetch failed", { cause });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "{\"ok\":true}" } }] }), { status: 200 });
+    },
+    providerId: "aliyun",
+    apiKey: "test-key",
+    baseUrl: "https://example.invalid/v1",
+    model: "qwen3.6-flash",
+    messages: [{ role: "user", content: "Return JSON." }],
+    timeoutMs: 1000,
+  });
+  assert.equal(attempts, 3, "Transient fetch transport failures should be retried before surfacing to import state");
+  assert.equal(content, "{\"ok\":true}", "Chat completion retry should return the successful response content");
+}
 
 console.log("Android/Desktop parity checks passed.");
