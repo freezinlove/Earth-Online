@@ -82,10 +82,6 @@ public class EarthPhotoLibraryPlugin extends Plugin {
     }
 
     private void launchPhotoPicker(PluginCall call) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            launchSystemPhotoPicker(call);
-            return;
-        }
         launchDocumentPhotoPicker(call);
     }
 
