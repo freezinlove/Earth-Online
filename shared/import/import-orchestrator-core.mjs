@@ -73,9 +73,73 @@ export async function runInitialImportPipeline({
     }
   };
 
-  const storageLimit = createLimiter(concurrency.storageWrite);
+  const imageLimit = createLimiter(concurrency.storageWrite);
   const visionLimit = createLimiter(concurrency.ai);
   const embeddingLimit = createLimiter(concurrency.embedding);
+  const preparedRecords = [];
+
+  const createDeferred = () => {
+    let resolve;
+    let reject;
+    const promise = new Promise((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    });
+    return { promise, resolve, reject };
+  };
+
+  const runImageProcessing = async ({ prepared, job, needThumbnail = true, onAiInputReady }) => {
+    let aiReadyEmitted = false;
+    const emitAiReady = (payload) => {
+      if (aiReadyEmitted) return;
+      aiReadyEmitted = true;
+      onAiInputReady?.(payload);
+    };
+    if (adapter.processImageDerivatives) {
+      const result = await adapter.processImageDerivatives(prepared, job, { needThumbnail, onAiInputReady: emitAiReady });
+      emitAiReady(result?.aiImagePayload);
+      return result ?? {};
+    }
+    const aiImagePayload = adapter.createAiImagePayload ? await adapter.createAiImagePayload(prepared, job) : undefined;
+    emitAiReady(aiImagePayload);
+    const thumbnail = needThumbnail && adapter.storeOriginalAndThumbnail ? await adapter.storeOriginalAndThumbnail(prepared, job) : undefined;
+    return { thumbnail, aiImagePayload };
+  };
+
+  const enqueueAiAnalysis = ({ prepared, job, fileName, location, preset, aiImagePayloadPromise }) =>
+    aiImagePayloadPromise.then((imagePayload) =>
+      Promise.all([
+        visionLimit(async () => {
+          const ai = await adapter.analyzeVision({
+            prepared,
+            job,
+            fileName,
+            mime: imagePayload?.mime ?? prepared.mime,
+            dataUrl: imagePayload?.dataUrl,
+            preset,
+            location,
+            allowCloud,
+            locale,
+          });
+          (adapter.recordVisionStats ?? recordImportVisionStats)(ai, aiStats);
+          markDone("ai", fileName);
+          return ai;
+        }),
+        embeddingLimit(async () => {
+          const embedding = await adapter.embedImage({
+            prepared,
+            job,
+            fileName,
+            mime: imagePayload?.mime ?? prepared.mime,
+            dataUrl: imagePayload?.dataUrl,
+            allowCloud,
+          });
+          (adapter.recordEmbeddingStats ?? recordImportEmbeddingStats)(embedding, aiStats);
+          markDone("embedding", fileName);
+          return embedding;
+        }),
+      ]),
+    );
 
   await mapConcurrent(items, concurrency.metadata, async (item, index) => {
     const fallbackFileName = adapter.itemFileName?.(item, index) ?? `photo-${index + 1}`;
@@ -104,56 +168,18 @@ export async function runInitialImportPipeline({
       markDone("thumbnails", fileName);
       if (reanalyzeDuplicates && duplicatePhoto && adapter.reanalyzeDuplicate !== false) {
         const parsedLocation = isUsableLocation(prepared.location) ? prepared.location : duplicatePhoto.location;
-        const aiImagePayload = adapter.createAiImagePayload?.(prepared, { duplicatePhoto }) ?? Promise.resolve(undefined);
-        downstreamTasks.push(
-          Promise.all([
-            visionLimit(async () => {
-              const imagePayload = await aiImagePayload;
-              const ai = await adapter.analyzeVision({
-                prepared,
-                fileName,
-                mime: imagePayload?.mime ?? prepared.mime,
-                dataUrl: imagePayload?.dataUrl,
-                preset: inferPreset(fileName, parsedLocation),
-                location: parsedLocation,
-                allowCloud,
-                locale,
-              });
-              (adapter.recordVisionStats ?? recordImportVisionStats)(ai, aiStats);
-              markDone("ai", fileName);
-              return ai;
-            }),
-            embeddingLimit(async () => {
-              const imagePayload = await aiImagePayload;
-              const embedding = await adapter.embedImage({
-                prepared,
-                fileName,
-                mime: imagePayload?.mime ?? prepared.mime,
-                dataUrl: imagePayload?.dataUrl,
-                allowCloud,
-              });
-              (adapter.recordEmbeddingStats ?? recordImportEmbeddingStats)(embedding, aiStats);
-              markDone("embedding", fileName);
-              return embedding;
-            }),
-          ]).then(([ai, embedding]) =>
-            adapter.applyDuplicateAnalysis?.({
-              duplicatePhoto,
-              prepared,
-              parsedLocation,
-              ai,
-              embedding,
-              vectorIndex,
-              makeId,
-              locale,
-            }),
-          ),
-        );
+        preparedRecords.push({
+          type: "duplicate",
+          prepared,
+          fileName,
+          duplicatePhoto,
+          parsedLocation,
+        });
       } else {
         markDone("ai", fileName);
         markDone("embedding", fileName);
+        await adapter.onDuplicateComplete?.(prepared, duplicatePhoto);
       }
-      await adapter.onDuplicateComplete?.(prepared, duplicatePhoto);
       return;
     }
 
@@ -181,47 +207,77 @@ export async function runInitialImportPipeline({
       hasExifLocation: Boolean(location),
       hasExifTime: Boolean(prepared.capturedAt),
     };
-    const aiImagePayload = adapter.createAiImagePayload?.(prepared, job) ?? Promise.resolve(undefined);
+    preparedRecords.push({ type: "new", prepared, fileName, job, index, location });
+  });
+
+  for (const record of preparedRecords) {
+    if (record.type === "duplicate") {
+      const aiReady = createDeferred();
+      const imageTask = imageLimit(async () =>
+        runImageProcessing({
+          prepared: record.prepared,
+          job: { type: "duplicate", duplicatePhoto: record.duplicatePhoto },
+          needThumbnail: false,
+          onAiInputReady: aiReady.resolve,
+        }),
+      ).catch((error) => {
+        aiReady.reject(error);
+        throw error;
+      });
+      const aiTask = enqueueAiAnalysis({
+        prepared: record.prepared,
+        job: { type: "duplicate", duplicatePhoto: record.duplicatePhoto },
+        fileName: record.fileName,
+        location: record.parsedLocation,
+        preset: inferPreset(record.fileName, record.parsedLocation),
+        aiImagePayloadPromise: aiReady.promise,
+      });
+      downstreamTasks.push(
+        Promise.all([imageTask, aiTask])
+          .then(([, [ai, embedding]]) =>
+            adapter.applyDuplicateAnalysis?.({
+              duplicatePhoto: record.duplicatePhoto,
+              prepared: record.prepared,
+              parsedLocation: record.parsedLocation,
+              ai,
+              embedding,
+              vectorIndex,
+              makeId,
+              locale,
+            }),
+          )
+          .finally(() => adapter.onDuplicateComplete?.(record.prepared, record.duplicatePhoto)),
+      );
+      continue;
+    }
+
+    const { prepared, fileName, job, index, location } = record;
+    const aiReady = createDeferred();
+    const imageTask = imageLimit(async () => {
+      const imageResult = await runImageProcessing({
+        prepared,
+        job,
+        needThumbnail: true,
+        onAiInputReady: aiReady.resolve,
+      });
+      markDone("thumbnails", fileName);
+      return imageResult;
+    }).catch((error) => {
+      aiReady.reject(error);
+      throw error;
+    });
+    const aiTask = enqueueAiAnalysis({
+      prepared,
+      job,
+      fileName,
+      location,
+      preset: job.preset,
+      aiImagePayloadPromise: aiReady.promise,
+    });
     downstreamTasks.push(
-      Promise.all([
-        storageLimit(async () => {
-          const thumbnail = await adapter.storeOriginalAndThumbnail(prepared, job);
-          markDone("thumbnails", fileName);
-          return thumbnail;
-        }),
-        visionLimit(async () => {
-          const imagePayload = await aiImagePayload;
-          const ai = await adapter.analyzeVision({
-            prepared,
-            job,
-            fileName,
-            mime: imagePayload?.mime ?? prepared.mime,
-            dataUrl: imagePayload?.dataUrl,
-            preset: job.preset,
-            location,
-            allowCloud,
-            locale,
-          });
-          (adapter.recordVisionStats ?? recordImportVisionStats)(ai, aiStats);
-          markDone("ai", fileName);
-          return ai;
-        }),
-        embeddingLimit(async () => {
-          const imagePayload = await aiImagePayload;
-          const embedding = await adapter.embedImage({
-            prepared,
-            job,
-            fileName,
-            mime: imagePayload?.mime ?? prepared.mime,
-            dataUrl: imagePayload?.dataUrl,
-            allowCloud,
-          });
-          (adapter.recordEmbeddingStats ?? recordImportEmbeddingStats)(embedding, aiStats);
-          markDone("embedding", fileName);
-          return embedding;
-        }),
-      ]).then(async ([thumbnail, ai, embedding]) => {
-        const resolvedAiImagePayload = await aiImagePayload;
+      Promise.all([imageTask, aiTask]).then(async ([imageResult, [ai, embedding]]) => {
+        const thumbnail = imageResult?.thumbnail ?? imageResult;
+        const resolvedAiImagePayload = imageResult?.aiImagePayload ?? (await aiReady.promise);
         const aiFailure = buildAiFailure(ai, embedding, {
           ...job,
           thumbName: adapter.thumbnailName?.(thumbnail, job),
@@ -257,7 +313,7 @@ export async function runInitialImportPipeline({
         importedSlots[index] = photo;
       }),
     );
-  });
+  }
 
   await Promise.all(downstreamTasks);
   const photos = importedSlots.filter(Boolean);

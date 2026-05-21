@@ -10,6 +10,12 @@ export type ExifResult = {
 const maxThumbSize = 720;
 const defaultThumbQuality = 0.78;
 
+export type ImageDataUrlVariant = {
+  key: string;
+  maxDimension: number;
+  jpegQuality: number;
+};
+
 export function parseExif(buffer: ArrayBuffer): ExifResult {
   return parseExifBytes(buffer) as ExifResult;
 }
@@ -22,14 +28,17 @@ export async function hashBuffer(buffer: ArrayBuffer) {
     .join("");
 }
 
-async function renderImageDataUrl(objectUrl: string, maxDimension: number, jpegQuality = defaultThumbQuality) {
-  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+async function loadHtmlImage(objectUrl: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
     img.onerror = reject;
     img.decoding = "async";
     img.src = objectUrl;
   });
+}
+
+function renderLoadedImageDataUrl(image: HTMLImageElement, maxDimension: number, jpegQuality = defaultThumbQuality) {
   const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight));
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
@@ -41,6 +50,11 @@ async function renderImageDataUrl(objectUrl: string, maxDimension: number, jpegQ
   return canvas.toDataURL("image/jpeg", Math.max(0.01, Math.min(1, quality)));
 }
 
+async function renderImageDataUrl(objectUrl: string, maxDimension: number, jpegQuality = defaultThumbQuality) {
+  const image = await loadHtmlImage(objectUrl);
+  return renderLoadedImageDataUrl(image, maxDimension, jpegQuality);
+}
+
 async function createImageDataUrlFromBlob(blob: Blob, maxDimension: number, jpegQuality: number, fallbackMime: string) {
   const objectUrl = URL.createObjectURL(blob);
   try {
@@ -49,6 +63,34 @@ async function createImageDataUrlFromBlob(blob: Blob, maxDimension: number, jpeg
     return readDataUrlFromBlob(blob, blob.type || fallbackMime);
   } finally {
     URL.revokeObjectURL(objectUrl);
+  }
+}
+
+export async function createImageDataUrls(source: File | string, variants: ImageDataUrlVariant[], fallbackMime = "image/jpeg", onVariant?: (key: string, dataUrl: string) => void) {
+  const objectUrl = typeof source === "string" ? source : URL.createObjectURL(source);
+  try {
+    const image = await loadHtmlImage(objectUrl);
+    const results: Record<string, string> = {};
+    for (const variant of variants) {
+      results[variant.key] = renderLoadedImageDataUrl(image, variant.maxDimension, variant.jpegQuality);
+      onVariant?.(variant.key, results[variant.key]);
+    }
+    return results;
+  } catch {
+    const blob =
+      typeof source === "string"
+        ? await fetch(source)
+            .then((response) => response.blob())
+            .catch(() => undefined)
+        : source;
+    const results: Record<string, string> = {};
+    for (const variant of variants) {
+      results[variant.key] = blob ? await createImageDataUrlFromBlob(blob, variant.maxDimension, variant.jpegQuality, fallbackMime) : "";
+      onVariant?.(variant.key, results[variant.key]);
+    }
+    return results;
+  } finally {
+    if (typeof source !== "string") URL.revokeObjectURL(objectUrl);
   }
 }
 

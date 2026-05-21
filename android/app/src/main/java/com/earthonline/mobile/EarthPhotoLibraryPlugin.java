@@ -14,7 +14,6 @@ import android.os.Build;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.util.Log;
-import android.webkit.MimeTypeMap;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -28,7 +27,6 @@ import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.security.MessageDigest;
@@ -40,7 +38,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.TimeZone;
-import java.util.UUID;
 
 @CapacitorPlugin(
     name = "EarthPhotoLibrary",
@@ -197,6 +194,7 @@ public class EarthPhotoLibraryPlugin extends Plugin {
     private JSObject describePickedAsset(Uri uri) {
         ContentResolver resolver = getContext().getContentResolver();
         QueryMetadata query = queryMetadata(resolver, uri);
+        boolean persisted = persistReadPermission(resolver, uri);
 
         JSObject asset = new JSObject();
         asset.put("uri", uri.toString());
@@ -205,36 +203,36 @@ public class EarthPhotoLibraryPlugin extends Plugin {
         asset.put("mimeType", mimeType == null ? DEFAULT_MIME_TYPE : mimeType);
         if (query.size != null) asset.put("size", query.size);
         if (query.lastModified != null) asset.put("lastModified", query.lastModified);
-        asset.put("persisted", false);
+        asset.put("persisted", persisted);
         return asset;
     }
 
     private JSObject describePreparedAsset(Uri uri) throws IOException {
         ContentResolver resolver = getContext().getContentResolver();
         QueryMetadata query = queryMetadata(resolver, uri);
-        CopyResult copy = copyToPrivateStorage(resolver, uri, query);
-        Uri localUri = Uri.fromFile(copy.file);
-        ExifMetadata exif = readExif(resolver, localUri);
-        BitmapMetadata bitmap = readBitmapMetadata(resolver, localUri);
+        boolean persisted = persistReadPermission(resolver, uri);
+        HashResult hash = hashUriWithOriginalFallback(resolver, uri);
+        ExifMetadata exif = readExif(resolver, uri);
+        BitmapMetadata bitmap = readBitmapMetadata(resolver, uri);
 
         JSObject asset = new JSObject();
-        asset.put("uri", localUri.toString());
+        asset.put("uri", uri.toString());
         String localUrl = getBridge().getLocalUrl();
         if (localUrl != null) {
-            asset.put("webPath", webPathForUri(localUrl, localUri));
+            asset.put("webPath", webPathForUri(localUrl, uri));
         }
         asset.put("fileName", query.displayName == null ? fallbackFileName(uri) : query.displayName);
         String mimeType = query.mimeType == null ? resolver.getType(uri) : query.mimeType;
         asset.put("mimeType", mimeType == null ? DEFAULT_MIME_TYPE : mimeType);
-        asset.put("size", copy.size);
+        asset.put("size", query.size == null ? hash.size : query.size);
         if (query.lastModified != null) asset.put("lastModified", query.lastModified);
         if (bitmap.width > 0) asset.put("width", bitmap.width);
         if (bitmap.height > 0) asset.put("height", bitmap.height);
         if (exif.capturedAt != null) asset.put("capturedAt", exif.capturedAt);
         if (exif.latitude != null) asset.put("latitude", exif.latitude);
         if (exif.longitude != null) asset.put("longitude", exif.longitude);
-        if (copy.sha256 != null) asset.put("sha256", copy.sha256);
-        asset.put("persisted", true);
+        if (hash.sha256 != null) asset.put("sha256", hash.sha256);
+        asset.put("persisted", persisted);
         return asset;
     }
 
@@ -284,36 +282,50 @@ public class EarthPhotoLibraryPlugin extends Plugin {
         return metadata;
     }
 
-    private CopyResult copyToPrivateStorage(ContentResolver resolver, Uri sourceUri, QueryMetadata query) throws IOException {
-        File directory = localPhotoDirectory();
-        if (!directory.exists() && !directory.mkdirs()) throw new IOException("Unable to create local photo directory");
-        String extension = fileExtension(query.displayName, query.mimeType == null ? resolver.getType(sourceUri) : query.mimeType);
-        File target = new File(directory, "photo-" + System.currentTimeMillis() + "-" + UUID.randomUUID() + extension);
-        Uri readUri = originalExifUri(sourceUri);
+    private boolean persistReadPermission(ContentResolver resolver, Uri uri) {
+        if (!"content".equals(uri.getScheme())) return true;
         try {
-            return copyUriToFile(resolver, readUri, target, query.lastModified);
-        } catch (IOException | RuntimeException error) {
-            if (target.exists()) target.delete();
-            if (readUri.equals(sourceUri)) throw new IOException("Unable to copy selected photo", error);
-            return copyUriToFile(resolver, sourceUri, target, query.lastModified);
+            resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            return true;
+        } catch (SecurityException | IllegalArgumentException ignored) {
+            return hasPersistedReadPermission(resolver, uri);
         }
     }
 
-    private CopyResult copyUriToFile(ContentResolver resolver, Uri sourceUri, File target, Long lastModified) throws IOException {
+    private boolean hasPersistedReadPermission(ContentResolver resolver, Uri uri) {
+        try {
+            for (android.content.UriPermission permission : resolver.getPersistedUriPermissions()) {
+                if (permission.getUri().equals(uri) && permission.isReadPermission()) return true;
+            }
+        } catch (SecurityException ignored) {
+            return false;
+        }
+        return false;
+    }
+
+    private HashResult hashUriWithOriginalFallback(ContentResolver resolver, Uri sourceUri) throws IOException {
+        Uri readUri = originalExifUri(sourceUri);
+        try {
+            return hashUri(resolver, readUri);
+        } catch (IOException | RuntimeException error) {
+            if (readUri.equals(sourceUri)) throw new IOException("Unable to hash selected photo", error);
+            return hashUri(resolver, sourceUri);
+        }
+    }
+
+    private HashResult hashUri(ContentResolver resolver, Uri sourceUri) throws IOException {
         MessageDigest digest = sha256Digest();
         long size = 0;
-        try (InputStream input = resolver.openInputStream(sourceUri); FileOutputStream output = new FileOutputStream(target)) {
+        try (InputStream input = resolver.openInputStream(sourceUri)) {
             if (input == null) throw new IOException("Unable to open selected photo");
             byte[] buffer = new byte[64 * 1024];
             int read;
             while ((read = input.read(buffer)) != -1) {
-                output.write(buffer, 0, read);
                 if (digest != null) digest.update(buffer, 0, read);
                 size += read;
             }
         }
-        if (lastModified != null) target.setLastModified(lastModified);
-        return new CopyResult(target, size, digest == null ? null : hex(digest.digest()));
+        return new HashResult(size, digest == null ? null : hex(digest.digest()));
     }
 
     private MessageDigest sha256Digest() {
@@ -332,18 +344,6 @@ public class EarthPhotoLibraryPlugin extends Plugin {
 
     private File localPhotoDirectory() {
         return new File(getContext().getFilesDir(), LOCAL_PHOTO_DIR);
-    }
-
-    private String fileExtension(String displayName, String mimeType) {
-        if (displayName != null) {
-            int dot = displayName.lastIndexOf('.');
-            if (dot >= 0 && dot < displayName.length() - 1) {
-                String extension = displayName.substring(dot).toLowerCase(Locale.US);
-                if (extension.length() <= 8) return extension;
-            }
-        }
-        String extension = mimeType == null ? null : MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType);
-        return extension == null || extension.isEmpty() ? ".jpg" : "." + extension;
     }
 
     private String webPathForUri(String localUrl, Uri uri) {
@@ -460,13 +460,11 @@ public class EarthPhotoLibraryPlugin extends Plugin {
         Long lastModified;
     }
 
-    private static class CopyResult {
-        final File file;
+    private static class HashResult {
         final long size;
         final String sha256;
 
-        CopyResult(File file, long size, String sha256) {
-            this.file = file;
+        HashResult(long size, String sha256) {
             this.size = size;
             this.sha256 = sha256;
         }

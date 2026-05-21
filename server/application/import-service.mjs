@@ -91,14 +91,6 @@ export function createImportServices({
     throw new Error(`Import file is missing a tempPath/sourcePath: ${file.name || "unnamed"}`);
   }
 
-  async function createThumbnailFromFile(fullPath, ext) {
-    return createJpegDerivativeFromFile(fullPath, {
-      fallbackExt: ext,
-      maxDimension: thumbnailMaxDimension,
-      quality: thumbnailJpegQuality,
-    });
-  }
-
   async function createJpegDerivativeFromFile(fullPath, { fallbackExt = ".jpg", maxDimension, quality }) {
     try {
       return {
@@ -114,16 +106,71 @@ export function createImportServices({
     }
   }
 
+  async function createJpegDerivativeFromSharpBase(base, fullPath, { fallbackExt = ".jpg", maxDimension, quality }) {
+    try {
+      return {
+        ext: ".jpg",
+        buffer: await base
+          .clone()
+          .resize({ width: maxDimension, height: maxDimension, fit: "inside", withoutEnlargement: true })
+          .jpeg({ quality })
+          .toBuffer(),
+      };
+    } catch {
+      return { ext: fallbackExt, buffer: await fs.readFile(fullPath) };
+    }
+  }
+
   async function createAiInputFromFile(fullPath, ext) {
     const maxDimension = Number.isFinite(aiImageMaxDimension) && aiImageMaxDimension > 0 ? aiImageMaxDimension : 1200;
     const quality = Number.isFinite(aiImageJpegQuality) && aiImageJpegQuality > 0 && aiImageJpegQuality <= 100 ? aiImageJpegQuality : 82;
     return createJpegDerivativeFromFile(fullPath, { fallbackExt: ext, maxDimension, quality });
   }
 
-  async function createDisplayImageFromFile(fullPath, ext) {
-    const maxDimension = Number.isFinite(displayImageMaxDimension) && displayImageMaxDimension > 0 ? displayImageMaxDimension : 1800;
-    const quality = Number.isFinite(displayImageJpegQuality) && displayImageJpegQuality > 0 && displayImageJpegQuality <= 100 ? displayImageJpegQuality : 85;
-    return createJpegDerivativeFromFile(fullPath, { fallbackExt: ext, maxDimension, quality });
+  async function processImportImageDerivatives(prepared, job, { needThumbnail = true, onAiInputReady } = {}) {
+    const base = sharp(prepared.fullPath, { failOn: "none" }).rotate();
+    const aiInput = await createJpegDerivativeFromSharpBase(base, prepared.fullPath, {
+      fallbackExt: prepared.ext,
+      maxDimension: Number.isFinite(aiImageMaxDimension) && aiImageMaxDimension > 0 ? aiImageMaxDimension : 1200,
+      quality: Number.isFinite(aiImageJpegQuality) && aiImageJpegQuality > 0 && aiImageJpegQuality <= 100 ? aiImageJpegQuality : 82,
+    });
+    const aiMime = mimeFromExt(aiInput.ext, prepared.mime);
+    let aiImagePayload = imagePayloadFromBuffer(aiInput.buffer, aiMime);
+    if (job?.photoId && paths.aiInputDir) {
+      const aiInputName = `${job.photoId}${aiInput.ext}`;
+      await fs.writeFile(path.join(paths.aiInputDir, aiInputName), aiInput.buffer);
+      aiImagePayload = {
+        ...aiImagePayload,
+        name: aiInputName,
+        url: `/data/ai-inputs/${aiInputName}`,
+      };
+    }
+    onAiInputReady?.(aiImagePayload);
+    if (!needThumbnail) return { aiImagePayload };
+
+    const thumbnail = await createJpegDerivativeFromSharpBase(base, prepared.fullPath, {
+      fallbackExt: prepared.ext,
+      maxDimension: thumbnailMaxDimension,
+      quality: thumbnailJpegQuality,
+    });
+    const display = await createJpegDerivativeFromSharpBase(base, prepared.fullPath, {
+      fallbackExt: prepared.ext,
+      maxDimension: Number.isFinite(displayImageMaxDimension) && displayImageMaxDimension > 0 ? displayImageMaxDimension : 1800,
+      quality: Number.isFinite(displayImageJpegQuality) && displayImageJpegQuality > 0 && displayImageJpegQuality <= 100 ? displayImageJpegQuality : 85,
+    });
+    const thumbName = `${job.photoId}${thumbnail.ext}`;
+    const displayName = `${job.photoId}${display.ext}`;
+    await fs.writeFile(path.join(paths.thumbDir, thumbName), thumbnail.buffer);
+    if (paths.displayDir) await fs.writeFile(path.join(paths.displayDir, displayName), display.buffer);
+    await fs.copyFile(prepared.fullPath, path.join(paths.photoDir, job.storageName));
+    return {
+      aiImagePayload,
+      thumbnail: {
+        name: thumbName,
+        displayName,
+        displayUrl: `/data/display/${displayName}`,
+      },
+    };
   }
 
   function mimeFromExt(ext = ".jpg", fallback = "image/jpeg") {
@@ -217,36 +264,7 @@ export function createImportServices({
         capturedAt: (prepared, { now: importNow, total, index }) =>
           prepared.capturedAt ??
           (prepared.file.lastModified ? new Date(prepared.file.lastModified).toISOString() : new Date(importNow.getTime() - (total - index) * 86400000).toISOString()),
-        async createAiImagePayload(prepared, job) {
-          const aiInput = await createAiInputFromFile(prepared.fullPath, prepared.ext);
-          const mime = mimeFromExt(aiInput.ext, prepared.mime);
-          if (!job?.photoId || !paths.aiInputDir) return imagePayloadFromBuffer(aiInput.buffer, mime);
-          const aiInputName = `${job.photoId}${aiInput.ext}`;
-          await fs.writeFile(path.join(paths.aiInputDir, aiInputName), aiInput.buffer);
-          return {
-            ...imagePayloadFromBuffer(aiInput.buffer, mime),
-            name: aiInputName,
-            url: `/data/ai-inputs/${aiInputName}`,
-          };
-        },
-        async storeOriginalAndThumbnail(prepared, job) {
-          const [thumbnail, display] = await Promise.all([
-            createThumbnailFromFile(prepared.fullPath, prepared.ext),
-            createDisplayImageFromFile(prepared.fullPath, prepared.ext),
-          ]);
-          const thumbName = `${job.photoId}${thumbnail.ext}`;
-          const displayName = `${job.photoId}${display.ext}`;
-          await Promise.all([
-            fs.copyFile(prepared.fullPath, path.join(paths.photoDir, job.storageName)),
-            fs.writeFile(path.join(paths.thumbDir, thumbName), thumbnail.buffer),
-            paths.displayDir ? fs.writeFile(path.join(paths.displayDir, displayName), display.buffer) : Promise.resolve(),
-          ]);
-          return {
-            name: thumbName,
-            displayName,
-            displayUrl: `/data/display/${displayName}`,
-          };
-        },
+        processImageDerivatives: processImportImageDerivatives,
         thumbnailName: (thumbnail) => thumbnail.name,
         analyzeVision: (input) => analyzePhotoVision(input),
         embedImage: (input) => embedPhotoImage(input),

@@ -9,7 +9,7 @@ import type { NativePhotoAsset } from "@/platform/nativePhotoLibrary";
 import { prepareNativePhotoAsset, releaseNativePhotoPermissions } from "@/platform/nativePhotoLibrary";
 import { deleteNativeVectors, readNativeImportJob, readNativeVectorIndex, writeNativeImportJob, writeNativeVectorIndex } from "@/platform/nativeRepository";
 import { deleteMobileThumbnailsForPhotos, getMobilePersistedState, type MobilePersistedState, writeMobilePersistedState } from "@/platform/mobileStateStore";
-import { createImageDataUrl, hashBuffer, parseExif, sourceUrisForPhotos } from "@/platform/mobileMedia";
+import { createImageDataUrl, createImageDataUrls, hashBuffer, parseExif, sourceUrisForPhotos } from "@/platform/mobileMedia";
 import { emptyCredential, readMobileAiSettings, updateMobileAiSettings, type MobileAiSettingsUpdateBody } from "@/platform/mobileAiSettings";
 import { analyzeMobilePhoto, embedMobileImage, embedMobileTextQuery, inferMobileMissingInfoWithImage, type MobileEmbeddingResult, type MobilePhotoAnalysis } from "@/platform/mobileAiRuntime";
 import { geocodeMobileAiCandidate, manualMobileGeoDescription, projectMobileState as projectState, reverseMobileCandidates } from "@/platform/mobileGeodata";
@@ -125,16 +125,45 @@ async function mobileAiImageDataUrlFromSource(source: File | string | undefined,
   return createImageDataUrl(source, pipelineConfig.images.aiImageMaxDimension, pipelineConfig.images.aiImageJpegQuality, mime).catch(() => undefined);
 }
 
-async function mobileThumbnailDataUrlFromSource(source: File | string | undefined, mime = "image/jpeg") {
-  if (!source) return "";
+async function processMobileImageDerivativesFromSource(
+  source: File | string | undefined,
+  mime = "image/jpeg",
+  { needThumbnail = true, onAiInputReady }: { needThumbnail?: boolean; onAiInputReady?: (payload?: { dataUrl?: string; url?: string; mime?: string }) => void } = {},
+) {
+  if (!source) {
+    onAiInputReady?.(undefined);
+    return { aiImagePayload: undefined, thumbnail: { dataUrl: "", displayUrl: undefined } };
+  }
   const pipelineConfig = importPipelineConfig();
-  return createImageDataUrl(source, pipelineConfig.images.thumbnailMaxDimension, pipelineConfig.images.thumbnailJpegQuality, mime).catch(() => "");
-}
-
-async function mobileDisplayDataUrlFromSource(source: File | string | undefined, mime = "image/jpeg") {
-  if (!source) return undefined;
-  const pipelineConfig = importPipelineConfig();
-  return createImageDataUrl(source, pipelineConfig.images.displayImageMaxDimension, pipelineConfig.images.displayImageJpegQuality, mime).catch(() => undefined);
+  const variants = [
+    { key: "aiInput", maxDimension: pipelineConfig.images.aiImageMaxDimension, jpegQuality: pipelineConfig.images.aiImageJpegQuality },
+    ...(needThumbnail
+      ? [
+          { key: "thumbnail", maxDimension: pipelineConfig.images.thumbnailMaxDimension, jpegQuality: pipelineConfig.images.thumbnailJpegQuality },
+          { key: "display", maxDimension: pipelineConfig.images.displayImageMaxDimension, jpegQuality: pipelineConfig.images.displayImageJpegQuality },
+        ]
+      : []),
+  ];
+  let aiReadyEmitted = false;
+  const emitAiReady = (payload?: { dataUrl?: string; url?: string; mime?: string }) => {
+    if (aiReadyEmitted) return;
+    aiReadyEmitted = true;
+    onAiInputReady?.(payload);
+  };
+  const dataUrls = await createImageDataUrls(source, variants, mime, (key, dataUrl) => {
+    if (key === "aiInput") emitAiReady(dataUrl ? { dataUrl, url: dataUrl, mime: "image/jpeg" } : undefined);
+  }).catch(() => ({} as Record<string, string>));
+  const aiImagePayload = dataUrls.aiInput ? { dataUrl: dataUrls.aiInput, url: dataUrls.aiInput, mime: "image/jpeg" } : undefined;
+  emitAiReady(aiImagePayload);
+  return {
+    aiImagePayload,
+    thumbnail: needThumbnail
+      ? {
+          dataUrl: dataUrls.thumbnail || "",
+          displayUrl: dataUrls.display || undefined,
+        }
+      : undefined,
+  };
 }
 
 async function mobileAiImageDataUrlForPhoto(photo: Photo) {
@@ -467,14 +496,8 @@ export const mobileLocalApi = {
           };
         },
         capturedAt: (prepared: MobilePreparedFile) => prepared.capturedAt ?? (prepared.file.lastModified ? new Date(prepared.file.lastModified).toISOString() : nowIso()),
-        createAiImagePayload: (prepared: MobilePreparedFile) => mobileAiImageDataUrlFromSource(prepared.file, prepared.mime).then((dataUrl) => (dataUrl ? { dataUrl, url: dataUrl, mime: "image/jpeg" } : undefined)),
-        async storeOriginalAndThumbnail(prepared: MobilePreparedFile) {
-          const [dataUrl, displayUrl] = await Promise.all([
-            mobileThumbnailDataUrlFromSource(prepared.file, prepared.mime),
-            mobileDisplayDataUrlFromSource(prepared.file, prepared.mime),
-          ]);
-          return { dataUrl, displayUrl };
-        },
+        processImageDerivatives: (prepared: MobilePreparedFile, _job: MobileImportPhotoJob, options?: { needThumbnail?: boolean; onAiInputReady?: (payload?: { dataUrl?: string; url?: string; mime?: string }) => void }) =>
+          processMobileImageDerivativesFromSource(prepared.file, prepared.mime, options),
         analyzeVision: analyzeMobileVisionForImport,
         embedImage: embedMobileImageForImport,
         recordEmbeddingStats: recordImportEmbeddingStats,
@@ -525,16 +548,19 @@ export const mobileLocalApi = {
         createAiStats: createImportAiStats,
         async prepareItem(asset: NativePhotoAsset) {
           const prepared = await prepareNativePhotoAsset(asset);
-          const buffer = prepared.webPath
-            ? await fetch(prepared.webPath)
-                .then((response) => response.arrayBuffer())
-                .catch(() => undefined)
-            : undefined;
-          const parsedExif = buffer ? parseExif(buffer) : {};
           const nativeLocation = typeof prepared.latitude === "number" && typeof prepared.longitude === "number" ? { lat: prepared.latitude, lng: prepared.longitude } : undefined;
+          let parsedExif: ReturnType<typeof parseExif> = {};
+          let fallbackHash: string | undefined;
+          if (!prepared.sha256 && prepared.webPath) {
+            const buffer = await fetch(prepared.webPath)
+              .then((response) => response.arrayBuffer())
+              .catch(() => undefined);
+            parsedExif = buffer ? parseExif(buffer) : {};
+            fallbackHash = buffer ? await hashBuffer(buffer).catch(() => undefined) : undefined;
+          }
           const exifLocation = isUsableLocation(nativeLocation) ? nativeLocation : parsedExif.location;
           const capturedAt = prepared.capturedAt ?? parsedExif.capturedAt;
-          const originalHash = prepared.sha256 ?? (buffer ? await hashBuffer(buffer).catch(() => undefined) : undefined) ?? prepared.uri;
+          const originalHash = prepared.sha256 ?? fallbackHash ?? prepared.uri;
           return {
             ...prepared,
             fileName: prepared.fileName,
@@ -549,17 +575,14 @@ export const mobileLocalApi = {
           };
         },
         onPrepareError: (error: unknown) => console.error(error),
-        onDuplicateComplete: (prepared: MobilePreparedAsset) => releaseNativePhotoPermissions([prepared.uri]).catch(() => undefined),
-        capturedAt: (prepared: MobilePreparedAsset) => prepared.capturedAt ?? nowIso(),
-        createAiImagePayload: (prepared: MobilePreparedAsset) =>
-          prepared.webPath ? mobileAiImageDataUrlFromSource(prepared.webPath, prepared.mime).then((dataUrl) => (dataUrl ? { dataUrl, url: dataUrl, mime: "image/jpeg" } : undefined)) : Promise.resolve(undefined),
-        async storeOriginalAndThumbnail(prepared: MobilePreparedAsset) {
-          const [dataUrl, displayUrl] = await Promise.all([
-            mobileThumbnailDataUrlFromSource(prepared.webPath, prepared.mime),
-            mobileDisplayDataUrlFromSource(prepared.webPath, prepared.mime),
-          ]);
-          return { dataUrl, displayUrl };
+        onDuplicateComplete: (prepared: MobilePreparedAsset, duplicatePhoto?: Photo) => {
+          const existingSources = new Set([duplicatePhoto?.sourceUri, duplicatePhoto?.sourceWebPath, duplicatePhoto?.storageUrl].filter(Boolean));
+          if (existingSources.has(prepared.uri) || (prepared.webPath && existingSources.has(prepared.webPath))) return;
+          releaseNativePhotoPermissions([prepared.uri]).catch(() => undefined);
         },
+        capturedAt: (prepared: MobilePreparedAsset) => prepared.capturedAt ?? nowIso(),
+        processImageDerivatives: (prepared: MobilePreparedAsset, _job: MobileImportPhotoJob, options?: { needThumbnail?: boolean; onAiInputReady?: (payload?: { dataUrl?: string; url?: string; mime?: string }) => void }) =>
+          processMobileImageDerivativesFromSource(prepared.webPath, prepared.mime, options),
         analyzeVision: analyzeMobileVisionForImport,
         embedImage: embedMobileImageForImport,
         recordEmbeddingStats: recordImportEmbeddingStats,
