@@ -1,13 +1,12 @@
 import type {
   EmbeddingRebuildReport,
-  ImportJob,
   ImportJobProgress,
   LocalAiSettings,
   StorageSettings,
 } from "@/services/apiClient";
 import type { NativePhotoAsset } from "@/platform/nativePhotoLibrary";
 import { prepareNativePhotoAsset, releaseNativePhotoPermissions } from "@/platform/nativePhotoLibrary";
-import { deleteNativeVectors, readNativeImportJob, readNativeVectorIndex, writeNativeImportJob, writeNativeVectorIndex } from "@/platform/nativeRepository";
+import { deleteNativeVectors, readNativeVectorIndex, writeNativeVectorIndex } from "@/platform/nativeRepository";
 import { deleteMobileThumbnailsForPhotos, getMobilePersistedState, type MobilePersistedState, writeMobilePersistedState } from "@/platform/mobileStateStore";
 import { createImageDataUrl, createImageDataUrls, hashBuffer, parseExif, sourceUrisForPhotos } from "@/platform/mobileMedia";
 import { emptyCredential, readMobileAiSettings, updateMobileAiSettings, type MobileAiSettingsUpdateBody } from "@/platform/mobileAiSettings";
@@ -15,7 +14,6 @@ import { analyzeMobilePhoto, embedMobileImage, embedMobileTextQuery, inferMobile
 import { geocodeMobileAiCandidate, manualMobileGeoDescription, projectMobileState as projectState, reverseMobileCandidates } from "@/platform/mobileGeodata";
 import { searchMobilePhotos } from "@/platform/mobileSearch";
 import { importPipelineConfig, mapConcurrent } from "../../shared/application/import-pipeline.mjs";
-import { createJobProgressRecorder as createSharedJobProgressRecorder } from "../../shared/application/job-core.mjs";
 import { isUsableLocation } from "../../shared/domain/geo.mjs";
 import { mergeLocationCandidates, resolveImportedLocation } from "../../shared/domain/location-resolver.mjs";
 import { rebuildTrips } from "../../shared/domain/trip-rebuilder.mjs";
@@ -69,7 +67,6 @@ import type {
   Photo,
 } from "@/domain/models";
 
-type MobileImportJob = ImportJob;
 type MobilePreparedFile = {
   file: File;
   fileName: string;
@@ -107,16 +104,18 @@ function makeId(prefix: string) {
 }
 
 function mobileJobProgressRecorder(onJobProgress: ((progress: ImportJobProgress) => void) | undefined, total: number, phase: ImportJobProgress["phase"]) {
-  return createSharedJobProgressRecorder({
-    id: makeId("mobile-job"),
-    total,
-    phase,
-    now: nowIso,
-    onProgress: onJobProgress,
-    save: (job: MobileImportJob) => {
-      void writeNativeImportJob(job).catch(() => false);
+  void total;
+  void phase;
+  return {
+    update(progress: ImportJobProgress) {
+      onJobProgress?.(progress);
     },
-  });
+    complete(result?: unknown) {
+      void result;
+      // Android runs imports in the WebView and returns the final snapshot directly.
+      // Persisting import job history duplicates large image data through the native bridge.
+    },
+  };
 }
 
 async function mobileAiImageDataUrlFromSource(source: File | string | undefined, mime = "image/jpeg") {
@@ -362,7 +361,8 @@ export const mobileLocalApi = {
     return projectState(await getMobilePersistedState());
   },
   async getImportJob(id: string) {
-    return readNativeImportJob<MobileImportJob>(id);
+    void id;
+    return undefined;
   },
   async reverseGeocode(point: GeoPoint) {
     const nativeCandidates = await reverseMobileCandidates(point, { makeId, preferCity: true });
