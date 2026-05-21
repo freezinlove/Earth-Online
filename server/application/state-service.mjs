@@ -7,6 +7,8 @@ export function createStateService({ paths, repository }) {
   async function ensureStorage() {
     await fs.mkdir(paths.photoDir, { recursive: true });
     await fs.mkdir(paths.thumbDir, { recursive: true });
+    if (paths.aiInputDir) await fs.mkdir(paths.aiInputDir, { recursive: true });
+    if (paths.displayDir) await fs.mkdir(paths.displayDir, { recursive: true });
     if (paths.importJobDir) await fs.mkdir(paths.importJobDir, { recursive: true });
     await repository.ensureInitialized();
     if (!existsSync(paths.vectorPath)) {

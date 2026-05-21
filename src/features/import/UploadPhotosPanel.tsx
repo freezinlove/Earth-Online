@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { capturedDateLabel } from "@/domain/datetime";
 import { photoAltText, placeLabel, tripLabel } from "@/domain/labels";
+import { photoDisplaySource } from "@/domain/photoSources";
 import { useI18n } from "@/i18n/useI18n";
 import type { MessageKey } from "@/i18n/messages";
 import type { ImportBatch, PendingItem, Photo, PlaceNode, Trip } from "@/domain/models";
@@ -1109,7 +1110,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
         <button className="import-photo-preview-close" type="button" title={t("closePreview")} onClick={closePhotoPreview}>
           <X size={26} />
         </button>
-        <img src={previewPhoto.storageUrl ?? previewPhoto.thumbnailUrl} alt={photoAltText(previewPhoto)} />
+        <img src={photoDisplaySource(previewPhoto)} alt={photoAltText(previewPhoto)} />
         <figcaption>
           <strong>{previewPhoto.title ?? previewPhoto.fileName}</strong>
           <span>{previewPhoto.fileName}</span>

@@ -11,6 +11,8 @@ export const importImageDefaults = Object.freeze({
   thumbnailJpegQuality: 78,
   aiImageMaxDimension: 1200,
   aiImageJpegQuality: 82,
+  displayImageMaxDimension: 1800,
+  displayImageJpegQuality: 85,
 });
 
 export const importTimeoutDefaults = Object.freeze({
@@ -36,6 +38,8 @@ export function importPipelineConfig(config = {}) {
       thumbnailJpegQuality: numberFromConfig(config, "EARTH_ONLINE_THUMBNAIL_JPEG_QUALITY", importImageDefaults.thumbnailJpegQuality),
       aiImageMaxDimension: numberFromConfig(config, "EARTH_ONLINE_AI_IMAGE_MAX_DIMENSION", importImageDefaults.aiImageMaxDimension),
       aiImageJpegQuality: numberFromConfig(config, "EARTH_ONLINE_AI_IMAGE_JPEG_QUALITY", importImageDefaults.aiImageJpegQuality),
+      displayImageMaxDimension: numberFromConfig(config, "EARTH_ONLINE_DISPLAY_IMAGE_MAX_DIMENSION", importImageDefaults.displayImageMaxDimension),
+      displayImageJpegQuality: numberFromConfig(config, "EARTH_ONLINE_DISPLAY_IMAGE_JPEG_QUALITY", importImageDefaults.displayImageJpegQuality),
     },
     timeouts: {
       aiRequestMs: numberFromConfig(config, "AI_REQUEST_TIMEOUT_MS", importTimeoutDefaults.aiRequestMs),

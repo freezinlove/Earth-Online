@@ -98,6 +98,8 @@ export function deleteTripState(state, id) {
         pendingItemIds: safeArray(batch.pendingItemIds).filter((pendingId) => !pendingIds.has(pendingId)),
         storedFileNames: safeArray(batch.storedFileNames).filter((name) => !removedPhotos.some((photo) => basename(photo.storageUrl) === basename(name))),
         storedThumbnailNames: safeArray(batch.storedThumbnailNames).filter((name) => !removedPhotos.some((photo) => basename(photo.thumbnailUrl) === basename(name))),
+        storedAiInputNames: safeArray(batch.storedAiInputNames).filter((name) => !removedPhotos.some((photo) => basename(photo.aiInputUrl) === basename(name))),
+        storedDisplayNames: safeArray(batch.storedDisplayNames).filter((name) => !removedPhotos.some((photo) => basename(photo.displayUrl) === basename(name))),
       })),
     },
     removedTrip: trip,
@@ -205,6 +207,10 @@ export function deletePhotoState(state, photoId, { makeId }) {
       ...batch,
       addedPhotoIds: safeArray(batch.addedPhotoIds).filter((id) => id !== photoId),
       duplicatePhotoIds: safeArray(batch.duplicatePhotoIds).filter((id) => id !== photoId),
+      storedFileNames: safeArray(batch.storedFileNames).filter((name) => !removedPhotos.some((photo) => basename(photo.storageUrl) === basename(name))),
+      storedThumbnailNames: safeArray(batch.storedThumbnailNames).filter((name) => !removedPhotos.some((photo) => basename(photo.thumbnailUrl) === basename(name))),
+      storedAiInputNames: safeArray(batch.storedAiInputNames).filter((name) => !removedPhotos.some((photo) => basename(photo.aiInputUrl) === basename(name))),
+      storedDisplayNames: safeArray(batch.storedDisplayNames).filter((name) => !removedPhotos.some((photo) => basename(photo.displayUrl) === basename(name))),
     })),
   };
   return {

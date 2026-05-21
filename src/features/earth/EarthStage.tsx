@@ -8,6 +8,7 @@ import ThreeGlobe from "three-globe";
 import type { Line2, LineSegments2, OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { capturedDateTimeLabel } from "@/domain/datetime";
 import { countryLabel, markerLabel, photoAltText, photoLabel, placeLabel } from "@/domain/labels";
+import { photoDisplaySource } from "@/domain/photoSources";
 import { useI18n } from "@/i18n/useI18n";
 import type { GeoPoint, GlobeMarker, Photo, Trip } from "@/domain/models";
 import { registerAndroidBackHandler } from "@/platform/androidBack";
@@ -1288,7 +1289,7 @@ function PhotoLightbox({ photo, placeName, onClose }: { photo?: Photo; placeName
           <X size={26} />
         </button>
         <div className="travel-lightbox-media">
-          <img ref={imageRef} src={photo.storageUrl ?? photo.thumbnailUrl} alt={photoAltText(photo)} onLoad={syncMediaWidth} />
+          <img ref={imageRef} src={photoDisplaySource(photo)} alt={photoAltText(photo)} onLoad={syncMediaWidth} />
           <figcaption>
             <strong>{photoLabel(photo)}</strong>
             <span>{formatDate(photo.capturedAt)}</span>

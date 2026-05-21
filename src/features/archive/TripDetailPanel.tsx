@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { capturedDateLabel, capturedTimeLabel } from "@/domain/datetime";
 import { placeFocusIntent } from "@/domain/globeIntent";
 import { countryLabel, photoAltText, photoLabel, placeLabel, tripLabel } from "@/domain/labels";
+import { getHighResolutionSource, photoDisplaySource, photoThumbnailSource } from "@/domain/photoSources";
 import { useI18n } from "@/i18n/useI18n";
 import type { LocalizedNames, Photo, PlaceNode } from "@/domain/models";
 import { ManualPlaceResolutionPanel, type ManualPlaceMode, type ManualPlaceResolutionAction } from "@/features/places/ManualPlaceResolutionModal";
@@ -26,24 +27,6 @@ type CountryGroup = {
 
 function formatDay(day: string) {
   return day === "待补时间" ? day : day.replace(/-/g, ".");
-}
-
-function getPhotoSource(photo?: Photo) {
-  if (!photo) return "";
-  return photo.thumbnailUrl || getHighResolutionSource(photo.storageUrl ?? "", 960);
-}
-
-function getFullPhotoSource(photo?: Photo) {
-  if (!photo) return "";
-  return getHighResolutionSource(photo.storageUrl ?? photo.thumbnailUrl, 2200);
-}
-
-function getHighResolutionSource(source: string, width = 1800) {
-  if (!source.includes("images.unsplash.com")) return source;
-
-  return source
-    .replace(/([?&]w=)\d+/g, (_match, prefix: string) => `${prefix}${width}`)
-    .replace(/([?&]q=)\d+/g, (_match, prefix: string) => `${prefix}90`);
 }
 
 function placeKey(group?: Pick<DayGroup, "places">) {
@@ -171,7 +154,7 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
 
   if (!trip) return null;
 
-  const heroPhoto = isMobileViewport ? getPhotoSource(photos[0]) || getHighResolutionSource(trip.coverUrl, 960) : getFullPhotoSource(photos[0]) || getHighResolutionSource(trip.coverUrl, 2200);
+  const heroPhoto = isMobileViewport ? photoThumbnailSource(photos[0]) || getHighResolutionSource(trip.coverUrl, 960) : photoDisplaySource(photos[0]) || getHighResolutionSource(trip.coverUrl, 1800);
 
   return (
     <section className="trip-dossier fixed inset-0 z-[70] overflow-y-auto bg-background/94 backdrop-blur-2xl" data-state={isClosing ? "closing" : "open"}>
@@ -248,7 +231,7 @@ export function TripDetailPanel({ isClosing = false }: { isClosing?: boolean }) 
                               <article key={photo.id} className={index === 0 ? "trip-photo-piece trip-photo-piece-featured" : "trip-photo-piece"}>
                                 <div className="trip-photo-frame">
                                   <button className="trip-photo-open" onClick={() => setOpenPhotoId(photo.id)} type="button">
-                                    <img src={getPhotoSource(photo)} alt={photoAltText(photo)} decoding="async" loading="lazy" />
+                                    <img src={photoThumbnailSource(photo)} alt={photoAltText(photo)} decoding="async" loading="lazy" />
                                     <span className="trip-photo-caption">
                                       <strong>{photoLabel(photo)}</strong>
                                       <em>{capturedTimeLabel(photo.capturedAt) || photo.fileName}</em>
@@ -453,7 +436,7 @@ function PhotoDetailModal({
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="trip-photo-modal-media">
-          <img src={getFullPhotoSource(photo)} alt={photoAltText(photo)} decoding="async" />
+          <img src={photoDisplaySource(photo)} alt={photoAltText(photo)} decoding="async" />
         </div>
         {manual ? (
           <ManualPlaceResolutionPanel

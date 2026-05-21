@@ -131,8 +131,15 @@ async function mobileThumbnailDataUrlFromSource(source: File | string | undefine
   return createImageDataUrl(source, pipelineConfig.images.thumbnailMaxDimension, pipelineConfig.images.thumbnailJpegQuality, mime).catch(() => "");
 }
 
+async function mobileDisplayDataUrlFromSource(source: File | string | undefined, mime = "image/jpeg") {
+  if (!source) return undefined;
+  const pipelineConfig = importPipelineConfig();
+  return createImageDataUrl(source, pipelineConfig.images.displayImageMaxDimension, pipelineConfig.images.displayImageJpegQuality, mime).catch(() => undefined);
+}
+
 async function mobileAiImageDataUrlForPhoto(photo: Photo) {
-  return mobileAiImageDataUrlFromSource(photo.sourceWebPath || photo.storageUrl || photo.thumbnailUrl, photo.mime ?? "image/jpeg");
+  if (photo.aiInputUrl?.startsWith("data:")) return photo.aiInputUrl;
+  return mobileAiImageDataUrlFromSource(photo.aiInputUrl || photo.sourceWebPath || photo.storageUrl || photo.thumbnailUrl, photo.mime ?? "image/jpeg");
 }
 
 function mobileImportProgressPayload({
@@ -212,6 +219,7 @@ function buildMobileImportedPhoto({
   job,
   prepared,
   thumbnail,
+  aiImagePayload,
   ai,
   embedding,
   aiFailure,
@@ -221,7 +229,8 @@ function buildMobileImportedPhoto({
 }: {
   job: MobileImportPhotoJob;
   prepared: MobilePreparedFile | MobilePreparedAsset;
-  thumbnail: { dataUrl?: string };
+  thumbnail: { dataUrl?: string; displayUrl?: string };
+  aiImagePayload?: { dataUrl?: string; url?: string };
   ai: MobilePhotoAnalysis;
   embedding?: MobileEmbeddingResult;
   aiFailure: Photo["aiFailure"];
@@ -239,6 +248,8 @@ function buildMobileImportedPhoto({
     originalHash: job.originalHash,
     mime: job.mime,
     thumbnailUrl: thumbnail.dataUrl || nativePrepared?.thumbnailDataUrl || nativePrepared?.webPath || "",
+    aiInputUrl: aiImagePayload?.url ?? aiImagePayload?.dataUrl,
+    displayUrl: thumbnail.displayUrl,
     storageUrl: nativePrepared && nativePrepared.persisted !== false ? nativePrepared.webPath ?? nativePrepared.uri : undefined,
     sourceUri: nativePrepared && nativePrepared.persisted !== false ? nativePrepared.uri : undefined,
     sourceWebPath: nativePrepared && nativePrepared.persisted !== false ? nativePrepared.webPath : undefined,
@@ -352,8 +363,10 @@ export const mobileLocalApi = {
   },
   async getStorageSettings(): Promise<StorageSettings> {
     return {
+      aiInputDir: "Android IndexedDB AI input images",
       dataDir: "Android private app storage",
       dbPath: "Android private SQLite: earth-online.sqlite",
+      displayDir: "Android IndexedDB display images",
       importJobDir: "Android private SQLite: import_jobs",
       photoDir: "Gallery content URIs are referenced, not copied",
       rootDir: "Android app sandbox",
@@ -454,8 +467,14 @@ export const mobileLocalApi = {
           };
         },
         capturedAt: (prepared: MobilePreparedFile) => prepared.capturedAt ?? (prepared.file.lastModified ? new Date(prepared.file.lastModified).toISOString() : nowIso()),
-        createAiImagePayload: (prepared: MobilePreparedFile) => mobileAiImageDataUrlFromSource(prepared.file, prepared.mime).then((dataUrl) => (dataUrl ? { dataUrl, mime: "image/jpeg" } : undefined)),
-        storeOriginalAndThumbnail: (prepared: MobilePreparedFile) => mobileThumbnailDataUrlFromSource(prepared.file, prepared.mime).then((dataUrl) => ({ dataUrl })),
+        createAiImagePayload: (prepared: MobilePreparedFile) => mobileAiImageDataUrlFromSource(prepared.file, prepared.mime).then((dataUrl) => (dataUrl ? { dataUrl, url: dataUrl, mime: "image/jpeg" } : undefined)),
+        async storeOriginalAndThumbnail(prepared: MobilePreparedFile) {
+          const [dataUrl, displayUrl] = await Promise.all([
+            mobileThumbnailDataUrlFromSource(prepared.file, prepared.mime),
+            mobileDisplayDataUrlFromSource(prepared.file, prepared.mime),
+          ]);
+          return { dataUrl, displayUrl };
+        },
         analyzeVision: analyzeMobileVisionForImport,
         embedImage: embedMobileImageForImport,
         recordEmbeddingStats: recordImportEmbeddingStats,
@@ -533,8 +552,14 @@ export const mobileLocalApi = {
         onDuplicateComplete: (prepared: MobilePreparedAsset) => releaseNativePhotoPermissions([prepared.uri]).catch(() => undefined),
         capturedAt: (prepared: MobilePreparedAsset) => prepared.capturedAt ?? nowIso(),
         createAiImagePayload: (prepared: MobilePreparedAsset) =>
-          prepared.webPath ? mobileAiImageDataUrlFromSource(prepared.webPath, prepared.mime).then((dataUrl) => (dataUrl ? { dataUrl, mime: "image/jpeg" } : undefined)) : Promise.resolve(undefined),
-        storeOriginalAndThumbnail: (prepared: MobilePreparedAsset) => mobileThumbnailDataUrlFromSource(prepared.webPath, prepared.mime).then((dataUrl) => ({ dataUrl })),
+          prepared.webPath ? mobileAiImageDataUrlFromSource(prepared.webPath, prepared.mime).then((dataUrl) => (dataUrl ? { dataUrl, url: dataUrl, mime: "image/jpeg" } : undefined)) : Promise.resolve(undefined),
+        async storeOriginalAndThumbnail(prepared: MobilePreparedAsset) {
+          const [dataUrl, displayUrl] = await Promise.all([
+            mobileThumbnailDataUrlFromSource(prepared.webPath, prepared.mime),
+            mobileDisplayDataUrlFromSource(prepared.webPath, prepared.mime),
+          ]);
+          return { dataUrl, displayUrl };
+        },
         analyzeVision: analyzeMobileVisionForImport,
         embedImage: embedMobileImageForImport,
         recordEmbeddingStats: recordImportEmbeddingStats,

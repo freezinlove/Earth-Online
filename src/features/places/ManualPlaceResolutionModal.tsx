@@ -1,6 +1,7 @@
 import { Check, ChevronDown, LoaderCircle, MapPin, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { photoAltText, placeLabel } from "@/domain/labels";
+import { photoDisplaySource } from "@/domain/photoSources";
 import { useI18n } from "@/i18n/useI18n";
 import type { Photo, PlaceNode } from "@/domain/models";
 
@@ -215,7 +216,7 @@ export function ManualPlaceResolutionModal(props: ManualPlaceResolutionPanelProp
     <div className="manual-pending-modal" role="dialog" aria-modal="true" onMouseDown={props.onClose}>
       <section className="manual-pending-shell" onMouseDown={(event) => event.stopPropagation()}>
         <div className="manual-pending-media">
-          {primaryPhoto ? <img src={primaryPhoto.storageUrl ?? primaryPhoto.thumbnailUrl} alt={photoAltText(primaryPhoto)} /> : null}
+          {primaryPhoto ? <img src={photoDisplaySource(primaryPhoto)} alt={photoAltText(primaryPhoto)} /> : null}
         </div>
         <ManualPlaceResolutionPanel {...props} />
       </section>

@@ -41,6 +41,8 @@ export function createEditServices({ readState, readVectorIndex, writeState, wri
     for (const photo of result.removedPhotos) {
       if (photo.storageUrl) await fs.rm(path.join(paths.photoDir, path.basename(photo.storageUrl)), { force: true });
       if (photo.thumbnailUrl) await fs.rm(path.join(paths.thumbDir, path.basename(photo.thumbnailUrl)), { force: true });
+      if (photo.aiInputUrl && paths.aiInputDir) await fs.rm(path.join(paths.aiInputDir, path.basename(photo.aiInputUrl)), { force: true });
+      if (photo.displayUrl && paths.displayDir) await fs.rm(path.join(paths.displayDir, path.basename(photo.displayUrl)), { force: true });
     }
 
     if (result.removedPhotoIds.length) {
@@ -94,6 +96,8 @@ export function createEditServices({ readState, readVectorIndex, writeState, wri
 
     if (photo.storageUrl) await fs.rm(path.join(paths.photoDir, path.basename(photo.storageUrl)), { force: true });
     if (photo.thumbnailUrl) await fs.rm(path.join(paths.thumbDir, path.basename(photo.thumbnailUrl)), { force: true });
+    if (photo.aiInputUrl && paths.aiInputDir) await fs.rm(path.join(paths.aiInputDir, path.basename(photo.aiInputUrl)), { force: true });
+    if (photo.displayUrl && paths.displayDir) await fs.rm(path.join(paths.displayDir, path.basename(photo.displayUrl)), { force: true });
 
     const vectorIndex = await readVectorIndex();
     for (const removedPhotoId of result.removedPhotoIds) delete vectorIndex[removedPhotoId];

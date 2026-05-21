@@ -90,6 +90,8 @@ export interface Photo {
   fileName: string;
   title?: string;
   thumbnailUrl: string;
+  aiInputUrl?: string;
+  displayUrl?: string;
   storageUrl?: string;
   sourceUri?: string;
   sourceWebPath?: string;
@@ -161,6 +163,8 @@ export interface ImportBatch {
   pendingItemIds: ID[];
   storedFileNames?: string[];
   storedThumbnailNames?: string[];
+  storedAiInputNames?: string[];
+  storedDisplayNames?: string[];
   aiStats?: {
     qwenCount: number;
     fallbackCount: number;

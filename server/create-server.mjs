@@ -6,7 +6,7 @@ import { createImportServices } from "./application/import-service.mjs";
 import { createSearchService } from "./application/search-service.mjs";
 import { createSettingsService } from "./application/settings-service.mjs";
 import { createStateService } from "./application/state-service.mjs";
-import { dataDir, dbPath, distDir, importJobDir, photoDir, port as defaultPort, rootDir, thumbDir, vectorPath } from "./config/paths.mjs";
+import { aiInputDir, dataDir, dbPath, displayDir, distDir, importJobDir, photoDir, port as defaultPort, rootDir, thumbDir, vectorPath } from "./config/paths.mjs";
 import { createSecretProvider } from "./config/secrets.mjs";
 import { reverseLocalGeocode } from "./domain/local-geocoder.mjs";
 import { createRouter } from "./http/router.mjs";
@@ -23,7 +23,7 @@ export function createEarthOnlineApiServer() {
   const secretProvider = createSecretProvider({ rootDir, dataDir });
 
   const stateServices = createStateService({
-    paths: { photoDir, thumbDir, importJobDir, vectorPath },
+    paths: { photoDir, thumbDir, aiInputDir, displayDir, importJobDir, vectorPath },
     repository,
   });
   const { ensureStorage, readState, readVectorIndex, responseState, writeState, writeVectorIndex } = stateServices;
@@ -34,7 +34,7 @@ export function createEarthOnlineApiServer() {
     writeVectorIndex,
     responseState,
     makeId,
-    paths: { photoDir, thumbDir },
+    paths: { photoDir, thumbDir, aiInputDir, displayDir },
   });
   const importServices = createImportServices({
     analyzeTravelImage,
@@ -44,7 +44,7 @@ export function createEarthOnlineApiServer() {
     inferMissingInfoWithImage,
     importJobs,
     makeId,
-    paths: { rootDir, photoDir, thumbDir, importJobDir },
+    paths: { rootDir, photoDir, thumbDir, aiInputDir, displayDir, importJobDir },
     readState,
     readVectorIndex,
     repository,
@@ -57,7 +57,7 @@ export function createEarthOnlineApiServer() {
   const settingsServices = createSettingsService({
     rootDir,
     secretProvider,
-    paths: { dataDir, dbPath, importJobDir, photoDir, thumbDir, vectorPath },
+    paths: { dataDir, dbPath, importJobDir, photoDir, thumbDir, aiInputDir, displayDir, vectorPath },
   });
 
   function reverseGeocode(params) {
@@ -80,7 +80,7 @@ export function createEarthOnlineApiServer() {
         servePhoto,
         serveStatic,
       },
-      { photoDir, thumbDir, distDir },
+      { photoDir, thumbDir, aiInputDir, displayDir, distDir },
     ),
   );
 
@@ -121,7 +121,7 @@ export function createEarthOnlineApiServer() {
 
   return {
     close,
-    paths: { dataDir, dbPath, distDir, importJobDir, photoDir, rootDir, thumbDir, vectorPath },
+    paths: { dataDir, dbPath, displayDir, distDir, aiInputDir, importJobDir, photoDir, rootDir, thumbDir, vectorPath },
     repository,
     server,
     start,

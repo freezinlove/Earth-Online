@@ -146,6 +146,8 @@ export function rollbackImportState(state, id, { makeId } = {}) {
     removedPhotoIds: Array.from(photoIds),
     storedFileNames: safeArray(batch.storedFileNames),
     storedThumbnailNames: safeArray(batch.storedThumbnailNames),
+    storedAiInputNames: safeArray(batch.storedAiInputNames),
+    storedDisplayNames: safeArray(batch.storedDisplayNames),
   };
 }
 
@@ -187,6 +189,8 @@ export function cancelImportPhotosState(state, batchId, body = {}, { makeId } = 
     pendingItemIds: safeArray(batch.pendingItemIds).filter((id) => pendingIds.has(id)),
     storedFileNames: safeArray(batch.storedFileNames),
     storedThumbnailNames: safeArray(batch.storedThumbnailNames),
+    storedAiInputNames: safeArray(batch.storedAiInputNames),
+    storedDisplayNames: safeArray(batch.storedDisplayNames),
     status: remainingAddedPhotoIds.length > 0 ? batch.status : "rolled_back",
     summary: `${batch.summary} 已取消 ${cancelIds.size} 张待补照片。`,
   };
@@ -255,6 +259,8 @@ export function buildImportStateFromPhotos(
     aiStats,
     storedFileNames = [],
     storedThumbnailNames = [],
+    storedAiInputNames = [],
+    storedDisplayNames = [],
     completeCandidatePoint,
   } = {},
 ) {
@@ -395,6 +401,8 @@ export function buildImportStateFromPhotos(
     pendingItemIds: pendingItems.map((item) => item.id),
     storedFileNames,
     storedThumbnailNames,
+    storedAiInputNames,
+    storedDisplayNames,
     aiStats: aiStats ?? {
       qwenCount: 0,
       fallbackCount: imported.length,

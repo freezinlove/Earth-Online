@@ -16,6 +16,8 @@ const mobileDbName = "earth-online-mobile-db";
 const mobileDbVersion = 1;
 const mobileKvStore = "kv";
 const photoThumbKeyPrefix = "earth-online-mobile-photo-thumb:";
+const photoAiInputKeyPrefix = "earth-online-mobile-photo-ai-input:";
+const photoDisplayKeyPrefix = "earth-online-mobile-photo-display:";
 
 function emptyPersistedState(): MobilePersistedState {
   return {
@@ -157,49 +159,65 @@ export async function getMobilePersistedState(): Promise<MobilePersistedState> {
     if (nativeState) {
       const normalizedNativeState = normalizeMobilePersistedState(nativeState);
       if (stateHasContent(normalizedNativeState)) {
-        cachedState = await hydratePhotoThumbnails(normalizedNativeState);
+        cachedState = await hydratePhotoImageDataUrls(normalizedNativeState);
         return cachedState;
       }
     }
     const indexedState = await readKv<MobilePersistedState>(stateKey);
     if (indexedState) {
-      cachedState = await hydratePhotoThumbnails(normalizeMobilePersistedState(indexedState));
-      void writeNativeState({ ...cachedState, photos: cachedState.photos.map(stripPhotoThumbnail) }).catch(() => undefined);
+      cachedState = await hydratePhotoImageDataUrls(normalizeMobilePersistedState(indexedState));
+      void writeNativeState({ ...cachedState, photos: cachedState.photos.map(stripPhotoDataUrls) }).catch(() => undefined);
       return cachedState;
     }
     cachedState = readLocalStorageState();
-    void writeNativeState({ ...cachedState, photos: cachedState.photos.map(stripPhotoThumbnail) }).catch(() => undefined);
+    cachedState = await hydratePhotoImageDataUrls(cachedState);
+    void writeNativeState({ ...cachedState, photos: cachedState.photos.map(stripPhotoDataUrls) }).catch(() => undefined);
     return cachedState;
   })();
   return stateHydration;
 }
 
-async function hydratePhotoThumbnails(state: MobilePersistedState): Promise<MobilePersistedState> {
-  const keys = state.photos.filter((photo) => !photo.thumbnailUrl).map((photo) => `${photoThumbKeyPrefix}${photo.id}`);
+async function hydratePhotoImageDataUrls(state: MobilePersistedState): Promise<MobilePersistedState> {
+  const keys = state.photos.flatMap((photo) => [
+    ...(!photo.thumbnailUrl ? [`${photoThumbKeyPrefix}${photo.id}`] : []),
+    ...(!photo.aiInputUrl ? [`${photoAiInputKeyPrefix}${photo.id}`] : []),
+    ...(!photo.displayUrl ? [`${photoDisplayKeyPrefix}${photo.id}`] : []),
+  ]);
   if (!keys.length) return state;
-  const thumbnails = await readManyKv<string>(keys);
+  const images = await readManyKv<string>(keys);
   return {
     ...state,
     photos: state.photos.map((photo) => ({
       ...photo,
-      thumbnailUrl: photo.thumbnailUrl || thumbnails.get(`${photoThumbKeyPrefix}${photo.id}`) || photo.sourceWebPath || photo.storageUrl || "",
+      thumbnailUrl: photo.thumbnailUrl || images.get(`${photoThumbKeyPrefix}${photo.id}`) || photo.sourceWebPath || photo.storageUrl || "",
+      aiInputUrl: photo.aiInputUrl || images.get(`${photoAiInputKeyPrefix}${photo.id}`),
+      displayUrl: photo.displayUrl || images.get(`${photoDisplayKeyPrefix}${photo.id}`),
     })),
   };
 }
 
-function stripPhotoThumbnail(photo: Photo): Photo {
-  if (!photo.thumbnailUrl.startsWith("data:")) return photo;
-  return { ...photo, thumbnailUrl: "" };
+function stripPhotoDataUrls(photo: Photo): Photo {
+  const next = { ...photo };
+  if (next.thumbnailUrl?.startsWith("data:")) next.thumbnailUrl = "";
+  if (next.aiInputUrl?.startsWith("data:")) next.aiInputUrl = undefined;
+  if (next.displayUrl?.startsWith("data:")) next.displayUrl = undefined;
+  return next;
 }
 
 export async function writeMobilePersistedState(state: MobilePersistedState) {
   const normalized = normalizeMobilePersistedState(state);
   cachedState = normalized;
-  const storedState = { ...normalized, photos: normalized.photos.map(stripPhotoThumbnail) };
-  const thumbnailEntries = normalized.photos
+  const storedState = { ...normalized, photos: normalized.photos.map(stripPhotoDataUrls) };
+  const photoImageEntries = normalized.photos
     .filter((photo) => photo.thumbnailUrl.startsWith("data:"))
     .map<[string, string]>((photo) => [`${photoThumbKeyPrefix}${photo.id}`, photo.thumbnailUrl]);
-  await writeManyKv([[stateKey, storedState], ...thumbnailEntries]);
+  const aiInputEntries = normalized.photos
+    .filter((photo) => photo.aiInputUrl?.startsWith("data:"))
+    .map<[string, string]>((photo) => [`${photoAiInputKeyPrefix}${photo.id}`, photo.aiInputUrl as string]);
+  const displayEntries = normalized.photos
+    .filter((photo) => photo.displayUrl?.startsWith("data:"))
+    .map<[string, string]>((photo) => [`${photoDisplayKeyPrefix}${photo.id}`, photo.displayUrl as string]);
+  await writeManyKv([[stateKey, storedState], ...photoImageEntries, ...aiInputEntries, ...displayEntries]);
   try {
     window.localStorage.setItem(stateKey, JSON.stringify(storedState));
   } catch {
@@ -209,5 +227,11 @@ export async function writeMobilePersistedState(state: MobilePersistedState) {
 }
 
 export function deleteMobileThumbnailsForPhotos(photos: Photo[]) {
-  void deleteManyKv(photos.map((photo) => `${photoThumbKeyPrefix}${photo.id}`));
+  void deleteManyKv(
+    photos.flatMap((photo) => [
+      `${photoThumbKeyPrefix}${photo.id}`,
+      `${photoAiInputKeyPrefix}${photo.id}`,
+      `${photoDisplayKeyPrefix}${photo.id}`,
+    ]),
+  );
 }

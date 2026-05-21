@@ -104,7 +104,7 @@ export async function runInitialImportPipeline({
       markDone("thumbnails", fileName);
       if (reanalyzeDuplicates && duplicatePhoto && adapter.reanalyzeDuplicate !== false) {
         const parsedLocation = isUsableLocation(prepared.location) ? prepared.location : duplicatePhoto.location;
-        const aiImagePayload = allowCloud ? adapter.createAiImagePayload(prepared) : Promise.resolve(undefined);
+        const aiImagePayload = adapter.createAiImagePayload?.(prepared, { duplicatePhoto }) ?? Promise.resolve(undefined);
         downstreamTasks.push(
           Promise.all([
             visionLimit(async () => {
@@ -181,7 +181,7 @@ export async function runInitialImportPipeline({
       hasExifLocation: Boolean(location),
       hasExifTime: Boolean(prepared.capturedAt),
     };
-    const aiImagePayload = allowCloud ? adapter.createAiImagePayload(prepared, job) : Promise.resolve(undefined);
+    const aiImagePayload = adapter.createAiImagePayload?.(prepared, job) ?? Promise.resolve(undefined);
     downstreamTasks.push(
       Promise.all([
         storageLimit(async () => {
@@ -221,6 +221,7 @@ export async function runInitialImportPipeline({
           return embedding;
         }),
       ]).then(async ([thumbnail, ai, embedding]) => {
+        const resolvedAiImagePayload = await aiImagePayload;
         const aiFailure = buildAiFailure(ai, embedding, {
           ...job,
           thumbName: adapter.thumbnailName?.(thumbnail, job),
@@ -238,6 +239,7 @@ export async function runInitialImportPipeline({
             aiFailure,
             aiEvidence,
             photoPendingReason,
+            aiImagePayload: resolvedAiImagePayload,
             makeId,
             locale,
           }) ??
@@ -249,6 +251,7 @@ export async function runInitialImportPipeline({
             aiFailure,
             aiEvidence,
             photoPendingReason,
+            aiImagePayload: resolvedAiImagePayload,
           });
         if (Array.isArray(embedding?.embedding)) vectorIndex[photo.id] = embedding.embedding;
         importedSlots[index] = photo;
@@ -275,7 +278,7 @@ export async function runInitialImportPipeline({
   return { state: nextState, vectorIndex, aiStats, importedPhotos: photos, duplicatePhotoIds, duplicateNames, batchId };
 }
 
-function buildDefaultImportedPhoto({ job, thumbnail, ai, embedding, aiFailure, aiEvidence, photoPendingReason }) {
+function buildDefaultImportedPhoto({ job, thumbnail, ai, embedding, aiFailure, aiEvidence, photoPendingReason, aiImagePayload }) {
   return {
     id: job.photoId,
     fileName: job.fileName || job.storageName,
@@ -283,6 +286,8 @@ function buildDefaultImportedPhoto({ job, thumbnail, ai, embedding, aiFailure, a
     originalHash: job.originalHash,
     mime: job.mime,
     thumbnailUrl: thumbnail?.url ?? thumbnail,
+    aiInputUrl: aiImagePayload?.url ?? thumbnail?.aiInputUrl,
+    displayUrl: thumbnail?.displayUrl,
     storageUrl: job.storageUrl,
     capturedAt: job.capturedAt,
     location: job.location,

@@ -94,8 +94,10 @@ export interface AiSettings {
 }
 
 export interface StorageSettings {
+  aiInputDir?: string;
   dataDir: string;
   dbPath: string;
+  displayDir?: string;
   importJobDir: string;
   photoDir: string;
   rootDir: string;

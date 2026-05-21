@@ -17,10 +17,16 @@ export function hashBuffer(buffer) {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
-export async function servePhoto(res, pathname, { photoDir, thumbDir }) {
-  const isThumb = pathname.startsWith("/data/thumbs/");
-  const baseDir = isThumb ? thumbDir : photoDir;
-  const file = path.basename(decodeURIComponent(pathname.replace(isThumb ? "/data/thumbs/" : "/data/photos/", "")));
+export async function servePhoto(res, pathname, { photoDir, thumbDir, aiInputDir, displayDir }) {
+  const route = pathname.startsWith("/data/thumbs/")
+    ? { prefix: "/data/thumbs/", baseDir: thumbDir }
+    : pathname.startsWith("/data/ai-inputs/")
+      ? { prefix: "/data/ai-inputs/", baseDir: aiInputDir }
+      : pathname.startsWith("/data/display/")
+        ? { prefix: "/data/display/", baseDir: displayDir }
+        : { prefix: "/data/photos/", baseDir: photoDir };
+  const baseDir = route.baseDir;
+  const file = path.basename(decodeURIComponent(pathname.replace(route.prefix, "")));
   const fullPath = path.join(baseDir, file);
   if (!fullPath.startsWith(baseDir) || !existsSync(fullPath)) {
     res.writeHead(404, corsHeaders);

@@ -6,6 +6,8 @@ export function createSettingsService({ rootDir, secretProvider, paths }) {
       return {
         dataDir: paths.dataDir,
         dbPath: paths.dbPath,
+        aiInputDir: paths.aiInputDir,
+        displayDir: paths.displayDir,
         importJobDir: paths.importJobDir,
         photoDir: paths.photoDir,
         rootDir,

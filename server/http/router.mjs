@@ -27,8 +27,13 @@ export function createRouter(handlers, paths) {
       const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
       const pathname = url.pathname;
       if (!desktopApiRequestIsAuthorized(req, url)) return sendError(res, 403, "Forbidden");
-      if (pathname.startsWith("/data/photos/") || pathname.startsWith("/data/thumbs/")) {
-        return handlers.servePhoto(res, pathname, { photoDir: paths.photoDir, thumbDir: paths.thumbDir });
+      if (pathname.startsWith("/data/photos/") || pathname.startsWith("/data/thumbs/") || pathname.startsWith("/data/ai-inputs/") || pathname.startsWith("/data/display/")) {
+        return handlers.servePhoto(res, pathname, {
+          photoDir: paths.photoDir,
+          thumbDir: paths.thumbDir,
+          aiInputDir: paths.aiInputDir,
+          displayDir: paths.displayDir,
+        });
       }
       if (req.method === "GET" && pathname === "/api/health/capabilities") return send(res, 200, { embeddingRebuildJobs: true });
       if (req.method === "GET" && pathname === "/api/state") return send(res, 200, await handlers.responseState());

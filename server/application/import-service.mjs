@@ -77,6 +77,8 @@ export function createImportServices({
   const failedImportJobRetentionMs = Number(process.env.EARTH_ONLINE_FAILED_IMPORT_JOB_RETENTION_MS ?? 24 * 60 * 60 * 1000);
   const aiImageMaxDimension = pipelineConfig.images.aiImageMaxDimension;
   const aiImageJpegQuality = pipelineConfig.images.aiImageJpegQuality;
+  const displayImageMaxDimension = pipelineConfig.images.displayImageMaxDimension;
+  const displayImageJpegQuality = pipelineConfig.images.displayImageJpegQuality;
   const thumbnailMaxDimension = pipelineConfig.images.thumbnailMaxDimension;
   const thumbnailJpegQuality = pipelineConfig.images.thumbnailJpegQuality;
 
@@ -90,40 +92,64 @@ export function createImportServices({
   }
 
   async function createThumbnailFromFile(fullPath, ext) {
+    return createJpegDerivativeFromFile(fullPath, {
+      fallbackExt: ext,
+      maxDimension: thumbnailMaxDimension,
+      quality: thumbnailJpegQuality,
+    });
+  }
+
+  async function createJpegDerivativeFromFile(fullPath, { fallbackExt = ".jpg", maxDimension, quality }) {
     try {
       return {
         ext: ".jpg",
         buffer: await sharp(fullPath, { failOn: "none" })
           .rotate()
-          .resize({ width: thumbnailMaxDimension, height: thumbnailMaxDimension, fit: "inside", withoutEnlargement: true })
-          .jpeg({ quality: thumbnailJpegQuality })
+          .resize({ width: maxDimension, height: maxDimension, fit: "inside", withoutEnlargement: true })
+          .jpeg({ quality })
           .toBuffer(),
       };
     } catch {
-      return { ext, buffer: await fs.readFile(fullPath) };
+      return { ext: fallbackExt, buffer: await fs.readFile(fullPath) };
     }
   }
 
-  async function readAiImagePayloadFromFile(fullPath, mime) {
+  async function createAiInputFromFile(fullPath, ext) {
     const maxDimension = Number.isFinite(aiImageMaxDimension) && aiImageMaxDimension > 0 ? aiImageMaxDimension : 1200;
     const quality = Number.isFinite(aiImageJpegQuality) && aiImageJpegQuality > 0 && aiImageJpegQuality <= 100 ? aiImageJpegQuality : 82;
-    try {
-      const buffer = await sharp(fullPath, { failOn: "none" })
-        .rotate()
-        .resize({ width: maxDimension, height: maxDimension, fit: "inside", withoutEnlargement: true })
-        .jpeg({ quality })
-        .toBuffer();
-      return {
-        mime: "image/jpeg",
-        dataUrl: `data:image/jpeg;base64,${buffer.toString("base64")}`,
-      };
-    } catch {
-      const buffer = await fs.readFile(fullPath);
-      return {
-        mime,
-        dataUrl: `data:${mime};base64,${buffer.toString("base64")}`,
-      };
-    }
+    return createJpegDerivativeFromFile(fullPath, { fallbackExt: ext, maxDimension, quality });
+  }
+
+  async function createDisplayImageFromFile(fullPath, ext) {
+    const maxDimension = Number.isFinite(displayImageMaxDimension) && displayImageMaxDimension > 0 ? displayImageMaxDimension : 1800;
+    const quality = Number.isFinite(displayImageJpegQuality) && displayImageJpegQuality > 0 && displayImageJpegQuality <= 100 ? displayImageJpegQuality : 85;
+    return createJpegDerivativeFromFile(fullPath, { fallbackExt: ext, maxDimension, quality });
+  }
+
+  function mimeFromExt(ext = ".jpg", fallback = "image/jpeg") {
+    const normalized = String(ext).toLowerCase();
+    if (normalized === ".png") return "image/png";
+    if (normalized === ".webp") return "image/webp";
+    if (normalized === ".heic" || normalized === ".heif") return "image/heic";
+    if (normalized === ".jpg" || normalized === ".jpeg") return "image/jpeg";
+    return fallback;
+  }
+
+  function imagePayloadFromBuffer(buffer, mime = "image/jpeg") {
+    return {
+      mime,
+      dataUrl: `data:${mime};base64,${buffer.toString("base64")}`,
+    };
+  }
+
+  async function readImagePayloadFromFile(fullPath, mime) {
+    const buffer = await fs.readFile(fullPath);
+    return imagePayloadFromBuffer(buffer, mime);
+  }
+
+  async function readAiImagePayloadFromFile(fullPath, mime) {
+    const derivative = await createAiInputFromFile(fullPath, path.extname(fullPath).toLowerCase() || ".jpg");
+    return imagePayloadFromBuffer(derivative.buffer, mimeFromExt(derivative.ext, mime));
   }
 
   async function cleanupStaleImportJobDirs() {
@@ -191,15 +217,35 @@ export function createImportServices({
         capturedAt: (prepared, { now: importNow, total, index }) =>
           prepared.capturedAt ??
           (prepared.file.lastModified ? new Date(prepared.file.lastModified).toISOString() : new Date(importNow.getTime() - (total - index) * 86400000).toISOString()),
-        createAiImagePayload: (prepared) => readAiImagePayloadFromFile(prepared.fullPath, prepared.mime),
+        async createAiImagePayload(prepared, job) {
+          const aiInput = await createAiInputFromFile(prepared.fullPath, prepared.ext);
+          const mime = mimeFromExt(aiInput.ext, prepared.mime);
+          if (!job?.photoId || !paths.aiInputDir) return imagePayloadFromBuffer(aiInput.buffer, mime);
+          const aiInputName = `${job.photoId}${aiInput.ext}`;
+          await fs.writeFile(path.join(paths.aiInputDir, aiInputName), aiInput.buffer);
+          return {
+            ...imagePayloadFromBuffer(aiInput.buffer, mime),
+            name: aiInputName,
+            url: `/data/ai-inputs/${aiInputName}`,
+          };
+        },
         async storeOriginalAndThumbnail(prepared, job) {
-          const thumbnail = await createThumbnailFromFile(prepared.fullPath, prepared.ext);
+          const [thumbnail, display] = await Promise.all([
+            createThumbnailFromFile(prepared.fullPath, prepared.ext),
+            createDisplayImageFromFile(prepared.fullPath, prepared.ext),
+          ]);
           const thumbName = `${job.photoId}${thumbnail.ext}`;
+          const displayName = `${job.photoId}${display.ext}`;
           await Promise.all([
             fs.copyFile(prepared.fullPath, path.join(paths.photoDir, job.storageName)),
             fs.writeFile(path.join(paths.thumbDir, thumbName), thumbnail.buffer),
+            paths.displayDir ? fs.writeFile(path.join(paths.displayDir, displayName), display.buffer) : Promise.resolve(),
           ]);
-          return { name: thumbName };
+          return {
+            name: thumbName,
+            displayName,
+            displayUrl: `/data/display/${displayName}`,
+          };
         },
         thumbnailName: (thumbnail) => thumbnail.name,
         analyzeVision: (input) => analyzePhotoVision(input),
@@ -233,7 +279,7 @@ export function createImportServices({
           if (Array.isArray(embedding.embedding)) vectorIndex[duplicatePhoto.id] = embedding.embedding;
           else delete vectorIndex[duplicatePhoto.id];
         },
-        buildNewPhoto({ job, thumbnail, ai, embedding, aiFailure, aiEvidence, photoPendingReason }) {
+        buildNewPhoto({ job, thumbnail, ai, embedding, aiFailure, aiEvidence, photoPendingReason, aiImagePayload }) {
           return {
             id: job.photoId,
             fileName: job.fileName || job.storageName,
@@ -241,6 +287,8 @@ export function createImportServices({
             originalHash: job.originalHash,
             mime: job.mime,
             thumbnailUrl: `/data/thumbs/${thumbnail.name}`,
+            aiInputUrl: aiImagePayload?.url,
+            displayUrl: thumbnail.displayUrl,
             storageUrl: `/data/photos/${job.storageName}`,
             capturedAt: job.capturedAt,
             location: job.location,
@@ -269,6 +317,8 @@ export function createImportServices({
         buildStateOptions: ({ photos }) => ({
           storedFileNames: photos.map((photo) => path.basename(photo.storageUrl)),
           storedThumbnailNames: photos.map((photo) => path.basename(photo.thumbnailUrl)),
+          storedAiInputNames: photos.map((photo) => photo.aiInputUrl && path.basename(photo.aiInputUrl)).filter(Boolean),
+          storedDisplayNames: photos.map((photo) => photo.displayUrl && path.basename(photo.displayUrl)).filter(Boolean),
           completeCandidatePoint,
         }),
       },
@@ -929,6 +979,12 @@ export function createImportServices({
     for (const name of result.storedThumbnailNames) {
       await fs.rm(path.join(paths.thumbDir, path.basename(name)), { force: true });
     }
+    for (const name of result.storedAiInputNames ?? []) {
+      if (paths.aiInputDir) await fs.rm(path.join(paths.aiInputDir, path.basename(name)), { force: true });
+    }
+    for (const name of result.storedDisplayNames ?? []) {
+      if (paths.displayDir) await fs.rm(path.join(paths.displayDir, path.basename(name)), { force: true });
+    }
     const vectorIndex = await readVectorIndex();
     for (const photoId of result.removedPhotoIds) delete vectorIndex[photoId];
     await writeVectorIndex(vectorIndex);
@@ -944,6 +1000,8 @@ export function createImportServices({
     for (const photo of result.canceledPhotos) {
       if (photo.storageUrl) await fs.rm(path.join(paths.photoDir, path.basename(photo.storageUrl)), { force: true });
       if (photo.thumbnailUrl) await fs.rm(path.join(paths.thumbDir, path.basename(photo.thumbnailUrl)), { force: true });
+      if (photo.aiInputUrl && paths.aiInputDir) await fs.rm(path.join(paths.aiInputDir, path.basename(photo.aiInputUrl)), { force: true });
+      if (photo.displayUrl && paths.displayDir) await fs.rm(path.join(paths.displayDir, path.basename(photo.displayUrl)), { force: true });
     }
 
     const vectorIndex = await readVectorIndex();
@@ -1149,11 +1207,19 @@ export function createImportServices({
   }
 
   async function readPhotoImagePayload(photo) {
+    if (photo.aiInputUrl && paths.aiInputDir) {
+      const fileName = path.basename(photo.aiInputUrl);
+      const fullPath = path.join(paths.aiInputDir, fileName);
+      const ext = path.extname(fileName).toLowerCase();
+      const mime = mimeFromExt(ext, "image/jpeg");
+      const existingPayload = await fs.access(fullPath).then(() => readImagePayloadFromFile(fullPath, mime)).catch(() => undefined);
+      if (existingPayload) return existingPayload;
+    }
     if (!photo.storageUrl) return undefined;
     const fileName = path.basename(photo.storageUrl);
     const fullPath = path.join(paths.photoDir, fileName);
     const ext = path.extname(fileName).toLowerCase();
-    const mime = photo.mime || (ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : ext === ".heic" ? "image/heic" : "image/jpeg");
+    const mime = photo.mime || mimeFromExt(ext, "image/jpeg");
     return fs.access(fullPath).then(() => readAiImagePayloadFromFile(fullPath, mime)).catch(() => undefined);
   }
 
