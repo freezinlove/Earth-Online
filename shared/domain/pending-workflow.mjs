@@ -149,7 +149,18 @@ function cityGeocodedCandidate(candidate, { forwardGeocode } = {}) {
   if (candidate?.name && isWeakPlaceName(candidate.name)) return undefined;
   const cityQuery = candidate.city || candidate.name;
   const fallback = forwardGeocode?.({ name: candidate.name, city: cityQuery, country: candidate.country })?.[0];
-  if (!fallback?.point) return undefined;
+  if (!fallback?.point) {
+    const point = trustedCandidatePoint(candidate);
+    if (!point) return undefined;
+    return {
+      ...candidate,
+      point,
+      city: candidate.city ?? cityQuery,
+      confidence: Number.isFinite(Number(candidate.confidence)) ? Number(candidate.confidence) : 0.65,
+      source: candidate.source,
+      precision: candidate.precision ?? "estimated",
+    };
+  }
   return {
     ...candidate,
     point: fallback.point,
@@ -163,6 +174,14 @@ function cityGeocodedCandidate(candidate, { forwardGeocode } = {}) {
     precision: "estimated",
     reason: candidate.reason || `Local gazetteer coordinates were added from ${fallback.name}.`,
   };
+}
+
+function trustedCandidatePoint(candidate) {
+  const point = candidatePoint(candidate);
+  if (!point) return undefined;
+  const source = String(candidate?.source ?? "");
+  if (source === "geocode" || source === "ai_context_inference") return point;
+  return undefined;
 }
 
 function findMergeableExistingPlace(state, tripId, candidate, point, candidatePlaceId) {

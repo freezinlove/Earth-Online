@@ -137,6 +137,82 @@ const acceptedDesktop = applyPendingDecision(desktopState, desktopState.pendingI
 const acceptedAndroid = applyPendingDecision(androidState, androidState.pendingItems.find((item) => item.type === "needs_trip_confirmation")?.id, { accepted: true });
 assert.deepEqual(normalizeForParity(projectAndroidEquivalentState(acceptedAndroid).pendingItems), normalizeForParity(projectDesktopState(acceptedDesktop).pendingItems), "Pending decision behavior must match");
 
+const mobileSecondPassPendingState = {
+  trips: [
+    {
+      id: "trip-mobile-second-pass",
+      title: "2026-05 Mobile second pass",
+      dateRange: { start: "2026-05-01", end: "2026-05-01" },
+      countries: ["Norway"],
+      cities: ["Reine"],
+      coverUrl: "",
+      photoCount: 1,
+      placeNodeCount: 0,
+      status: "pending",
+      source: "import",
+    },
+  ],
+  photos: [
+    {
+      id: "photo-mobile-second-pass",
+      fileName: "reine.jpg",
+      thumbnailUrl: "content://media/external/images/media/reine-thumb",
+      capturedAt: "2026-05-01T10:00:00Z",
+      tripId: "trip-mobile-second-pass",
+      pendingReason: "missing_gps",
+      exifStatus: { time: "read", gps: "missing" },
+      tags: ["Reine"],
+      aiCaption: "A harbor in Reine.",
+    },
+  ],
+  placeNodes: [],
+  routes: [],
+  importBatches: [],
+  pendingItems: [
+    {
+      id: "pending-mobile-second-pass",
+      type: "missing_gps",
+      relatedPhotoIds: ["photo-mobile-second-pass"],
+      relatedTripId: "trip-mobile-second-pass",
+      suggestion: "New place Reine",
+      reason: "Local gazetteer completed second-pass coordinates.",
+      status: "open",
+      proposal: {
+        action: "create_place_from_candidate",
+        tripId: "trip-mobile-second-pass",
+        photoIds: ["photo-mobile-second-pass"],
+        candidate: {
+          id: "candidate-mobile-reine",
+          name: "Reine",
+          country: "Norway",
+          city: "Reine",
+          point: { lat: 67.9324, lng: 13.0896 },
+          confidence: 0.9,
+          source: "ai_context_inference",
+          precision: "estimated",
+          reason: "Second-pass inference used local gazetteer coordinates.",
+        },
+      },
+    },
+  ],
+};
+const acceptedMobileSecondPass = applyPendingDecision(mobileSecondPassPendingState, "pending-mobile-second-pass", { accepted: true });
+assert.equal(acceptedMobileSecondPass.pendingItems[0].status, "accepted", "Mobile second-pass proposals with completed local coordinates must accept without desktop forward geocode");
+assert.equal(acceptedMobileSecondPass.placeNodes.length, 1);
+assert.deepEqual(acceptedMobileSecondPass.photos[0].location, { lat: 67.9324, lng: 13.0896 });
+
+const rawAiCoordinateState = structuredClone(mobileSecondPassPendingState);
+rawAiCoordinateState.pendingItems[0].id = "pending-raw-ai-coordinate";
+rawAiCoordinateState.pendingItems[0].proposal.candidate = {
+  ...rawAiCoordinateState.pendingItems[0].proposal.candidate,
+  id: "candidate-raw-ai-coordinate",
+  source: "ai_vision",
+  reason: "Raw AI coordinates must not be accepted without local geocoding.",
+};
+const rawAiCoordinateAccepted = applyPendingDecision(rawAiCoordinateState, "pending-raw-ai-coordinate", { accepted: true });
+assert.equal(rawAiCoordinateAccepted.pendingItems[0].status, "open", "Raw AI coordinates still require local geocoding before acceptance");
+assert.equal(rawAiCoordinateAccepted.placeNodes.length, 0);
+
 const desktopSearch = buildSearchResults({ documents: desktopProjection.searchDocuments, photos: desktopProjection.photos, query: "Reine Norway harbor" });
 const androidSearch = buildSearchResults({ documents: androidProjection.searchDocuments, photos: androidProjection.photos, query: "Reine Norway harbor" });
 assert.deepEqual(androidSearch, desktopSearch, "Text search output must match");
