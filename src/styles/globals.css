@@ -5707,7 +5707,9 @@ select {
 
   .archive-entry-action:has(.archive-delete-confirm) {
     grid-column: 1 / -1;
+    grid-row: 3;
     justify-self: start;
+    width: 100%;
   }
 
   .archive-delete-confirm {
