@@ -183,7 +183,13 @@ function OnboardingGuideDialog({ onDismiss }: { onDismiss: () => void }) {
         <div className="onboarding-language-selector">
           <div className="onboarding-language-actions">
             {(["zh", "en"] satisfies Locale[]).map((item) => (
-              <button className={`local-secret-action ${locale === item ? "" : "local-secret-action-subtle"}`} key={item} onClick={() => chooseLocale(item)} type="button">
+              <button
+                aria-pressed={hasChosenLanguage && locale === item}
+                className={`local-secret-action ${hasChosenLanguage && locale === item ? "" : "local-secret-action-subtle"}`}
+                key={item}
+                onClick={() => chooseLocale(item)}
+                type="button"
+              >
                 {item === "zh" ? t("simplifiedChinese") : t("english")}
               </button>
             ))}

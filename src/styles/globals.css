@@ -963,6 +963,57 @@ select {
   mix-blend-mode: difference;
 }
 
+@media (max-width: 767px) {
+  .travel-lightbox {
+    padding: 20px 18px;
+  }
+
+  .travel-lightbox-card {
+    width: min(100%, calc(100vw - 36px));
+    max-width: calc(100vw - 36px);
+    max-height: calc(100dvh - 40px);
+  }
+
+  .travel-lightbox-media {
+    width: 100%;
+    max-width: calc(100vw - 36px);
+  }
+
+  .travel-lightbox-media img {
+    width: 100%;
+    max-width: calc(100vw - 36px);
+    max-height: 62dvh;
+  }
+
+  .travel-lightbox-media figcaption {
+    left: 14px;
+    right: 14px;
+    bottom: 12px;
+    display: block;
+    font-size: 15px;
+    line-height: 1.1;
+  }
+
+  .travel-lightbox-media figcaption span {
+    display: none;
+  }
+
+  .travel-lightbox-caption {
+    width: 100%;
+    min-height: 0;
+    padding: 14px 16px 16px;
+    font-size: 13px;
+    line-height: 1.58;
+  }
+
+  .travel-lightbox-close {
+    right: 10px;
+    top: 10px;
+    width: 36px;
+    height: 36px;
+  }
+}
+
 .safe-panel {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(250, 249, 245, 0.72)),
@@ -3955,6 +4006,8 @@ select {
   padding: 24px;
   background: rgba(36, 28, 24, 0.72);
   backdrop-filter: blur(18px);
+  overflow: hidden;
+  overscroll-behavior: contain;
 }
 
 .manual-pending-shell {
@@ -3992,7 +4045,9 @@ select {
   min-height: 0;
   flex-direction: column;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 44px 36px 36px;
+  -webkit-overflow-scrolling: touch;
 }
 
 .manual-pending-heading {
@@ -6819,20 +6874,33 @@ select {
     grid-template-columns: 1fr;
     width: calc(100vw - 28px);
     max-height: calc(100svh - 28px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .manual-pending-shell::-webkit-scrollbar {
+    display: none;
   }
 
   .manual-pending-media {
     width: 100%;
+    background: transparent;
   }
 
   .manual-pending-media img {
     width: 100%;
     max-width: 100%;
-    height: min(48svh, 420px);
+    height: auto;
+    max-height: none;
   }
 
   .manual-pending-copy {
-    padding: 22px;
+    min-height: 0;
+    overflow: visible;
+    padding: 22px 22px calc(22px + env(safe-area-inset-bottom));
+    touch-action: pan-y;
   }
 
   .manual-pending-actions {
