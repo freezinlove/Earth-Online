@@ -6867,13 +6867,13 @@ select {
   }
 
   .manual-pending-modal {
-    padding: 14px;
+    padding: calc(34px + env(safe-area-inset-top, 0px)) 14px calc(34px + env(safe-area-inset-bottom, 0px));
   }
 
   .manual-pending-shell {
     grid-template-columns: 1fr;
     width: calc(100vw - 28px);
-    max-height: calc(100svh - 28px);
+    max-height: min(760px, calc(100svh - 68px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)));
     overflow-y: auto;
     overscroll-behavior: contain;
     scrollbar-width: none;
