@@ -26,6 +26,7 @@ type EarthRepositoryPlugin = {
   saveImportJob(options: { job: unknown }): Promise<NativeWriteResult>;
   readVectorIndex(): Promise<NativeVectorIndexResult>;
   writeVectorIndex(options: { index: Record<string, number[]> }): Promise<NativeWriteResult>;
+  upsertVectors(options: { vectors: Record<string, number[]>; deletePhotoIds?: string[] }): Promise<NativeWriteResult>;
   deleteVectors(options: { photoIds: string[] }): Promise<NativeWriteResult>;
 };
 
@@ -77,6 +78,12 @@ export async function readNativeVectorIndex() {
 export async function writeNativeVectorIndex(index: Record<string, number[]>) {
   if (!isAndroidNative()) return false;
   const result = await EarthRepository.writeVectorIndex({ index });
+  return result.ok === true;
+}
+
+export async function upsertNativeVectors(vectors: Record<string, number[]>, deletePhotoIds: string[] = []) {
+  if (!isAndroidNative()) return false;
+  const result = await EarthRepository.upsertVectors({ vectors, deletePhotoIds });
   return result.ok === true;
 }
 

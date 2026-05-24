@@ -33,7 +33,9 @@
     "electron:dist": "npm run build && electron-builder --dir && node scripts/electron_patch_icon.mjs && electron-builder --win nsis --x64 --prepackaged release/win-unpacked",
     "electron:smoke": "node scripts/electron_packaged_smoke.mjs",
     "cap:sync": "npm run build && cap sync android",
-    "android:build": "npm run cap:sync && cd android && .\\gradlew.bat assembleDebug",
+    "android:debug": "npm run cap:sync && cd android && .\\gradlew.bat assembleDebug",
+    "android:release": "npm run cap:sync && cd android && .\\gradlew.bat assembleRelease",
+    "android:build": "npm run android:release",
     "lint": "eslint .",
     "preview": "vite preview --host 0.0.0.0"
   },

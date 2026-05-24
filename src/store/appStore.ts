@@ -87,6 +87,7 @@ interface AppState {
   aiCloudEnabled: boolean;
   isLoading: boolean;
   isImporting: boolean;
+  isImportReadOnly: boolean;
   importProgress?: ImportJobProgress;
   error?: string;
   trips: Trip[];
@@ -159,6 +160,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   aiCloudEnabled: true,
   isLoading: false,
   isImporting: false,
+  isImportReadOnly: false,
   importProgress: undefined,
   trips: [],
   photos: [],
@@ -261,6 +263,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (files.length === 0) return;
     set({
       isImporting: true,
+      isImportReadOnly: false,
       importProgress: { done: 0, total: files.length, phase: "reading", steps: { reading: { done: 0, total: files.length } } },
       error: undefined,
     });
@@ -275,13 +278,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({
         ...applySnapshot(snapshot),
         isImporting: false,
+        isImportReadOnly: false,
         importProgress: undefined,
         selectedTripId: latest?.createdTripIds[0] ?? snapshot.trips[0]?.id ?? "",
         cursorDate: snapshot.trips.find((trip) => trip.id === latest?.createdTripIds[0])?.dateRange.start ?? get().cursorDate,
         activePanel: "upload",
       });
     } catch (error) {
-      set({ isImporting: false, importProgress: undefined, error: error instanceof Error ? error.message : "导入失败" });
+      set({ isImporting: false, isImportReadOnly: false, importProgress: undefined, error: error instanceof Error ? error.message : "导入失败" });
     }
   },
   importMobilePhotoAssets: async (assets) => {
@@ -293,31 +297,52 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     set({
       isImporting: true,
+      isImportReadOnly: false,
       importProgress: { done: 0, total: assets.length, phase: "reading", steps: { reading: { done: 0, total: assets.length } } },
       error: undefined,
     });
+    let previewApplied = false;
+    let statePersisted = false;
+    const applyMobileImportSnapshot = (snapshot: AppSnapshot, readOnly: boolean) => {
+      const latest = snapshot.importBatches[snapshot.importBatches.length - 1];
+      set({
+        ...applySnapshot(snapshot),
+        isImporting: true,
+        isImportReadOnly: readOnly,
+        selectedTripId: latest?.createdTripIds[0] ?? snapshot.trips[0]?.id ?? "",
+        cursorDate: snapshot.trips.find((trip) => trip.id === latest?.createdTripIds[0])?.dateRange.start ?? get().cursorDate,
+        activePanel: "upload",
+      });
+    };
     try {
       await rollbackLatestPendingImportIfNeeded(get, set);
       const snapshot = await importMobilePhotoAssets(assets, get().aiCloudEnabled, get().locale, (done, total) => {
         set({ importProgress: { done, total, phase: "reading", steps: { reading: { done, total } } } });
       }, (progress) => {
         set({ importProgress: progress });
+      }, (snapshot) => {
+        previewApplied = true;
+        applyMobileImportSnapshot(snapshot, true);
+      }, (snapshot) => {
+        statePersisted = true;
+        applyMobileImportSnapshot(snapshot, false);
       });
       const latest = snapshot.importBatches[snapshot.importBatches.length - 1];
       set({
         ...applySnapshot(snapshot),
         isImporting: false,
+        isImportReadOnly: false,
         importProgress: undefined,
         selectedTripId: latest?.createdTripIds[0] ?? snapshot.trips[0]?.id ?? "",
         cursorDate: snapshot.trips.find((trip) => trip.id === latest?.createdTripIds[0])?.dateRange.start ?? get().cursorDate,
         activePanel: "upload",
       });
     } catch (error) {
-      set({ isImporting: false, importProgress: undefined, error: error instanceof Error ? error.message : "导入系统相册失败" });
+      set({ isImporting: false, isImportReadOnly: previewApplied && !statePersisted, importProgress: undefined, error: error instanceof Error ? error.message : "导入系统相册失败" });
     }
   },
   importAppleTestPhotos: async () => {
-    set({ isImporting: true, importProgress: { done: 0, total: 149, phase: "ai", steps: { ai: { done: 0, total: 149 } } }, error: undefined });
+    set({ isImporting: true, isImportReadOnly: false, importProgress: { done: 0, total: 149, phase: "ai", steps: { ai: { done: 0, total: 149 } } }, error: undefined });
     try {
       await rollbackLatestPendingImportIfNeeded(get, set);
       const snapshot = await platformApi.importAppleTestPhotos(get().aiCloudEnabled);
@@ -325,16 +350,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({
         ...applySnapshot(snapshot),
         isImporting: false,
+        isImportReadOnly: false,
         importProgress: undefined,
         selectedTripId: latest?.createdTripIds[0] ?? snapshot.trips[0]?.id ?? "",
         cursorDate: snapshot.trips.find((trip) => trip.id === latest?.createdTripIds[0])?.dateRange.start ?? get().cursorDate,
         activePanel: "upload",
       });
     } catch (error) {
-      set({ isImporting: false, importProgress: undefined, error: error instanceof Error ? error.message : "导入 Apple 测试照片失败" });
+      set({ isImporting: false, isImportReadOnly: false, importProgress: undefined, error: error instanceof Error ? error.message : "导入 Apple 测试照片失败" });
     }
   },
   confirmLatestImport: async () => {
+    if (get().isImportReadOnly) return;
     const batches = get().importBatches;
     const latest = batches[batches.length - 1];
     if (!latest || latest.status !== "pending_confirmation") return;
@@ -342,6 +369,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ ...applySnapshot(snapshot), activePanel: "globe" });
   },
   rollbackLatestImport: async () => {
+    if (get().isImportReadOnly) return;
     const batches = get().importBatches;
     const latest = batches[batches.length - 1];
     if (!latest || latest.status !== "pending_confirmation") return;
@@ -349,6 +377,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ ...applySnapshot(snapshot), selectedTripId: snapshot.trips[0]?.id ?? "", activePanel: "globe" });
   },
   cancelPendingImportPhotos: async (photoIds) => {
+    if (get().isImportReadOnly) return;
     const batches = get().importBatches;
     const latest = batches[batches.length - 1];
     if (!latest || latest.status !== "pending_confirmation" || photoIds.length === 0) return;
@@ -362,6 +391,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
   inferPendingLocation: async (pendingId) => {
+    if (get().isImportReadOnly) return;
     const batches = get().importBatches;
     const latest = batches[batches.length - 1];
     if (!latest || latest.status !== "pending_confirmation") return;
@@ -369,6 +399,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ ...applySnapshot(snapshot), activePanel: "upload" });
   },
   inferPendingLocations: async (pendingIds, onProgress) => {
+    if (get().isImportReadOnly) return;
     const batches = get().importBatches;
     const latest = batches[batches.length - 1];
     if (!latest || latest.status !== "pending_confirmation" || pendingIds.length === 0) return;
@@ -376,6 +407,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ ...applySnapshot(snapshot), activePanel: "upload" });
   },
   resolveImportAiFailure: async (pendingId, action) => {
+    if (get().isImportReadOnly) return;
     const batches = get().importBatches;
     const latest = batches[batches.length - 1];
     if (!latest || latest.status !== "pending_confirmation") return;
@@ -383,6 +415,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ ...applySnapshot(snapshot), activePanel: "upload" });
   },
   resolveImportAiFailures: async (pendingIds, action, onProgress) => {
+    if (get().isImportReadOnly) return;
     const batches = get().importBatches;
     const latest = batches[batches.length - 1];
     if (!latest || latest.status !== "pending_confirmation" || pendingIds.length === 0) return;
@@ -390,6 +423,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ ...applySnapshot(snapshot), activePanel: "upload" });
   },
   mergeLatestImportTrips: async () => {
+    if (get().isImportReadOnly) return;
     const batches = get().importBatches;
     const latest = batches[batches.length - 1];
     if (!latest || latest.status !== "pending_confirmation") return;
@@ -409,10 +443,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
   updateTripTitle: async (tripId, title) => {
+    if (get().isImportReadOnly) return;
     const snapshot = await platformApi.updateTrip(tripId, { title });
     set(applySnapshot(snapshot));
   },
   updatePlaceName: async (placeId, name) => {
+    if (get().isImportReadOnly) return;
     const snapshot = await platformApi.updatePlace(placeId, { name });
     set(applySnapshot(snapshot));
   },
@@ -421,6 +457,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set(applySnapshot(snapshot));
   },
   bindPhotoToPlace: async (photoId, placeId, activePanel = get().activePanel) => {
+    if (get().isImportReadOnly) return;
     const snapshot = await platformApi.bindPhoto(photoId, placeId);
     set({ ...applySnapshot(snapshot), activePanel, manualPlacePick: undefined });
   },
@@ -433,21 +470,27 @@ export const useAppStore = create<AppState>((set, get) => ({
     set(applySnapshot(snapshot));
   },
   acknowledgePendingItem: async (pendingId, accepted) => {
+    if (get().isImportReadOnly) return;
     const snapshot = await platformApi.updatePending(pendingId, accepted);
     set(applySnapshot(snapshot));
   },
   resolvePendingManually: async (pendingId, body) => {
+    if (get().isImportReadOnly) return;
     const snapshot = await platformApi.resolvePendingManually(pendingId, body);
     set({ ...applySnapshot(snapshot), activePanel: "upload", manualPlacePick: undefined });
   },
-  openManualPlacePick: (pendingId, name, returnPanel = "upload") => set({ manualPlacePick: { pendingId, name, mode: "bind", returnPanel, isPicking: false, nameDirty: false } }),
+  openManualPlacePick: (pendingId, name, returnPanel = "upload") => {
+    if (get().isImportReadOnly) return;
+    set({ manualPlacePick: { pendingId, name, mode: "bind", returnPanel, isPicking: false, nameDirty: false } });
+  },
   closeManualPlacePick: () => set({ manualPlacePick: undefined }),
   cancelManualPlacePickPoint: () =>
     set((state) => ({
       manualPlacePick: state.manualPlacePick ? { ...state.manualPlacePick, isPicking: false } : undefined,
       activePanel: state.manualPlacePick?.returnPanel ?? state.activePanel,
     })),
-  startManualPlacePick: (pendingId, name, nameDirty = false, returnPanel) =>
+  startManualPlacePick: (pendingId, name, nameDirty = false, returnPanel) => {
+    if (get().isImportReadOnly) return;
     set((state) => ({
       manualPlacePick: {
         ...(state.manualPlacePick?.pendingId === pendingId ? state.manualPlacePick : {}),
@@ -459,8 +502,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         isPicking: true,
       },
       activePanel: "globe",
-    })),
+    }));
+  },
   finishManualPlacePick: async (point, nearestLabel) => {
+    if (get().isImportReadOnly) return;
     set((state) => ({
       manualPlacePick: state.manualPlacePick ? { ...state.manualPlacePick, point, nearestLabel, isPicking: false } : undefined,
       activePanel: state.manualPlacePick?.returnPanel ?? "upload",

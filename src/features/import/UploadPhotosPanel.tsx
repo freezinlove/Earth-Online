@@ -1,4 +1,4 @@
-import { Check, Circle, Clock3, FileImage, FolderOpen, ImagePlus, LoaderCircle, MapPin, PencilLine, RotateCcw, Sparkles, X } from "lucide-react";
+import { Check, Circle, Clock3, FileImage, FolderOpen, ImagePlus, LoaderCircle, MapPin, PencilLine, RotateCcw, Sparkles, X, type LucideIcon } from "lucide-react";
 import type { CSSProperties, ChangeEvent, DragEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -15,7 +15,7 @@ import { pickNativePhotoAssets } from "@/platform/nativePhotoLibrary";
 import { useAppStore } from "@/store/appStore";
 
 type ImportStep = {
-  icon?: typeof FileImage;
+  icon?: LucideIcon;
   label: string;
   done?: number;
   total?: number;
@@ -240,17 +240,34 @@ function buildProgressSteps({
     const embeddingDone =
       importProgress?.steps?.embedding?.done ??
       (phase === "embedding" ? importProgress?.done ?? 0 : phase === "grouping" || phase === "completed" ? total : 0);
+    const displayPhase = uploadDone >= total && exifDone >= total && thumbnailDone >= total && aiDone >= total && embeddingDone >= total ? "grouping" : phase;
 
     return [
-      { icon: FileImage, label: t("uploadPhotos"), done: Math.min(uploadDone, total), total, active: phase === "reading" || phase === "uploading" },
-      { icon: Clock3, label: t("parseExif"), done: Math.min(exifDone, total), total, active: phase === "exif" },
-      { icon: ImagePlus, label: t("generateThumbnails"), done: Math.min(thumbnailDone, total), total, active: phase === "thumbnails" },
-      { icon: Sparkles, label: t("aiImageUnderstanding"), done: Math.min(aiDone, total), total, active: phase === "ai" },
-      { icon: Circle, label: t("generateVectors"), done: Math.min(embeddingDone, total), total, active: phase === "embedding" },
+      { icon: FileImage, label: t("uploadPhotos"), done: Math.min(uploadDone, total), total, active: displayPhase === "reading" || displayPhase === "uploading" },
+      { icon: Clock3, label: t("parseExif"), done: Math.min(exifDone, total), total, active: displayPhase === "exif" },
+      { icon: ImagePlus, label: t("generateThumbnails"), done: Math.min(thumbnailDone, total), total, active: displayPhase === "thumbnails" },
+      { icon: Sparkles, label: t("aiImageUnderstanding"), done: Math.min(aiDone, total), total, active: displayPhase === "ai" },
+      { icon: Circle, label: t("generateVectors"), done: Math.min(embeddingDone, total), total, active: displayPhase === "embedding" },
     ];
   }
 
   return [];
+}
+
+function isImportMainProgressComplete(progress?: ImportJobProgress) {
+  const total = Math.max(
+    progress?.total ?? 0,
+    progress?.steps?.reading?.total ?? 0,
+    progress?.steps?.upload?.total ?? 0,
+    progress?.steps?.exif?.total ?? 0,
+    progress?.steps?.thumbnails?.total ?? 0,
+    progress?.steps?.ai?.total ?? 0,
+    progress?.steps?.embedding?.total ?? 0,
+  );
+  if (!progress || total <= 0) return false;
+  const done = (key: "reading" | "upload" | "exif" | "thumbnails" | "ai" | "embedding") => progress.steps?.[key]?.done ?? 0;
+  const uploadDone = Math.max(done("reading"), done("upload"));
+  return uploadDone >= total && done("exif") >= total && done("thumbnails") >= total && done("ai") >= total && done("embedding") >= total;
 }
 
 function buildTripPreview({
@@ -752,6 +769,7 @@ function MissingSuggestions({
   inferFeedback,
   inferringIds,
   isBulkInferring,
+  readOnly,
   acceptingIds,
   selectedPhotoId,
   onAccept,
@@ -768,6 +786,7 @@ function MissingSuggestions({
   inferFeedback: Record<string, InferFeedback>;
   inferringIds: Set<string>;
   isBulkInferring: boolean;
+  readOnly: boolean;
   acceptingIds: Set<string>;
   selectedPhotoId?: string;
   onAccept: (item?: PendingItem) => void;
@@ -808,12 +827,12 @@ function MissingSuggestions({
       </div>
       <div className="import-missing-bulk">
         <div className="import-missing-heading-actions">
-          <button onClick={() => onReject(allPhotoIds)} disabled={!allPhotoIds.length || isBulkInferring} aria-label={t("cancelImport")} type="button" data-tooltip={t("cancelImport")}>
+          <button onClick={() => onReject(allPhotoIds)} disabled={readOnly || !allPhotoIds.length || isBulkInferring} aria-label={t("cancelImport")} type="button" data-tooltip={t("cancelImport")}>
             <X size={14} />
           </button>
           <button
             onClick={() => onInferAll(inferableItems.filter((item) => !inferringIds.has(item.id)))}
-            disabled={!hasInferable || isBulkInferring}
+            disabled={readOnly || !hasInferable || isBulkInferring}
             aria-label={t("aiSecondInference")}
             type="button"
             data-tooltip={t("aiSecondInference")}
@@ -829,7 +848,7 @@ function MissingSuggestions({
         {groups.map((group) => {
           const isInferring = Boolean(group.pending && inferringIds.has(group.pending.id));
           const isAccepting = Boolean(group.pending && acceptingIds.has(group.pending.id));
-          const isRowLocked = isBulkInferring || isInferring || isAccepting;
+          const isRowLocked = readOnly || isBulkInferring || isInferring || isAccepting;
           const actionable = hasActionableMissingProposal(group.pending);
           const suggestedTarget = pendingProposalTarget(group.pending, group.target);
           const feedback = group.pending ? inferFeedback[group.pending.id] : undefined;
@@ -878,6 +897,7 @@ function AiFailureSuggestions({
   bulkProgress,
   acceptingIds,
   isBulkResolving,
+  readOnly,
   selectedPhotoId,
   onManual,
   onOpenPreview,
@@ -893,6 +913,7 @@ function AiFailureSuggestions({
   bulkProgress?: ImportJobProgress;
   acceptingIds: Set<string>;
   isBulkResolving: boolean;
+  readOnly: boolean;
   selectedPhotoId?: string;
   onManual: (item?: PendingItem) => void;
   onOpenPreview: (photo: Photo) => void;
@@ -945,12 +966,12 @@ function AiFailureSuggestions({
       </div>
       <div className="import-missing-bulk">
         <div className="import-missing-heading-actions">
-          <button onClick={() => onReject(allPhotoIds)} disabled={!allPhotoIds.length || isBulkResolving} aria-label={t("cancelImport")} type="button" data-tooltip={t("cancelImport")}>
+          <button onClick={() => onReject(allPhotoIds)} disabled={readOnly || !allPhotoIds.length || isBulkResolving} aria-label={t("cancelImport")} type="button" data-tooltip={t("cancelImport")}>
             <X size={14} />
           </button>
           <button
             onClick={() => onResolveAllVision(retryableVisionItems)}
-            disabled={!retryableVisionItems.length || isBulkResolving}
+            disabled={readOnly || !retryableVisionItems.length || isBulkResolving}
             aria-label={t("retryAiVision")}
             type="button"
             data-tooltip={t("retryAiVision")}
@@ -959,7 +980,7 @@ function AiFailureSuggestions({
           </button>
           <button
             onClick={() => onResolveAllEmbedding(retryableEmbeddingItems)}
-            disabled={!retryableEmbeddingItems.length || isBulkResolving}
+            disabled={readOnly || !retryableEmbeddingItems.length || isBulkResolving}
             aria-label={t("retryEmbedding")}
             type="button"
             data-tooltip={t("retryEmbedding")}
@@ -974,7 +995,7 @@ function AiFailureSuggestions({
       <div className="import-missing-list">
         {failures.map((failure) => {
           const isBusy = Boolean(failure.pending && acceptingIds.has(failure.pending.id));
-          const isRowLocked = isBulkResolving || isBusy;
+          const isRowLocked = readOnly || isBulkResolving || isBusy;
           const canRetryVision = Boolean(failure.photo.aiFailure?.vision);
           const canRetryEmbedding = Boolean(failure.photo.aiFailure?.embedding);
           const targetLabel = failure.photo.title ?? failure.photo.fileName;
@@ -1031,6 +1052,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
   const photos = useAppStore((state) => state.photos);
   const placeNodes = useAppStore((state) => state.placeNodes);
   const isImporting = useAppStore((state) => state.isImporting);
+  const isImportReadOnly = useAppStore((state) => state.isImportReadOnly);
   const importProgress = useAppStore((state) => state.importProgress);
   const error = useAppStore((state) => state.error);
   const confirmLatestImport = useAppStore((state) => state.confirmLatestImport);
@@ -1076,11 +1098,12 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
   );
   const progressSteps = useMemo(() => buildProgressSteps({ importProgress, isImporting, latestBatch, t }), [importProgress, isImporting, latestBatch, t]);
   const tripPreviews = useMemo(() => buildTripPreview({ batch: latestBatch, photos, placeNodes, trips, locale, t }), [latestBatch, photos, placeNodes, trips, locale, t]);
+  const showOrganizingNotice = isImporting && !latestBatch && isImportMainProgressComplete(importProgress);
   const rawMissingGroups = useMemo(() => groupMissingPreviews(latestBatch, photos, pendingItems, t), [latestBatch, pendingItems, photos, t]);
   const missingGroups = useMemo(() => orderMissingPreviews(rawMissingGroups, lockedMissingOrderIds), [lockedMissingOrderIds, rawMissingGroups]);
   const aiFailureGroups = useMemo(() => groupAiFailurePreviews(latestBatch, photos, pendingItems, t), [latestBatch, pendingItems, photos, t]);
-  const canConfirm = isPendingBatch(latestBatch) && missingGroups.length === 0 && aiFailureGroups.length === 0 && !isSubmitting;
-  const canRollback = isPendingBatch(latestBatch) && !isSubmitting;
+  const canConfirm = isPendingBatch(latestBatch) && missingGroups.length === 0 && aiFailureGroups.length === 0 && !isSubmitting && !isImportReadOnly;
+  const canRollback = isPendingBatch(latestBatch) && !isSubmitting && !isImportReadOnly;
   const summaryTrips = tripPreviews.length;
   const summaryPlaces = tripPreviews.reduce((count, trip) => count + trip.places.length, 0);
   const pendingReviewCount = missingGroups.reduce((count, group) => count + group.photos.length, 0) + aiFailureGroups.length;
@@ -1137,6 +1160,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
   }, [closePhotoPreview, previewPhoto]);
 
   const startImport = (files: FileList | File[]) => {
+    if (isImportReadOnly) return;
     const nextFiles = Array.from(files).filter((file) => file.type.startsWith("image/"));
     if (nextFiles.length > 0) void importFiles(nextFiles);
   };
@@ -1148,7 +1172,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
   };
 
   const choosePhotos = async () => {
-    if (isImporting || nativePickerOpenRef.current) return;
+    if (isImporting || isImportReadOnly || nativePickerOpenRef.current) return;
     if (!isAndroidRuntime()) {
       inputRef.current?.click();
       return;
@@ -1168,12 +1192,12 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
   const handleDrop = (event: DragEvent<HTMLElement>) => {
     event.preventDefault();
     setIsDragging(false);
-    if (isImporting) return;
+    if (isImporting || isImportReadOnly) return;
     startImport(event.dataTransfer.files);
   };
 
   const acceptPending = async (item?: PendingItem) => {
-    if (!item) return;
+    if (!item || isImportReadOnly) return;
     setAcceptingIds((ids) => new Set(ids).add(item.id));
     setInferFeedback((feedback) => {
       const next = { ...feedback };
@@ -1197,6 +1221,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
   };
 
   const resolveManualPending = async (item: PendingItem, body: ManualPlaceResolutionAction) => {
+    if (isImportReadOnly) return;
     setAcceptingIds((ids) => new Set(ids).add(item.id));
     setInferFeedback((feedback) => {
       const next = { ...feedback };
@@ -1222,7 +1247,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
   };
 
   const inferPending = async (item?: PendingItem) => {
-    if (!item) return;
+    if (!item || isImportReadOnly) return;
     setLockedMissingOrderIds(missingGroups.map((group) => group.id));
     setInferringIds((ids) => new Set(ids).add(item.id));
     setInferFeedback((feedback) => ({
@@ -1252,7 +1277,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
 
   const inferAllPending = async (items: PendingItem[]) => {
     const ids = items.map((item) => item.id);
-    if (!ids.length || isBulkInferring) return;
+    if (!ids.length || isBulkInferring || isImportReadOnly) return;
     setLockedMissingOrderIds(undefined);
     setIsBulkInferring(true);
     setBulkInferProgress({ phase: "queued", done: 0, total: ids.length, steps: { ai: { done: 0, total: ids.length } } });
@@ -1286,7 +1311,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
   };
 
   const resolveAiFailure = async (item: PendingItem | undefined, action: "retry_vision" | "retry_embedding" | "retry_both" | "archive_exif") => {
-    if (!item) return;
+    if (!item || isImportReadOnly) return;
     setAcceptingIds((ids) => new Set(ids).add(item.id));
     try {
       await resolveImportAiFailure(item.id, action);
@@ -1306,7 +1331,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
 
   const resolveAllAiFailures = async (items: PendingItem[], action: BulkAiFailureAction) => {
     const ids = items.map((item) => item.id);
-    if (!ids.length || isBulkResolvingAiFailures) return;
+    if (!ids.length || isBulkResolvingAiFailures || isImportReadOnly) return;
     setIsBulkResolvingAiFailures(true);
     setBulkAiFailureAction(action);
     setBulkAiFailureProgress({ phase: "queued", done: 0, total: ids.length, steps: { ai: { done: 0, total: ids.length } } });
@@ -1392,7 +1417,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
 
         <div className="import-intake" data-dragging={isDragging || undefined}>
           <div className="import-pick-column">
-            <button className="import-pick-button" type="button" onClick={() => void choosePhotos()} disabled={isImporting} title={t("choosePhotos")}>
+            <button className="import-pick-button" type="button" onClick={() => void choosePhotos()} disabled={isImporting || isImportReadOnly} title={t("choosePhotos")}>
               {isImporting ? <LoaderCircle className="animate-spin" size={18} /> : <FolderOpen size={18} />}
               <span>{isImporting ? t("importing") : t("choosePhotos")}</span>
             </button>
@@ -1405,17 +1430,24 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
           </div>
 
           {error ? <p className="photo-import-error">{error}</p> : null}
+          {showOrganizingNotice ? (
+            <p className="import-organizing-note">
+              <LoaderCircle className="animate-spin" size={14} />
+              <span>{t("organizingImportPreview")}</span>
+            </p>
+          ) : null}
+          {isImportReadOnly && importProgress?.phase === "saving_state" ? <p className="import-save-note">{t("savingImportData")}</p> : null}
         </div>
 
         <div className="import-review-shell">
           {tripPreviews.length ? (
             <ReviewTree
               previews={tripPreviews}
-              canEdit={isPendingBatch(latestBatch)}
+              canEdit={isPendingBatch(latestBatch) && !isImportReadOnly}
               selectedPhotoId={selectedPhotoId}
               onMovePhoto={(photoId, placeId) => bindPhotoToPlace(photoId, placeId, "upload")}
               onOpenPreview={openPhotoPreview}
-              onRemovePhoto={isPendingBatch(latestBatch) ? (photoId) => void cancelPendingImportPhotos([photoId]) : undefined}
+              onRemovePhoto={isPendingBatch(latestBatch) && !isImportReadOnly ? (photoId) => void cancelPendingImportPhotos([photoId]) : undefined}
               onRenamePlace={(placeId, name) => updatePlaceName(placeId, name)}
               onRenameTrip={(tripId, title) => updateTripTitle(tripId, title)}
               onSelectPhoto={setSelectedPhotoId}
@@ -1434,6 +1466,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
             inferFeedback={inferFeedback}
             inferringIds={inferringIds}
             isBulkInferring={isBulkInferring}
+            readOnly={isImportReadOnly}
             acceptingIds={acceptingIds}
             selectedPhotoId={selectedPhotoId}
             onAccept={(item) => void acceptPending(item)}
@@ -1457,6 +1490,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
             bulkProgress={bulkAiFailureProgress}
             acceptingIds={acceptingIds}
             isBulkResolving={isBulkResolvingAiFailures}
+            readOnly={isImportReadOnly}
             selectedPhotoId={selectedPhotoId}
             bulkAction={bulkAiFailureAction}
             onManual={(item) => {
@@ -1499,7 +1533,7 @@ export function UploadPhotosPanel({ isClosing = false }: { isClosing?: boolean }
       </div>
     </section>
     {photoPreview ? createPortal(photoPreview, document.body) : null}
-    {activeManualPending ? createPortal(
+    {!isImportReadOnly && activeManualPending ? createPortal(
       <ManualPlaceResolutionModal
         sessionId={activeManualPending.id}
         photos={photos.filter((photo) => activeManualPending.relatedPhotoIds.includes(photo.id))}

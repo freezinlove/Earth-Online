@@ -120,7 +120,20 @@ export interface DesktopStorageSettings {
   userDataDir: string;
 }
 
-export type ImportJobPhase = "queued" | "reading" | "uploading" | "exif" | "thumbnails" | "ai" | "embedding" | "grouping" | "completed" | "failed";
+export type ImportJobPhase =
+  | "queued"
+  | "reading"
+  | "uploading"
+  | "exif"
+  | "thumbnails"
+  | "ai"
+  | "embedding"
+  | "grouping"
+  | "projecting"
+  | "saving_state"
+  | "saving_vectors"
+  | "completed"
+  | "failed";
 
 export interface ImportJobStepProgress {
   done: number;

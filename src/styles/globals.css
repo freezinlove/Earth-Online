@@ -3024,6 +3024,25 @@ select {
   color: #944521;
 }
 
+.import-save-note {
+  margin: 12px 0 0;
+  color: #75645f;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.6;
+}
+
+.import-organizing-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 0;
+  color: #75645f;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.6;
+}
+
 .photo-import-side {
   display: grid;
   align-content: start;

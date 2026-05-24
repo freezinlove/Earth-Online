@@ -180,6 +180,40 @@ public class EarthRepositoryPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void upsertVectors(PluginCall call) {
+        JSObject vectors = call.getObject("vectors", new JSObject());
+        JSArray deletePhotoIds = call.getArray("deletePhotoIds", new JSArray());
+        try {
+            SQLiteDatabase db = database();
+            db.beginTransaction();
+            try {
+                for (int index = 0; index < deletePhotoIds.length(); index += 1) {
+                    String photoId = deletePhotoIds.optString(index, "");
+                    if (!photoId.isEmpty()) db.execSQL("DELETE FROM vector_index WHERE photo_id = ?", new Object[] { photoId });
+                }
+                Iterator<String> keys = vectors.keys();
+                while (keys.hasNext()) {
+                    String photoId = keys.next();
+                    Object value = vectors.opt(photoId);
+                    if (!(value instanceof JSONArray)) continue;
+                    db.execSQL(
+                        "INSERT OR REPLACE INTO vector_index(photo_id, payload, updated_at) VALUES(?, ?, CURRENT_TIMESTAMP)",
+                        new Object[] { photoId, value.toString() }
+                    );
+                }
+                db.setTransactionSuccessful();
+            } finally {
+                db.endTransaction();
+            }
+            JSObject result = new JSObject();
+            result.put("ok", true);
+            call.resolve(result);
+        } catch (Exception error) {
+            call.reject(error.getMessage(), error);
+        }
+    }
+
+    @PluginMethod
     public void deleteVectors(PluginCall call) {
         JSArray photoIds = call.getArray("photoIds", new JSArray());
         try {

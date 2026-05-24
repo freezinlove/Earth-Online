@@ -53,6 +53,7 @@ export async function runInitialImportPipeline({
   const importedSlots = new Array(total);
   const downstreamTasks = [];
   const counters = { reading: 0, exif: 0, thumbnails: 0, ai: 0, embedding: 0 };
+  let emittedInitialComplete = false;
 
   const emit = (phase, done, currentFileName) => {
     progress.update?.(adapter.progress?.({ phase, done, total, currentFileName, counters }) ?? { phase, done, total, currentFileName });
@@ -65,6 +66,18 @@ export async function runInitialImportPipeline({
   const markDone = (phase, fileName) => {
     counters[phase] += 1;
     emit(phase, counters[phase], fileName);
+    if (
+      adapter.emitGroupingWhenInitialPhasesComplete &&
+      !emittedInitialComplete &&
+      counters.reading >= total &&
+      counters.exif >= total &&
+      counters.thumbnails >= total &&
+      counters.ai >= total &&
+      counters.embedding >= total
+    ) {
+      emittedInitialComplete = true;
+      emit("grouping", total, fileName);
+    }
   };
   const markAllDone = (fileName) => {
     for (const phase of ["reading", "exif", "thumbnails", "ai", "embedding"]) {
@@ -317,7 +330,7 @@ export async function runInitialImportPipeline({
 
   await Promise.all(downstreamTasks);
   const photos = importedSlots.filter(Boolean);
-  emit("grouping", total);
+  if (!emittedInitialComplete) emit("grouping", total);
   const nextState = buildImportStateFromPhotos(state, {
     batchId,
     totalCount: total,

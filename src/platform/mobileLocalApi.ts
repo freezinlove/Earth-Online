@@ -1,4 +1,5 @@
 import type {
+  AppSnapshot,
   EmbeddingRebuildReport,
   ImportJobProgress,
   LocalAiSettings,
@@ -6,7 +7,7 @@ import type {
 } from "@/services/apiClient";
 import type { NativePhotoAsset } from "@/platform/nativePhotoLibrary";
 import { prepareNativePhotoAsset, releaseNativePhotoPermissions } from "@/platform/nativePhotoLibrary";
-import { deleteNativeVectors, readNativeVectorIndex, writeNativeVectorIndex } from "@/platform/nativeRepository";
+import { deleteNativeVectors, readNativeVectorIndex, upsertNativeVectors } from "@/platform/nativeRepository";
 import { deleteMobileThumbnailsForPhotos, getMobilePersistedState, type MobilePersistedState, writeMobilePersistedState } from "@/platform/mobileStateStore";
 import { createImageDataUrl, createImageDataUrls, hashBuffer, parseExif, sourceUrisForPhotos } from "@/platform/mobileMedia";
 import { emptyCredential, readMobileAiSettings, updateMobileAiSettings, type MobileAiSettingsUpdateBody } from "@/platform/mobileAiSettings";
@@ -94,9 +95,42 @@ type MobileImportPhotoJob = {
   hasExifLocation: boolean;
 };
 type MobileBuildImportedInput = Omit<Parameters<typeof buildMobileImportedPhoto>[0], "sourceProvider">;
+type MobileImportSnapshotCallback = (snapshot: AppSnapshot) => void;
+type MobileInitialImportResult = {
+  state: MobilePersistedState;
+  vectorIndex: Record<string, number[]>;
+  importedPhotos: Photo[];
+};
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function nowMs() {
+  return typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
+}
+
+function createMobileTiming(label: string) {
+  const startedAt = nowMs();
+  let lastAt = startedAt;
+  const entries: Array<{ name: string; ms: number; totalMs: number }> = [];
+  const mark = (name: string) => {
+    const current = nowMs();
+    entries.push({ name, ms: Math.round(current - lastAt), totalMs: Math.round(current - startedAt) });
+    lastAt = current;
+  };
+  return {
+    mark,
+    async measure<T>(name: string, task: () => Promise<T>) {
+      const value = await task();
+      mark(name);
+      return value;
+    },
+    flush(extra: Record<string, unknown> = {}) {
+      const totalMs = Math.round(nowMs() - startedAt);
+      console.info(`[Earth_Online] ${label} timings`, { totalMs, entries, ...extra });
+    },
+  };
 }
 
 function makeId(prefix: string) {
@@ -196,6 +230,32 @@ function mobileImportProgressPayload({
       embedding: { done: counters.embedding, total },
     },
   };
+}
+
+function completedImportProgress(phase: ImportJobProgress["phase"], total: number): ImportJobProgress {
+  return mobileImportProgressPayload({
+    phase,
+    done: total,
+    total,
+    counters: { reading: total, exif: total, thumbnails: total, ai: total, embedding: total },
+  });
+}
+
+function vectorChangesForPhotoIds(vectorIndex: Record<string, number[]>, photoIds: Iterable<string>) {
+  const upserts: Record<string, number[]> = {};
+  const deletePhotoIds: string[] = [];
+  for (const photoId of new Set(photoIds)) {
+    const vector = vectorIndex[photoId];
+    if (Array.isArray(vector)) upserts[photoId] = vector;
+    else deletePhotoIds.push(photoId);
+  }
+  return { upserts, deletePhotoIds };
+}
+
+async function upsertVectorChanges(vectorIndex: Record<string, number[]>, photoIds: Iterable<string>) {
+  const { upserts, deletePhotoIds } = vectorChangesForPhotoIds(vectorIndex, photoIds);
+  if (!Object.keys(upserts).length && !deletePhotoIds.length) return false;
+  return upsertNativeVectors(upserts, deletePhotoIds);
 }
 
 async function withMobileLocationCandidates({ location, aiEvidence, locale }: { location?: GeoPoint; aiEvidence: NonNullable<Photo["ai"]>; locale: "zh" | "en" }) {
@@ -441,7 +501,7 @@ export const mobileLocalApi = {
     })) as Photo[];
     const next = mergeRebuiltPhotosState(state, rebuiltPhotos) as MobilePersistedState;
     await writeMobilePersistedState(next);
-    await writeNativeVectorIndex(vectorIndex).catch(() => false);
+    await upsertVectorChanges(vectorIndex, targets.map((photo) => photo.id)).catch(() => false);
     const snapshot = await projectState(next);
     const result = {
       ...snapshot,
@@ -478,6 +538,7 @@ export const mobileLocalApi = {
       progress: { update: (progress: ImportJobProgress) => jobProgress.update(progress) },
       adapter: {
         initialPhases: ["reading", "exif", "thumbnails", "ai", "embedding"],
+        emitGroupingWhenInitialPhasesComplete: true,
         progress: mobileImportProgressPayload,
         itemFileName: (file: File, index: number) => file.name || `photo-${index + 1}`,
         createAiStats: createImportAiStats,
@@ -507,7 +568,7 @@ export const mobileLocalApi = {
       },
     });
     await writeMobilePersistedState(result.state as MobilePersistedState);
-    await writeNativeVectorIndex(result.vectorIndex).catch(() => false);
+    await upsertVectorChanges(result.vectorIndex, (result.importedPhotos as Photo[]).map((photo) => photo.id)).catch(() => false);
     jobProgress.update(mobileImportProgressPayload({ phase: "completed", done: total, total, counters: { reading: total, exif: total, thumbnails: total, ai: total, embedding: total } }));
     const snapshot = await projectState(result.state as MobilePersistedState);
     jobProgress.complete(snapshot);
@@ -519,18 +580,21 @@ export const mobileLocalApi = {
     _locale: "zh" | "en" = "zh",
     onProgress?: (done: number, total: number) => void,
     onJobProgress?: (progress: ImportJobProgress) => void,
+    onPreviewReady?: MobileImportSnapshotCallback,
+    onStatePersisted?: MobileImportSnapshotCallback,
   ) {
+    const timing = createMobileTiming("android importMobilePhotoAssets");
     const assets = assetsLike.filter((asset) => !asset.error && asset.uri && asset.mimeType?.startsWith("image/"));
     const total = assets.length;
     if (!total) return projectState(await getMobilePersistedState());
 
-    const state = await getMobilePersistedState();
-    const vectorIndex: Record<string, number[]> = await readNativeVectorIndex().catch(() => ({}));
+    const state = await timing.measure("hydrateState", () => getMobilePersistedState());
+    const vectorIndex: Record<string, number[]> = await timing.measure("readVectorIndex", () => readNativeVectorIndex().catch(() => ({})));
     const pipelineConfig = importPipelineConfig();
     const jobProgress = mobileJobProgressRecorder(onJobProgress, total, "reading");
     onProgress?.(0, total);
     jobProgress.update(mobileImportProgressPayload({ phase: "reading", done: 0, total, counters: { reading: 0, exif: 0, thumbnails: 0, ai: 0, embedding: 0 } }));
-    const result = await runInitialImportPipeline({
+    const result = await timing.measure<MobileInitialImportResult>("runInitialImportPipeline", () => runInitialImportPipeline({
       items: assets,
       state,
       vectorIndex,
@@ -542,6 +606,7 @@ export const mobileLocalApi = {
       progress: { update: (progress: ImportJobProgress) => jobProgress.update(progress) },
       adapter: {
         initialPhases: ["reading", "exif", "thumbnails", "ai", "embedding"],
+        emitGroupingWhenInitialPhasesComplete: true,
         progress: mobileImportProgressPayload,
         skipPrepareErrors: true,
         itemFileName: (asset: NativePhotoAsset, index: number) => asset.fileName || `photo-${index + 1}`,
@@ -590,12 +655,32 @@ export const mobileLocalApi = {
         buildNewPhoto: (input: MobileBuildImportedInput) => buildMobileImportedPhoto({ ...input, sourceProvider: "android_photo_picker" }),
         duplicateCount: ({ duplicatePhotoIds }: { duplicatePhotoIds: Set<string> }) => duplicatePhotoIds.size,
       },
-    });
-    await writeMobilePersistedState(result.state as MobilePersistedState);
-    await writeNativeVectorIndex(result.vectorIndex).catch(() => false);
-    jobProgress.update(mobileImportProgressPayload({ phase: "completed", done: total, total, counters: { reading: total, exif: total, thumbnails: total, ai: total, embedding: total } }));
-    const snapshot = await projectState(result.state as MobilePersistedState);
+    }) as Promise<MobileInitialImportResult>);
+    jobProgress.update(completedImportProgress("projecting", total));
+    const snapshot = await timing.measure("projectState", () => projectState(result.state));
+    onPreviewReady?.(snapshot);
+    timing.mark("previewReady");
+    jobProgress.update(completedImportProgress("saving_state", total));
+    await timing.measure("writeMobilePersistedState", () => writeMobilePersistedState(result.state));
+    onStatePersisted?.(snapshot);
+    timing.mark("statePersisted");
+    jobProgress.update(completedImportProgress("saving_vectors", total));
+    const importedPhotoIds = result.importedPhotos.map((photo) => photo.id);
+    const vectorChanges = vectorChangesForPhotoIds(result.vectorIndex, importedPhotoIds);
+    await timing.measure("upsertNativeVectors", () =>
+      upsertNativeVectors(vectorChanges.upserts, vectorChanges.deletePhotoIds).catch((error) => {
+        console.warn("[Earth_Online] Android vector upsert failed", error);
+        return false;
+      }),
+    );
+    jobProgress.update(completedImportProgress("completed", total));
     jobProgress.complete(snapshot);
+    timing.flush({
+      total,
+      imported: result.importedPhotos.length,
+      vectorUpserts: Object.keys(vectorChanges.upserts).length,
+      vectorDeletes: vectorChanges.deletePhotoIds.length,
+    });
     return snapshot;
   },
   async importAppleTestPhotos() {
@@ -690,10 +775,12 @@ export const mobileLocalApi = {
 
     const retry = await buildMobileRetryImportAiFailureResult(state, batch, pending, photo, action, { locale });
     const patched = retry.patchedPhoto as Photo;
-    const vectorIndex: Record<string, number[]> = await readNativeVectorIndex().catch(() => ({}));
-    if (retry.retryEmbedding && Array.isArray(retry.embedding.embedding)) vectorIndex[patched.id] = retry.embedding.embedding;
-    else if (retry.retryEmbedding) delete vectorIndex[patched.id];
-    await writeNativeVectorIndex(vectorIndex).catch(() => false);
+    if (retry.retryEmbedding) {
+      await upsertNativeVectors(
+        Array.isArray(retry.embedding.embedding) ? { [patched.id]: retry.embedding.embedding } : {},
+        Array.isArray(retry.embedding.embedding) ? [] : [patched.id],
+      ).catch(() => false);
+    }
     const base = {
       ...state,
       photos: state.photos.map((item) => (item.id === patched.id ? patched : item)),
@@ -730,7 +817,10 @@ export const mobileLocalApi = {
       emitCompleted: false,
     });
     await writeMobilePersistedState(result.state as MobilePersistedState);
-    await writeNativeVectorIndex(result.vectorIndex).catch(() => false);
+    const changedPhotoIds = state.pendingItems
+      .filter((item) => pendingIds.includes(item.id))
+      .flatMap((item) => item.relatedPhotoIds);
+    await upsertVectorChanges(result.vectorIndex, changedPhotoIds).catch(() => false);
     jobProgress.update({ phase: "completed", done: result.total, total: result.total });
     const snapshot = await projectState(result.state as MobilePersistedState);
     jobProgress.complete(snapshot);
