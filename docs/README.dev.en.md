@@ -13,6 +13,7 @@ This document is intended for developers. The default user-facing guide is [READ
 - Node.js `>=24.0.0`
 - npm `>=11.0.0`
 - Windows is the primary desktop packaging target.
+- Android builds require the Android SDK, the Gradle wrapper, and a compatible JDK. The current local release build was verified with JDK 21; if the system Java is too new, Gradle may fail with `Unsupported class file major version`.
 - Modern Chromium-based browser for Web development.
 
 The backend uses recent Node runtime capabilities. Use Node 24+ unless you are deliberately testing compatibility.
@@ -97,6 +98,30 @@ If `http://localhost:5173/` opens but storage or settings do not load, check tha
 Invoke-RestMethod http://127.0.0.1:8787/api/settings/storage
 ```
 
+### Android Dev
+
+Android uses a Capacitor shell around the same Vite/React frontend, with native plugins for photo selection, local SQLite, encrypted AI credentials, and offline geodata. The Android build is aligned with desktop for visual design and the main workflow, but some touch interactions are still being refined; use the desktop app as the baseline user experience when validating product behavior.
+
+Sync the Web build into the Android project:
+
+```bash
+npm run cap:sync
+```
+
+Build a debug APK:
+
+```bash
+npm run android:debug
+```
+
+Output:
+
+```text
+android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+If the current shell uses a Java version that is too new for Gradle, switch to JDK 21 before running Android build commands.
+
 ### Split Frontend And Backend
 
 ```bash
@@ -118,7 +143,7 @@ Outputs:
 
 ```text
 release/win-unpacked/Earth Online.exe
-release/Earth Online Setup 0.1.0.exe
+release/Earth Online Setup 0.1.3.exe
 ```
 
 Build only the unpacked app:
@@ -134,6 +159,46 @@ npm run electron:smoke
 ```
 
 The smoke test checks packaged startup, API access, desktop token enforcement, asset serving, import basics, onboarding persistence, and storage configuration behavior.
+
+## Android Packaging
+
+Build a signed release APK:
+
+```bash
+npm run android:release
+```
+
+`npm run android:build` currently points to the release build too. Output:
+
+```text
+android/app/build/outputs/apk/release/app-release.apk
+```
+
+For distribution convenience, the APK can also be copied into `release/`, for example:
+
+```text
+release/Earth Online Android 1.0-release.apk
+```
+
+Release signing is loaded from `android/keystore.properties`:
+
+```properties
+storeFile=keystores/earth-online-release.jks
+storePassword=...
+keyAlias=earth-online
+keyPassword=...
+```
+
+Do not commit the real signing key or passwords. These paths are ignored by `android/.gitignore`:
+
+```text
+android/keystore.properties
+android/keystores/
+*.jks
+*.keystore
+```
+
+Future updates for the same package name, `com.earthonline.mobile`, must keep using the same release keystore. If the keystore is lost, users with an installed build will be difficult to upgrade through a normal APK replacement.
 
 ## Data Storage
 
@@ -193,6 +258,10 @@ $env:EARTH_ONLINE_USER_DATA_DIR="X:\Earth_Online_Dev_Config"
 npm run electron:dev
 ```
 
+### Android Private Storage
+
+The Android app does not start the Node backend. Local state, import jobs, and the vector index are stored through the native `EarthRepository` plugin in app-private SQLite; thumbnails, display images, and AI input images use IndexedDB; AI credentials are encrypted with Android Keystore before storage. Photo sources come from the system photo picker, and original gallery files remain owned by the system media library.
+
 ## Architecture
 
 ```text
@@ -200,6 +269,7 @@ src/                    React app, UI state, i18n, feature surfaces
 electron/               Electron main/preload/dev launcher
 server/                 Local Node API, persistence, import pipeline, AI gateway
 scripts/                Data generation, backup/reset, packaging checks
+android/                Capacitor Android shell, native plugins, Gradle config
 public/assets/          Committed visual assets for the globe
 public/data/globe/      Committed binary globe geometry/line assets
 external/geodata/       Committed GeoNames SQLite database plus refresh scripts
@@ -214,6 +284,7 @@ Major runtime surfaces:
 - Frontend: React 18, Vite, Zustand, Three.js, React Three Fiber, `three-globe`.
 - Backend: Node HTTP server, local file storage, AI provider registry, geocoding, import services.
 - Desktop: Electron main process, native folder picker, desktop preferences, packaged API startup.
+- Android: Capacitor WebView, native photo/storage/secrets/geodata plugins, mobile local API adapter.
 
 The backend is not a remote service. It runs on the user's machine beside the frontend or inside the Electron desktop process.
 
@@ -238,6 +309,15 @@ Electron renderer
   -> server/http/router.mjs
   -> application service
   -> selected data directory + optional AI/geodata
+```
+
+Android:
+
+```text
+Capacitor WebView
+  -> src/platform/mobileLocalApi.ts
+  -> shared domain/import/AI modules
+  -> native plugins + IndexedDB + Android private storage
 ```
 
 Important API groups:
@@ -401,6 +481,10 @@ npm run electron:dev     # Start Electron desktop dev mode
 npm run electron:pack    # Build unpacked desktop app
 npm run electron:dist    # Build unpacked desktop app and Windows installer
 npm run electron:smoke   # Smoke test packaged desktop app
+npm run cap:sync         # Build frontend and sync it into Android
+npm run android:debug    # Build Android debug APK
+npm run android:release  # Build Android release APK
+npm run android:build    # Currently equivalent to android:release
 npm run frontend         # Start only Vite
 npm run backend          # Start only local API
 npm run build            # TypeScript build + Vite production build
@@ -424,11 +508,14 @@ Run before publishing or opening a PR:
 npm run lint
 npm run test:backend
 npm run build
+npm run test:parity
 npm run electron:smoke
 npm audit --audit-level=moderate
 ```
 
 Run `npm run electron:dist` before `npm run electron:smoke` when the packaged output needs to reflect current source changes.
+
+For an Android APK release, also run `npm run android:release` and verify the release APK signature with `apksigner verify`.
 
 Current known non-fatal warnings:
 
@@ -443,6 +530,8 @@ These warnings are worth improving, but they do not currently block build or pac
 `npm run test:backend` is the public, CI-safe test path. It avoids private photo fixtures and validates core backend projection/resolution behavior.
 
 `npm run electron:smoke` validates the generated desktop app under `release/win-unpacked/`. It expects that package to exist.
+
+`npm run test:parity` checks key consistency between the Android mobile local flow and the desktop/shared projection logic.
 
 `npm run test:mvp` is a local acceptance script. It expects private fixture media under:
 
@@ -539,6 +628,13 @@ node_modules/
 output/
 release/
 test-results/
+android/.gradle/
+android/app/build/
+android/build/
+android/keystore.properties
+android/keystores/
+*.jks
+*.keystore
 external/geodata/downloads/
 external/geodata/*.sqlite-*
 external/three-globe/
@@ -552,6 +648,8 @@ public/assets/*.jpg
 public/data/globe/*.bin
 docs/gugugaga.png
 docs/gugugaga.ico
+android/app/src/main/assets/geodata/geonames.sqlite.gz
+android/app/src/main/assets/geodata/geonames.sqlite.sha256
 ```
 
 Use this before publishing:
@@ -568,10 +666,11 @@ git ls-files | sort
 2. Run quality gates.
 3. Run `npm run electron:dist`.
 4. Run `npm run electron:smoke`.
-5. Verify `external/geodata/geonames.sqlite` passes `PRAGMA integrity_check`.
-6. Confirm no personal data appears in `git status --short --ignored`.
-7. Confirm third-party attribution in `THIRD_PARTY_NOTICES.md`.
-8. Decide whether to add a root `LICENSE` before publishing as open source.
+5. If publishing Android, run `npm run android:release` and confirm the release APK is signed.
+6. Verify `external/geodata/geonames.sqlite` passes `PRAGMA integrity_check`.
+7. Confirm no personal data, signing keys, or release artifacts appear in `git status --short --ignored`.
+8. Confirm third-party attribution in `THIRD_PARTY_NOTICES.md`.
+9. Decide whether to add a root `LICENSE` before publishing as open source.
 
 SQLite integrity check:
 
@@ -617,6 +716,27 @@ Then launch:
 ```text
 release/win-unpacked/Earth Online.exe
 ```
+
+### Android release build fails with Unsupported class file major version
+
+The shell is usually using a Java version that is too new for the Gradle/Groovy toolchain. Switch to JDK 21 and rebuild:
+
+```powershell
+$env:JAVA_HOME="C:\Path\To\JDK21"
+$env:Path="$env:JAVA_HOME\bin;$env:Path"
+npm run android:release
+```
+
+### Android release APK cannot be signed
+
+Confirm these files exist locally and are not committed to Git:
+
+```text
+android/keystore.properties
+android/keystores/earth-online-release.jks
+```
+
+The `storeFile` value in `keystore.properties` should be relative to `android/`, for example `keystores/earth-online-release.jks`.
 
 ## Third-Party Notices
 

@@ -18,15 +18,27 @@
 
 <br />
 
-## Recommended Usage: Desktop App
+## Recommended Usage
 
-Regular users should use the desktop installer. You do not need to manually start frontend or backend services.
+### Desktop App
+
+Regular users should use the desktop installer when possible. You do not need to manually start frontend or backend services.
 
 Get the installer from the Releases section on the right, then run it directly:
 
 ```text
-Earth Online Setup 0.1.1.exe
+Earth Online Setup 0.1.3.exe
 ```
+
+### Android App
+
+An Android APK is also available from Releases:
+
+```text
+Earth Online Android 1.0-release.apk
+```
+
+The Android version uses the same visual design and main workflow as the desktop app. Some touch interactions are not fully optimized yet, so if you have access to a desktop environment, the desktop app is still the recommended experience.
 
 ## Usage Tips
 
@@ -36,6 +48,7 @@ Earth Online Setup 0.1.1.exe
 - Try clicking the timeline frequently. It is one of the main ways to explore the archive.
 - Photo import speed depends heavily on local network speed and cloud model provider throughput, so long-tail slowdowns are expected.
 - A single import batch supports up to 1000 photos. I personally recommend 400 or fewer photos per batch because larger batches have not been tested enough.
+- On Android, keep each import batch to 40 photos or fewer. Larger batches may feel sluggish during import processing.
 
 ## Brief Developer Notes
 
